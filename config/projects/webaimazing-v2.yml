@@ -1,0 +1,47 @@
+# Configuration projet webaimazing-v2
+
+name: webaimazing-v2
+description: "Plateforme de création de sites web guidée par IA pour TPE/artisans français"
+
+# Localisation du repo projet (absolu ou ~ expansé)
+repo_path: ~/code/aimazing/webaimazing-v2/
+
+# Git
+git:
+  default_branch: develop
+  branch_prefix: studio/     # Les branches de run seront : studio/run-001
+  remote: origin
+
+# Structure du projet cible
+structure:
+  backend_dir: backend/
+  frontend_dir: frontend/
+  tests_dir: tests/
+  specs_dir: specs/          # Fiches devaimazing dans le repo projet
+  docs_dir: docs/
+
+# Fichiers de référence projet (lus par le PM et l'Architecte)
+reference_files:
+  project_map: specs/project-map.md
+  architect_map: specs/architect-map.md
+  openapi: docs/api/openapi.yaml
+
+# Overrides de modèles (optionnel, hérite de studio.yml si non défini)
+# models:
+#   agents_local: qwen2.5:14b-instruct  # si assez de RAM
+
+# Overrides de checkpoints (optionnel)
+# checkpoints:
+#   phase_9_audit_aval: false  # Désactiver après rodage
+
+# Contraintes projet spécifiques (transmises à l'Architecte)
+project_constraints:
+  language: python
+  framework_backend: fastapi
+  framework_frontend: react
+  database: postgresql
+  cache: redis
+  python_version: "3.11"
+  node_version: "20"
+  target_users: "TPE et artisans français non-techniques"
+  key_principle: "L'utilisateur garde le contrôle, l'IA guide sans imposer"

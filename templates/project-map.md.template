@@ -1,0 +1,46 @@
+# Project Map - {{PROJECT_NAME}}
+
+**Dernière mise à jour** : {{DATE}}  
+**Run** : {{RUN_ID}}  
+**Maintenu par** : PM (phase 10, Python pur)
+
+---
+
+## Carte des fichiers
+
+<!-- Un fichier par ligne. Mis à jour après chaque run. -->
+<!-- Format : chemin | rôle | agent créateur | run de création | contraintes clés -->
+
+| Chemin | Rôle | Agent | Run | Contraintes |
+|---|---|---|---|---|
+| | | | | |
+
+## Modules et domaines fonctionnels
+
+<!-- Regroupement logique des fichiers par domaine -->
+
+### Backend
+-
+
+### Frontend
+-
+
+### Tests
+-
+
+### Configuration
+-
+
+### Documentation
+-
+
+## Historique des runs
+
+| Run ID | Date | Objectif | Statut | Fichiers créés | Fichiers modifiés |
+|---|---|---|---|---|---|
+| | | | | | |
+
+## Points de vigilance
+
+<!-- Zones sensibles identifiées par l'Architecte, à surveiller lors des prochains runs -->
+-

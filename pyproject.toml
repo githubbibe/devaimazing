@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "devaimazing"
+version = "0.1.0"
+description = "Local-first multi-agent development studio"
+readme = "README.md"
+license = { text = "AGPL-3.0" }
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=0.2.0",
+    "langchain-core>=0.3.0",
+    "ollama>=0.3.0",
+    "prometheus-client>=0.21.0",
+    "pyyaml>=6.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+    "gitpython>=3.1.0",
+    "aiosqlite>=0.20.0",
+]
+
+[project.scripts]
+devaimazing = "studio.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["runtime/studio"]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["runtime/tests"]

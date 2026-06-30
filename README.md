@@ -1,7 +1,7 @@
 # devaimazing
 
 > **Local-first multi-agent development studio.**
-> Claude Code for high-level reasoning. Ollama agents for execution. LangGraph orchestration. Full observability. Built to maximize quality per API token.
+> Claude Code for high-level reasoning. Ollama agents for execution. LangGraph orchestration. Full observability. > Built to maximize quality per token, whether subscription or API.
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Python](https://img.shields.io/badge/Python-3.11+-green.svg)](https://www.python.org/)

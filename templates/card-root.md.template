@@ -1,0 +1,55 @@
+# Fiche racine - Run {{RUN_ID}}
+
+**Date** : {{DATE}}  
+**Projet** : {{PROJECT_NAME}}  
+**Objectif brut** : {{OBJECTIVE_RAW}}  
+**Statut** : `draft` | `validated` | `in_progress` | `completed` | `failed`
+
+---
+
+## Objectif reformulé
+
+<!-- PM (Opus) reformule et précise l'objectif brut -->
+
+## Critères d'acceptation
+
+<!-- Liste mesurable de ce qui définit le succès de ce run -->
+
+- [ ] ...
+- [ ] ...
+
+## Périmètre
+
+**Inclus :**
+-
+
+**Exclus explicitement :**
+-
+
+## Contraintes non-fonctionnelles
+
+<!-- Contraintes connues à ce stade, l'Architecte en ajoutera en phase 2 -->
+
+- Performance :
+- Sécurité :
+- Compatibilité :
+- Autres :
+
+## Risques identifiés
+
+| Risque | Probabilité | Impact | Mitigation |
+|---|---|---|---|
+| | | | |
+
+## Questions en suspens
+
+<!-- Si des points nécessitent une validation humaine avant de continuer -->
+
+- [ ] ...
+
+## Historique
+
+| Phase | Date | Statut | Notes |
+|---|---|---|---|
+| 0 - Réception | {{DATE}} | ✅ | |
+| 1 - Cadrage | | | |

@@ -1,0 +1,56 @@
+# Architect Map - {{PROJECT_NAME}}
+
+**Dernière mise à jour** : {{DATE}}  
+**Run** : {{RUN_ID}}  
+**Maintenu par** : Architecte (phase 9)
+
+---
+
+## Contraintes non-fonctionnelles globales
+
+<!-- Contraintes qui s'appliquent à TOUS les agents sur ce projet -->
+
+### Gestion d'erreurs
+-
+
+### Logging
+- Format :
+- Niveaux :
+- Champs obligatoires :
+
+### Résilience
+- Pattern de retry :
+- Circuit breaker :
+- Timeout par défaut :
+
+### Sécurité
+-
+
+### Observabilité
+- Métriques à exposer :
+- Format des traces :
+
+## Patterns établis
+
+<!-- Patterns de code validés et à réutiliser obligatoirement -->
+
+### Exemple pattern retry
+```python
+# Référence : specs/run-XXX/
+```
+
+## Zones de risque
+
+<!-- Zones du codebase identifiées comme sensibles ou sujettes à doublons -->
+
+| Zone | Risque | Raison | Précaution |
+|---|---|---|---|
+| | | | |
+
+## Doublons résolus
+
+<!-- Historique des doublons détectés et comment ils ont été résolus -->
+
+| Run | Fichier A | Fichier B | Résolution |
+|---|---|---|---|
+| | | | |

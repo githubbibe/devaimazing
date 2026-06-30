@@ -1,0 +1,78 @@
+# Fiche agent - {{AGENT_NAME}} - Run {{RUN_ID}}
+
+**ID fiche** : {{CARD_ID}}  
+**Run parent** : {{RUN_ID}}  
+**Agent destinataire** : {{AGENT_NAME}}  
+**Position dans la séquence** : {{SEQUENCE_POSITION}} / {{SEQUENCE_TOTAL}}  
+**Statut** : `pending` | `in_progress` | `stub_done` | `completed` | `failed`  
+**Itération** : {{ITERATION}} (1 = première tentative)
+
+---
+
+## Objectif
+
+<!-- Extrait et précisé depuis la fiche racine, adapté au périmètre de cet agent -->
+
+## Périmètre fichiers
+
+**Fichiers à créer :**
+```
+{{PROJECT_ROOT}}/
+├── ...
+```
+
+**Fichiers à modifier :**
+```
+{{PROJECT_ROOT}}/
+├── ... (section: ...)
+```
+
+**Fichiers interdits (ne pas toucher) :**
+```
+{{PROJECT_ROOT}}/
+├── ...
+```
+
+## Contraintes non-fonctionnelles
+
+<!-- Extraites du brief Architecte, applicables à cet agent -->
+
+**Gestion d'erreurs** :
+- Référence skill : `error-handling.md`
+-
+
+**Logging** :
+- Référence skill : `logging-conventions.md`
+-
+
+**Résilience** :
+- Référence skill : `retry-patterns.md`
+-
+
+**Sécurité** :
+-
+
+## Critères de validation
+
+<!-- Ce que l'agent doit produire pour que sa tâche soit considérée terminée -->
+
+- [ ] Tous les fichiers du périmètre créés ou modifiés
+- [ ] Stubs complets (signatures, types, docstrings, contrats) si phase 4
+- [ ] Implémentation complète et fonctionnelle si phase 6
+- [ ] Tests passants si phase 6+
+- [ ] Aucun fichier hors périmètre modifié
+- [ ] ...
+
+## Dépendances
+
+<!-- Ce dont cet agent a besoin pour travailler -->
+
+- Output de l'agent précédent : {{PREVIOUS_AGENT}} - {{PREVIOUS_CARD_ID}}
+- Fichiers existants en lecture : ...
+
+## Feedback
+
+<!-- Section annotée par l'agent suivant ou l'Architecte si renvoi en arrière -->
+<!-- Format : [DATE] [AGENT_SOURCE] : description de l'erreur ou de l'écart -->
+
+_Aucun feedback pour l'instant._
