@@ -1,0 +1,87 @@
+# ==============================================================================
+# Fichiers d'exécution Python (Byte-compiled / optimized / DLLs)
+# ==============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / Packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ==============================================================================
+# Environnements Virtuels (Toujours ignorer les dépendances locales)
+# ==============================================================================
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ==============================================================================
+# Configuration de l'éditeur et de l'IDE
+# ==============================================================================
+# Pipenv
+.pypirc
+
+# VS Code
+.vscode/
+
+# PyCharm / IntelliJ
+.idea/
+
+# Fichiers système spécifiques
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ==============================================================================
+# Outils de Test, Qualité de Code et Rapports
+# ==============================================================================
+.htmlcov/
+.tox/
+.nosenv/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ==============================================================================
+# Variables d'environnement locales (Sécurité : NE JAMAIS commit de clés API)
+# ==============================================================================
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
