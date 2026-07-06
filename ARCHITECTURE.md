@@ -24,37 +24,66 @@ avant que la moindre ligne métier soit écrite. Cadre la dérive au plus tôt.
 Un seul run à la fois. Les agents interviennent chacun leur tour selon la séquence
 définie par le PM. Le contrôle de concurrence est implicite (pas de locks nécessaires).
 
-**4. Local-first**
-Tous les agents d'exécution tournent sur Ollama (Qwen 2.5 7B local).
-Seul le PM utilise Claude Code CLI, uniquement pour le cadrage initial (Opus)
-et le raffinement des fiches (Sonnet). Mode par défaut : abonnement Pro
-(humain dans la boucle, conforme aux ToS Anthropic). Mode alternatif :
-connexion à l'API Anthropic pay-per-token pour des runs entièrement
-non-supervisés. L'objectif reste de minimiser la consommation de tokens
-côté Claude Code, quel que soit le mode.
+**4. Auditeur doit dominer le producteur**
+Les agents producteurs (Back, Front, Test) tournent sur Qwen 2.5 7B local. Les agents
+auditeurs (Architecte, Sécu) tournent sur Claude Sonnet, qui domine Qwen en capacité.
+Un modèle ne peut pas auditer correctement la dette qu'il a lui-même produite : s'il
+la voyait, il ne l'aurait pas laissée passer à la génération. Ce principe s'applique
+aussi à l'intention (voir principe 8) : le cadreur (PM) doit dominer la dette
+d'intention qu'il pourrait lui-même introduire au cadrage.
 
-**5. Validation humaine progressive**
+**5. Cadrage itératif, exécution rigide**
+La phase 1 (cadrage par le PM) est un dialogue de raffinement successif avec
+l'utilisateur. Une fois la fiche racine validée, le run suit une topologie de graphe
+fixe et testée (voir ADR 0005). Aucune improvisation de flux pendant l'exécution :
+la souplesse se joue dans le cadrage, pas dans l'orchestration.
+
+**6. Commits incrémentaux, points de restauration**
+Un commit est réalisé à la fin de chaque tâche d'agent (pas seulement en phase 10).
+Chaque commit est signé sous l'identité Git de l'agent. Voir ADR 0007.
+
+**7. Validation humaine progressive**
 Les checkpoints humains sont obligatoires au démarrage (phases 1, 2, 3, 5, 9).
 Ils passent en automatique au fur et à mesure que le système est maîtrisé.
 
-**6. Traçabilité Git par agent**
-Chaque agent commit sous sa propre identité Git. Le git log est un journal d'audit
-complet de qui a produit quoi.
+**8. Checklist d'intention produit en phase 1, aucun trou comblé par défaut**
+Le PM, en casquette product owner, anime en phase 1 une checklist qui force, pour
+chaque dimension du produit cible, trois questions : la dimension existe-t-elle
+comme axe de contrôle distinct ? L'utilisateur final peut-il en garder ou en déléguer
+le contrôle ? Le choix est-il explicite ou implicite (le système décide par défaut) ?
+Toute dimension où le système déciderait par défaut sans choix explicite est marquée
+comme dette d'intention en puissance et remonte au checkpoint humain. **Le PM ne
+comble jamais un trou d'intention par une valeur par défaut « raisonnable » : un trou
+remonte à l'humain, il n'est pas rempli par l'agent.** Cette classe d'erreur (cadrage
+d'intention, pas de code) n'est attrapée ni par les tests ni par un audit de modèle,
+et sa cascade en aval est totale puisqu'elle est à la racine du run. Voir ADR 0008.
 
 ## Composants externes
 
 devaimazing core est strictement le runtime LangGraph + ses 6 agents + ses outils
-locaux. Tout ce qui touche à l'interface utilisateur est externe au core.
+locaux. Tout ce qui touche à l'interface utilisateur et aux notifications est externe
+au core.
 
-**OpenClaw (interface mobile)**
-OpenClaw est utilisé comme passerelle Telegram pour piloter devaimazing
-depuis mobile (AFK). Il reçoit tes messages, les transmet au runtime
-LangGraph via un skill dédié, et te renvoie les notifications de progression
-et de checkpoints. OpenClaw n'orchestre rien : il est uniquement la couche
-de transport entre toi et le runtime.
+**Notifications (ntfy)**
 
-Si tu n'utilises pas OpenClaw, le runtime LangGraph est invocable directement
-en CLI (`devaimazing run <project>`).
+Le daemon devaimazing envoie une notification via ntfy à chaque point de sortie
+du flux : échec d'un agent, checkpoint humain en attente, fin de run. Canal retenu :
+ntfy.sh (service public), pour une portabilité maximale sans setup serveur dédié.
+
+Les notifications ne contiennent jamais de lien : le message est auto-suffisant
+(constat brut de l'erreur, sans suggestion d'action). Voir `docs/workflow.md` pour
+le détail des formats par point de sortie.
+
+Ce canal est une solution transitoire. La cible à terme est une PWA avec push natif
+(Web Push API), qui remplacera ntfy quand l'interface web sera construite.
+
+**Interface de pilotage**
+
+Aucune interface de pilotage riche n'existe à ce stade (CLI minimale uniquement,
+`devaimazing run <feature>`). Une application web (PWA) est envisagée comme cible
+à terme : interface conversationnelle avec le PM (pas de formulaires), boutons
+réservés à l'urgence (stop) et à l'affichage passif (métriques, progression, durée,
+tokens consommés). Cette PWA n'est pas développée dans la version actuelle.
 
 ## Décisions clés
 
@@ -66,3 +95,5 @@ Voir `docs/adr/` pour le détail de chaque décision :
 - [0004 - AGPL-3.0](docs/adr/0004-agpl-licence.md)
 - [0005 - LangGraph comme orchestrateur](docs/adr/0005-langgraph.md)
 - [0006 - Stratégie LLM Opus/Sonnet/Qwen](docs/adr/0006-llm-strategy.md)
+- [0007 - Nommage de branche et commits incrémentaux](docs/adr/0007-branch-naming-and-incremental-commits.md)
+- [0008 - Checklist d'intention produit en Phase 1](docs/adr/0008-checklist-intention-phase1.md)

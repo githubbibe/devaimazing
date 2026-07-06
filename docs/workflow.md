@@ -12,45 +12,80 @@ leur tour selon la séquence définie par le PM en phase 3.
 
 ## Phase 0 - Réception
 
-**Qui** : OpenClaw + PM  
-**Input** : Message Telegram de l'utilisateur  
-**Output** : Run créé, dossier `specs/run-NNN/` initialisé dans le repo projet  
+**Qui** : interface + PM  
+**Input** : message libre de l'utilisateur  
+**Output** : dialogue de cadrage engagé avec le PM  
 
-L'utilisateur envoie un objectif via Telegram. OpenClaw transmet au runtime LangGraph.
-Le PM crée le dossier du run et enregistre l'objectif brut.
-
-```
-specs/
-└── run-001/
-    └── objective.md    # objectif brut tel que reçu
-```
+L'utilisateur envoie un objectif en langage libre. Le PM engage le dialogue de cadrage
+(phase 1). Aucune branche Git n'est créée à ce stade.
 
 ---
 
-## Phase 1 - Cadrage
+## Phase 1 - Cadrage (itératif + checklist d'intention)
 
 **Qui** : PM (Claude Code CLI, Opus)  
-**Input** : `objective.md`  
-**Output** : `specs/run-NNN/card-root.md`  
+**Input** : message libre de l'utilisateur  
+**Output** : `specs/run-NNN/card-root.md` (une fois validée)  
 **Checkpoint** : validation humaine obligatoire  
 
-Le PM (Opus) produit la fiche racine du run. C'est la phase la plus coûteuse en tokens.
-Elle est aussi la plus structurante : une fiche racine floue produit des fiches dépendantes
-floues et du code erroné.
+La phase 1 est un **dialogue de raffinement**, pas une génération one-shot. Le PM pose
+des questions successives pour affiner l'objectif jusqu'à ce que la fiche racine soit
+complète et validée par l'utilisateur.
 
-**Contenu de la fiche racine** :
+**Nommage de la feature** : le PM demande explicitement un nom de feature à l'utilisateur
+s'il n'en a pas été fourni. C'est l'utilisateur qui choisit le nom (même s'il est peu
+soigné) ; le PM ne fabrique un nom que si l'utilisateur ne répond pas ou refuse d'en donner un.
+
+**Checklist d'intention produit (casquette product owner)** : en plus du raffinement de
+l'objectif, le PM anime une checklist d'intention. Pour chaque dimension du produit
+cible touchée par la feature, il force trois questions :
+
+1. Cette dimension existe-t-elle comme axe de contrôle distinct ?
+2. L'utilisateur final (le client qui paie) peut-il prendre ou déléguer le contrôle
+   sur cette dimension, indépendamment des autres ?
+3. Ce choix est-il explicite (l'utilisateur décide) ou implicite (le système décide
+   par défaut) ?
+
+**Toute dimension où le système déciderait par défaut sans choix explicite est
+marquée comme dette d'intention en puissance et remonte au checkpoint humain.**
+
+**Interdiction absolue : le PM ne comble jamais un trou d'intention par une valeur
+par défaut « raisonnable ». Un trou remonte à l'humain, il n'est pas rempli par
+l'agent.** Cette règle existe parce que cette classe d'erreur (une intention mal
+posée, pas un bug de code) n'est attrapée ni par les tests ni par un audit de modèle
+en aval, et sa cascade est totale puisqu'elle se situe à la racine du run. Voir
+ADR 0008 pour le raisonnement complet.
+
+Exemple de dialogue :
+```
+Utilisateur : je voudrais une nouvelle feature qui ferait ...
+PM : ok, donnons-lui un nom, une idée ?
+Utilisateur : features-qui-fait-tout
+PM : ok, je pars sur ce nom. [poursuite du cadrage : critères d'acceptation, périmètre, contraintes...]
+PM : sur la dimension X, qui décide : l'utilisateur final ou le système par défaut ?
+Utilisateur : je n'y avais pas pensé.
+PM : je le note comme point en suspens, ça remonte à la validation humaine.
+```
+
+**Contenu de la fiche racine, une fois validée** :
+- Nom de la feature (fourni par l'utilisateur)
 - Objectif reformulé et précisé
 - Critères d'acceptation mesurables
 - Périmètre (ce qui est inclus et ce qui est explicitement exclu)
+- Dimensions de contrôle identifiées (checklist d'intention) et pour chacune :
+  explicite/implicite, qui décide
 - Contraintes non-fonctionnelles connues (performance, sécurité, compatibilité)
 - Risques identifiés
-- Questions en suspens (si besoin de validation humaine sur un point précis)
+- Questions en suspens (raffinement ET dette d'intention potentielle)
+
+**Le run ne démarre pas et aucune branche n'est créée tant que la fiche racine n'est
+pas validée.** Les échanges de cadrage n'ont pas de trace Git.
 
 ---
 
 ## Phase 2 - Audit amont
 
-**Qui** : Architecte (Ollama, Qwen 2.5 7B)  
+**Qui** : Architecte (Claude Sonnet 4.6)  
 **Input** : `card-root.md` + `project-map.md` + `architect-map.md`  
 **Output** : `specs/run-NNN/architect-brief.md`  
 **Checkpoint** : validation humaine obligatoire  
@@ -60,8 +95,7 @@ L'Architecte lit la fiche racine et le contexte projet pour produire le brief ar
 **Contenu du brief architectural** :
 - Liste exhaustive des fichiers à créer ou modifier (chemin + rôle + raison)
 - Doublons potentiels avec le code existant (comparaison avec `project-map.md`)
-- Contraintes non-fonctionnelles à imposer aux agents codants (patterns de retry,
-  format des logs, schéma des métriques, règles de résilience)
+- Contraintes non-fonctionnelles à imposer aux agents codants
 - Zones d'impact pour les tests de non-régression
 - Dépendances entre fichiers (ordre de création recommandé)
 
@@ -76,20 +110,14 @@ L'Architecte lit la fiche racine et le contexte projet pour produire le brief ar
 
 Le PM définit la séquence d'exécution et écrit une fiche par agent.
 
+**À la validation de cette phase, la branche du run est créée** :
+`studio/<slug-feature>-<hash5>` (voir ADR 0007 pour le détail du nommage).
+C'est le premier commit-point du run.
+
 **Séquence type** (adaptée par le PM selon la nature du run) :
 ```
 back → back-tu → front → front-tu → test → secu
 ```
-
-**Contenu d'une fiche agent** :
-- ID de fiche et run parent
-- Agent destinataire
-- Position dans la séquence
-- Objectif (extrait et précisé depuis la fiche racine)
-- Périmètre fichiers (fichiers à créer, modifier, interdiction de toucher)
-- Contraintes non-fonctionnelles applicables (référence aux skills)
-- Critères de validation (ce que l'agent doit produire pour passer au suivant)
-- Section `feedback` (vide au départ, annotée si renvoi en arrière)
 
 ---
 
@@ -97,38 +125,27 @@ back → back-tu → front → front-tu → test → secu
 
 **Qui** : Back, Front (Ollama, Qwen 2.5 7B)  
 **Input** : fiche agent + skills  
-**Output** : fichiers stub dans le repo projet  
+**Output** : fichiers stub dans le repo projet + **commit à la fin de la tâche**  
 
-Chaque agent codant crée les fichiers dans son périmètre avec uniquement :
-- Signatures de fonctions/méthodes avec types complets
-- Docstrings détaillées (objectif, paramètres, retours, exceptions, side effects)
-- Exemples d'usage
-- Schémas de données
-- Contrats d'erreur (codes et messages)
-- Imports et dépendances
+Chaque agent codant crée les fichiers dans son périmètre avec uniquement signatures,
+types, docstrings, contrats. Aucune logique métier.
 
-**Aucune logique métier.** Les corps de fonctions contiennent uniquement `...` ou `pass`.
+**Commit** : dès que l'agent termine sa tâche de stub (avant même l'audit de l'Architecte
+en phase 5), un commit est réalisé sous son identité Git. C'est un point de restauration :
+si la phase 5 déclenche un renvoi, on peut revenir à ce commit.
 
 ---
 
 ## Phase 5 - Audit des stubs
 
-**Qui** : Architecte (Ollama, Qwen 2.5 7B)  
+**Qui** : Architecte (Claude Sonnet 4.6)  
 **Input** : tous les stubs produits + `architect-brief.md`  
 **Output** : annotations sur les fiches si écart détecté  
 **Checkpoint** : validation humaine obligatoire (au début, automatique ensuite)  
 
-L'Architecte vérifie :
-- Cohérence des interfaces entre Back et Front (les API exposées par Back correspondent
-  à ce que Front attend)
-- Respect du périmètre (pas de fichier créé hors périmètre déclaré)
-- Absence de doublons avec le code existant
-- Respect des contraintes non-fonctionnelles dans les docstrings
-- Complétude des stubs (docstrings suffisamment détaillées pour guider l'implémentation)
-
-**Si écart détecté** : l'Architecte annote la section `feedback` de la fiche de l'agent
-fautif. L'agent est relancé avec sa fiche annotée + ses stubs en input. Il corrige
-et repropose. L'Architecte re-valide.
+**Si écart détecté** : l'Architecte annote la fiche de l'agent fautif. L'agent est
+relancé avec sa fiche annotée + ses stubs précédents en input (pas de reprise from scratch).
+Il corrige et un nouveau commit est réalisé. L'Architecte re-valide.
 
 ---
 
@@ -136,62 +153,46 @@ et repropose. L'Architecte re-valide.
 
 **Qui** : Back, Front, Back-tu, Front-tu (Ollama, Qwen 2.5 7B)  
 **Input** : stubs validés + fiche agent + skills  
-**Output** : code implémenté + tests unitaires  
+**Output** : code implémenté + tests unitaires + **commit à la fin de chaque tâche**  
 
-Chaque agent remplit les corps de fonctions selon les stubs validés.
-Les agents `-tu` (test unitaire) écrivent les tests unitaires en parallèle
-(même séquence, après leur agent codant respectif).
-
-L'agent Back-tu a accès aux stubs et à l'implémentation de Back.
-L'agent Front-tu a accès aux stubs et à l'implémentation de Front.
+Chaque agent remplit les corps de fonctions selon les stubs validés. Chaque agent
+commit dès sa tâche terminée, sous sa propre identité Git.
 
 ---
 
 ## Phase 7 - Tests transverses
 
 **Qui** : Test (Ollama, Qwen 2.5 7B)  
-**Input** : code complet + fiche test + zones d'impact (architect-brief)  
-**Output** : tests d'intégration + tests de non-régression  
+**Input** : code complet + fiche test + zones d'impact  
+**Output** : tests d'intégration + tests de non-régression + **commit**  
 
-L'agent Test écrit et exécute :
-- Tests d'intégration (interactions entre Back et Front)
-- Tests de non-régression sur les zones identifiées par l'Architecte en phase 2
-
-Si un test de non-régression échoue, l'agent Test annote sa fiche avec le détail
-de l'échec et remonte via le PM.
+**Si un test de non-régression échoue** : l'agent Test annote sa fiche avec le détail
+de l'échec (nom du test, output d'erreur). Il **ne corrige ni le test ni le code**.
+Le run s'arrête à ce point, une notification est envoyée (voir section notifications
+ci-dessous), et une validation humaine est requise avant de reprendre.
 
 ---
 
 ## Phase 8 - Audit sécurité
 
-**Qui** : Sécu (Ollama, Qwen 2.5 7B)  
+**Qui** : SAST déterministe (Semgrep, Bandit) puis Sécu (Claude Sonnet 4.6)  
 **Input** : code complet + fiche sécu  
-**Output** : rapport d'audit dans `specs/run-NNN/security-report.md`  
+**Output** : rapport dans `specs/run-NNN/security-report.md` + **commit**  
 
-L'agent Sécu audite le code produit selon le skill `security.md` :
-- Injections (SQL, commandes, templates)
-- Gestion des secrets et variables d'environnement
-- Validation des inputs
-- Gestion des erreurs (pas de stack traces exposées)
-- Dépendances et versions
+Deux passes : le SAST déterministe tourne en premier (zéro token), puis l'agent Sécu
+audite ce que le SAST ne couvre pas (logique métier, cohérence globale, autorisation).
 
 ---
 
 ## Phase 9 - Audit aval
 
-**Qui** : Architecte (Ollama, Qwen 2.5 7B)  
+**Qui** : Architecte (Claude Sonnet 4.6)  
 **Input** : code complet + tous les rapports  
-**Output** : documentation complète dans le repo projet  
+**Output** : documentation complète + **commit**  
 **Checkpoint** : validation humaine obligatoire (au début, automatique ensuite)  
 
-L'Architecte produit :
-- Vérification conformité non-fonctionnelle sur le code final
-- Détection de factorisation (doublons créés pendant l'implémentation)
-- ADR du run (décisions prises, alternatives rejetées)
-- Mise à jour de l'OpenAPI si endpoints modifiés
-- Mise à jour du README si comportement visible modifié
-- CHANGELOG entrée pour ce run
-- Runbook si comportement opérationnel modifié
+L'Architecte produit ADR, mise à jour OpenAPI/README/CHANGELOG/runbooks, et détecte
+la factorisation à planifier (sans la faire lui-même).
 
 ---
 
@@ -199,24 +200,19 @@ L'Architecte produit :
 
 **Qui** : Python pur (0 token)  
 **Input** : état du run, tous les artefacts produits  
-**Output** : commits Git + notification Telegram  
+**Output** : mise à jour project-map, merge de branche, notification  
+
+Les commits ont déjà été réalisés au fil des phases 4 à 9 (un commit par tâche
+d'agent terminée). La phase 10 ne committe plus en bloc. Elle se limite à :
 
 ```python
 # Pseudo-code de la phase 10
-for agent in run.agents_involved:
-    git.commit(
-        author=agent.git_identity,
-        message=f"{agent.conventional_commit_prefix}: {agent.summary}",
-        files=agent.files_modified
-    )
-
 pm.update_project_map(run)
 pm.update_run_history(run)
-telegram.notify(f"Run {run.id} terminé. {run.summary}")
+git.merge_branch_to_develop(run.branch_name)  # après validation finale
+notify_success(f"✅ {run.feature_name} terminé")
 metrics.finalize(run)
 ```
-
-La phase 10 ne fait jamais appel à un LLM. Elle est déterministe et rapide.
 
 ---
 
@@ -225,12 +221,32 @@ La phase 10 ne fait jamais appel à un LLM. Elle est déterministe et rapide.
 Si l'agent N+1 détecte une erreur produite par l'agent N :
 
 1. N+1 annote la section `feedback` de la fiche de N avec le détail de l'erreur.
-2. Le runtime LangGraph relance l'agent N avec sa fiche annotée + ses artefacts en input.
-3. L'agent N corrige et repropose.
+2. Le runtime LangGraph relance l'agent N avec sa fiche annotée + ses artefacts précédents.
+3. L'agent N corrige et commit à nouveau.
 4. N+1 reprend sa tâche avec les artefacts corrigés.
 
-Si N échoue après 3 itérations, la fiche est marquée `status: failed` et une
-notification Telegram est envoyée. Reprise manuelle avec Cursor ou Claude Code.
+Si N échoue après 3 itérations, la fiche est marquée `status: failed`, une notification
+est envoyée, et une reprise manuelle (Cursor ou Claude Code) est nécessaire.
+
+---
+
+## Notifications (ntfy)
+
+Chaque point de sortie du flux (échec ou checkpoint) envoie une notification ntfy,
+sans lien, message auto-suffisant :
+
+| Point de sortie | Format |
+|---|---|
+| Échec agent Ollama | `❌ [agent] échec après 3 tentatives — <constat brut>` |
+| Échec agent Sonnet | `❌ [agent] échec appel Sonnet — <constat brut>` |
+| Échec PM (Claude Code) | `❌ [PM] échec Claude Code CLI — <constat brut>` |
+| Échec SAST | `❌ SAST échec — <constat brut>` |
+| Non-régression échouée | `❌ [Test] non-régression échouée — <nom test> — <constat brut>` |
+| Échec commit Git | `❌ Commit échoué — <agent> — <constat brut>` |
+| Checkpoint humain | `⏸ Checkpoint phase <N> — validation requise` |
+| Run terminé | `✅ <nom de la feature> terminé` |
+
+Voir ARCHITECTURE.md pour le détail du canal de notification.
 
 ---
 
@@ -240,12 +256,6 @@ notification Telegram est envoyée. Reprise manuelle avec Cursor ou Claude Code.
 **Phase de croisière** : au fur et à mesure que le système est maîtrisé, les checkpoints
 peuvent être désactivés un par un via `config/studio.yml`.
 
-```yaml
-# config/studio.yml
-checkpoints:
-  phase_1: true   # cadrage - toujours valider au début
-  phase_2: true   # audit amont
-  phase_3: true   # fiches dépendantes
-  phase_5: true   # audit stubs
-  phase_9: false  # audit aval - peut passer en auto
-```
+**Exception** : le checkpoint de phase 1 ne peut jamais être désactivé si des trous
+d'intention ont été détectés par la checklist. Un trou d'intention remonte toujours
+à validation humaine, même en mode automatique avancé.

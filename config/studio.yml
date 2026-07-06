@@ -2,9 +2,10 @@
 
 # Modèles LLM
 models:
-  pm_opus: claude-opus-4-8        # Phase 1 : cadrage (coûteux, rare)
-  pm_sonnet: claude-sonnet-4-6    # Phase 3 : raffinement (mode croisière)
-  agents_local: qwen2.5:7b-instruct  # Tous les agents locaux
+  pm_opus: claude-opus-4-8         # Phase 1 : cadrage (coûteux, rare)
+  pm_sonnet: claude-sonnet-4-6     # Phase 3 : raffinement (mode croisière)
+  agent_auditor: claude-sonnet-4-6 # Architecte (phases 2, 5, 9) + Sécu (phase 8)
+  agents_local: qwen2.5:7b-instruct # Back, Front, Test
 
 # Ollama
 ollama:
@@ -17,9 +18,17 @@ claude_code:
   timeout_seconds: 300
   output_format: json
 
+# SAST (phase 8, avant agent Sécu)
+sast:
+  enabled: true
+  tools:
+    - name: bandit
+      command: bandit -r {target_dir} -f json
+    - name: semgrep
+      command: semgrep --config=auto {target_dir} --json
+  fail_on_severity: HIGH  # CRITICAL et HIGH bloquent, les autres sont signalés
+
 # Checkpoints de validation humaine
-# true = attendre validation avant de continuer
-# false = continuer automatiquement
 checkpoints:
   phase_1_cadrage: true
   phase_2_audit_amont: true
@@ -27,10 +36,10 @@ checkpoints:
   phase_5_audit_stubs: true
   phase_9_audit_aval: true
 
-# Retry agents locaux
+# Retry agents
 agents:
-  max_iterations: 3       # Nombre max d'itérations avant fallback manuel
-  retry_delay_seconds: 5  # Délai entre itérations
+  max_iterations: 3
+  retry_delay_seconds: 5
 
 # Métriques
 metrics:
@@ -45,17 +54,25 @@ state:
 # Git
 git:
   commit_prefix_convention: true  # Conventional commits (feat:, fix:, docs:, etc.)
-  sign_commits: false              # GPG signing (activer si clé disponible)
+  sign_commits: false             # GPG signing (activer si clé disponible)
+  base_branch: develop
+  branch_prefix: studio/          # studio/<slug-feature>-<hash5>
+  commit_per_task: true           # commit à la fin de chaque tâche d'agent, pas seulement en phase 10
 
-# Notifications
+# Notifications (ntfy - solution transitoire avant PWA push natif)
 notifications:
-  telegram_enabled: false          # Activer après config OpenClaw
-  notify_on_checkpoint: true
-  notify_on_run_complete: true
-  notify_on_failure: true
+  provider: ntfy
+  ntfy:
+    server_url: https://ntfy.sh
+    topic: <PLACEHOLDER_TOPIC>    # à remplacer par un topic unique et non devinable
+  no_link_in_message: true        # message auto-suffisant, pas de lien
+  notify_on:
+    - agent_failure
+    - checkpoint_pending
+    - run_completed
 
 # Logging
 logging:
-  level: INFO                      # DEBUG en développement
-  format: json                     # json ou text
+  level: INFO
+  format: json
   file: ~/.devaimazing/studio.log
