@@ -41,3 +41,10 @@ sa docstring, ne pas supposer que quelque chose est cassé parce que c'est un no
 Args/Returns/Raises/Side effects/Example, zéro logique de contrôle, zéro logique métier) — la
 même convention que l'orchestrateur impose à ses propres agents en aval s'applique aussi aux
 contributions manuelles à ce dépôt.
+
+## Question en suspens
+
+Le README (section « Structure du repo ») annonce les dossiers `interfaces/telegram-bridge/`,
+`infra/podman/` et `infra/ollama/`, mais aucun n'existe sur le filesystem à ce jour. Pas encore
+tranché : faut-il les créer (structure prévue mais pas encore construite), ou retirer leur
+mention du README (structure pas encore décidée) ? À demander à l'utilisateur avant d'agir.
