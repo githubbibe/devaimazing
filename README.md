@@ -26,7 +26,8 @@ Les studios de développement IA modernes font face à une tension : **qualité 
 devaimazing résout cette tension avec une philosophie simple :
 
 - **Opus pour la réflexion haute** : cadrage du projet, découpage en fiches, architecture. Invoqué une seule fois par run, en début de projet ou en cas de blocage.
-- **Agents locaux pour l'exécution** : 5 agents spécialisés tournent sur Ollama (Qwen 2.5 7B) et produisent le code, les tests, les audits. Zéro token API pour l'exécution.
+- **Agents locaux pour la production** : Back, Front et Test tournent sur Ollama (Qwen 2.5 7B) et produisent le code et les tests. Zéro token API pour la production.
+- **Agents auditeurs sur Sonnet** : Architecte et Sécu tournent sur Claude Sonnet, car un auditeur doit dominer en capacité l'agent qu'il audite pour attraper sa dette.
 - **Stub-first pour cadrer la dérive** : chaque agent écrit d'abord les signatures, types, docstrings et contrats AVANT d'implémenter. L'Architecte valide avant que la moindre ligne métier soit écrite.
 - **Validation humaine progressive** : tu valides les étapes clés au départ. Une fois le système maîtrisé, les checkpoints passent en automatique.
 
@@ -48,7 +49,7 @@ Runtime LangGraph (Python, orchestrateur)
     |       Phase 3 : fiches dependantes (Sonnet)
     |       Phase 10 : cloture pure Python, 0 token
     |
-    +-- Architecte (Ollama - Qwen 2.5 7B)
+    +-- Architecte (Claude Sonnet - agent auditeur)
     |       Audit non-fonctionnel amont et aval
     |       Detection doublons, factorisation
     |       Documentation complete (ADR, OpenAPI, runbooks)
@@ -65,8 +66,8 @@ Runtime LangGraph (Python, orchestrateur)
     |       Tests unitaires, integration, non-regression
     |       Une fiche -tu par agent codant
     |
-    +-- Secu (Ollama - Qwen 2.5 7B)
-            Audit securite du code produit
+    +-- Secu (Claude Sonnet - agent auditeur)
+            SAST deterministe (Semgrep, Bandit) puis audit securite du code produit
 ```
 
 **Agents stateless sauf PM.** A chaque run, les agents demarrent avec uniquement leur prompt systeme + skills + fiche de tache. Pas d'historique. Le PM seul porte la memoire projet via un checkpointer SQLite.
@@ -112,7 +113,8 @@ Phase 10  Cloture            Python pur : MAJ project-map, commit Git signe
 |---|---|---|
 | Orchestrateur | Runtime du graphe d'agents | LangGraph (Python) |
 | PM agent | Cadrage et sequencement | Claude Code CLI (Opus/Sonnet) |
-| Agents execution | Code, test, secu, archi | Ollama + Qwen 2.5 7B Instruct |
+| Agents producteurs | Back, Front, Test | Ollama + Qwen 2.5 7B Instruct |
+| Agents auditeurs | Architecte, Secu | Claude Sonnet (API) |
 | Persistance etat | Checkpointer PM | SQLite |
 | Metriques | Tokens, temps, RAM, latence | SQLite + Prometheus |
 | Observabilite | Dashboards | Grafana (datasource dev dedié) |

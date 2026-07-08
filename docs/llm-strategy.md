@@ -9,11 +9,11 @@ Voir ADR 0006 pour le raisonnement complet.
 | PM | 1 - Cadrage | Claude Opus 4.x (API) | Raisonnement architectural, 1 seul appel par run |
 | PM | 3 - Fiches | Claude Sonnet 4.6 (API) | Mode croisière, structuré |
 | PM | 10 - Clôture | Python pur | 0 token |
-| Architecte | 2, 5, 9 | Qwen 2.5 7B (Ollama) | Local, audit guidé par fiches |
+| Architecte | 2, 5, 9 | Claude Sonnet 4.6 (API) | Auditeur, doit dominer le producteur |
 | Back | 4, 6 | Qwen 2.5 7B (Ollama) | Local, guidé par stubs validés |
 | Front | 4, 6 | Qwen 2.5 7B (Ollama) | Local, guidé par stubs validés |
 | Test | 7 | Qwen 2.5 7B (Ollama) | Local |
-| Sécu | 8 | Qwen 2.5 7B (Ollama) | Local |
+| Sécu | 8 | SAST (0 token) puis Claude Sonnet 4.6 (API) | Auditeur, doit dominer le producteur |
 | Transitions | inter-phases | Python pur | 0 token |
 
 ## Configuration
@@ -24,7 +24,8 @@ Les modèles sont déclarés dans `config/studio.yml` :
 models:
   pm_opus: claude-opus-4-8
   pm_sonnet: claude-sonnet-4-6
-  agents_local: qwen2.5:7b-instruct
+  agent_auditor: claude-sonnet-4-6 # Architecte + Sécu
+  agents_local: qwen2.5:7b-instruct # Back, Front, Test
 ```
 
 Changer de modèle ne nécessite pas de modifier le code.

@@ -28,7 +28,8 @@ un LLM assigné, et une identité Git propre. Tous sont stateless sauf le PM.
 
 ## Architecte
 
-**LLM** : Ollama, Qwen 2.5 7B Instruct  
+**LLM** : Claude Sonnet 4.6 (API Anthropic) — agent auditeur, doit dominer en capacité
+les agents producteurs qu'il audite (voir ARCHITECTURE.md principe 4)  
 **Stateful** : non  
 **Identité Git** : `architect-aimazing <architect@aimazing.fr>`  
 **Périmètre** : lecture transverse, écriture dans `docs/`, `specs/run-NNN/architect-*.md`  
@@ -122,13 +123,15 @@ un LLM assigné, et une identité Git propre. Tous sont stateless sauf le PM.
 
 ## Sécu
 
-**LLM** : Ollama, Qwen 2.5 7B Instruct  
+**LLM** : Claude Sonnet 4.6 (API Anthropic) — agent auditeur, doit dominer en capacité
+les agents producteurs qu'il audite (voir ARCHITECTURE.md principe 4)  
 **Stateful** : non  
 **Identité Git** : `security-aimazing <security@aimazing.fr>`  
 **Périmètre** : lecture transverse, écriture dans `specs/run-NNN/security-report.md`  
 
 **Rôle** :
-- Audit sécurité du code produit (phase 8)
+- SAST déterministe (Semgrep, Bandit) en premier, zéro token (phase 8)
+- Audit sécurité du code produit sur ce que le SAST ne couvre pas (phase 8)
 - Production du rapport de sécurité
 
 **Skills** : `security.md`, `error-handling.md`

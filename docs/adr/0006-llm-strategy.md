@@ -18,11 +18,21 @@ Le Mac mini M4 Pro dispose de 24 Go de RAM unifiée.
 - Coordination inter-phases (transitions triviales) : Python pur. 0 token.
 - Phase 10 (clôture) : Python pur. 0 token.
 
-**Tous les autres agents - Ollama local**
-- Architecte, Back, Front, Test, Sécu : Qwen 2.5 7B Instruct (Q4_K_M, ~4.5 Go).
+**Agents producteurs - Ollama local**
+- Back, Front, Test : Qwen 2.5 7B Instruct (Q4_K_M, ~4.5 Go).
 - Un seul modèle chargé à la fois (contrainte RAM 24 Go avec containers Podman actifs).
 - Fallback : si un agent échoue après plusieurs itérations, reprise manuelle avec
   Cursor ou Claude Code. Pas de fallback API automatique (contrôle des coûts).
+
+**Agents auditeurs - Claude Sonnet 4.6 (API Anthropic)**
+- Architecte (phases 2, 5, 9) et Sécu (phase 8) : Claude Sonnet 4.6.
+- Un auditeur doit dominer en capacité l'agent qu'il audite : un modèle ne peut pas
+  détecter correctement la dette qu'il aurait lui-même laissée passer à la génération.
+  Qwen 2.5 7B ne peut donc pas auditer du code produit par Qwen 2.5 7B.
+- Phase 8 (Sécu) : un passage SAST déterministe (Semgrep, Bandit — voir
+  `config/studio.yml` section `sast`) tourne en premier, à coût zéro token. Sécu
+  audite ensuite ce que le SAST ne couvre pas (logique métier, autorisation,
+  cohérence globale).
 
 ## Raisons
 
@@ -40,8 +50,14 @@ Le Mac mini M4 Pro dispose de 24 Go de RAM unifiée.
 4. **Qwen 2.5 7B pour l'exécution locale** : bon compromis code/raisonnement pour 7B.
    A benchmarker contre Qwen 2.5 Coder 7B et Qwen 2.5 14B une fois le pipeline stable.
 
-5. **Le modèle est une variable de config** : `config/studio.yml` déclare les modèles.
+5. **Le modèle est une variable de config** : `config/studio.yml` déclare les modèles
+   (clé `agent_auditor` pour Architecte/Sécu, `agents_local` pour Back/Front/Test).
    Changer de modèle ne nécessite pas de modifier le code.
+
+6. **Auditeur doit dominer producteur** : voir `ARCHITECTURE.md` principe 4. C'est la
+   raison pour laquelle Architecte et Sécu ont été déplacés de Qwen vers Sonnet après
+   la version initiale de cette décision — un agent auditeur de même capacité que le
+   producteur ne peut pas être fiable pour catcher sa propre classe d'erreurs.
 
 ## Métriques de segmentation tokens
 
