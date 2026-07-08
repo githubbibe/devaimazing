@@ -1,7 +1,8 @@
 # Architecture de devaimazing
 
 Ce document décrit les décisions d'architecture structurantes du studio.
-Les ADR détaillés sont dans `docs/adr/`.
+Les ADR détaillés sont dans `docs/adr/`. La topologie réseau complète est décrite
+dans `docs/infra-topology.md`.
 
 ## Vue d'ensemble
 
@@ -54,15 +55,23 @@ le contrôle ? Le choix est-il explicite ou implicite (le système décide par d
 Toute dimension où le système déciderait par défaut sans choix explicite est marquée
 comme dette d'intention en puissance et remonte au checkpoint humain. **Le PM ne
 comble jamais un trou d'intention par une valeur par défaut « raisonnable » : un trou
-remonte à l'humain, il n'est pas rempli par l'agent.** Cette classe d'erreur (cadrage
-d'intention, pas de code) n'est attrapée ni par les tests ni par un audit de modèle,
-et sa cascade en aval est totale puisqu'elle est à la racine du run. Voir ADR 0008.
+remonte à l'humain, il n'est pas rempli par l'agent.** Voir ADR 0008.
+
+**9. Pseudonymisation by design pour toute donnée comportementale**
+Tout projet produit par devaimazing qui collecte des données comportementales
+utilisateur pseudonymise ces données par construction avant tout export vers un
+système d'observabilité : aucun identifiant direct ne transite dans le flux exporté.
+La table de correspondance pseudonyme ↔ identité réelle est physiquement étanche
+(accès réseau et applicatif restreints à l'admin). Toute ré-identification est
+elle-même tracée. Le cloneur d'un projet choisit explicitement si ses données
+restent locales (`analytics_mode: local`) ou sont partagées vers un système mutualisé
+(`analytics_mode: shared`). Voir ADR 0009.
 
 ## Composants externes
 
 devaimazing core est strictement le runtime LangGraph + ses 6 agents + ses outils
-locaux. Tout ce qui touche à l'interface utilisateur et aux notifications est externe
-au core.
+locaux. Tout ce qui touche à l'interface utilisateur, aux notifications et à
+l'observabilité est externe au core.
 
 **Notifications (ntfy)**
 
@@ -76,6 +85,18 @@ le détail des formats par point de sortie.
 
 Ce canal est une solution transitoire. La cible à terme est une PWA avec push natif
 (Web Push API), qui remplacera ntfy quand l'interface web sera construite.
+
+**Observabilité centralisée (Loki + Grafana Alloy)**
+
+L'observabilité repose sur Grafana Alloy (agent unifié, successeur de Promtail —
+EOL depuis mars 2026) qui collecte logs et métriques et les pousse vers Loki
+(agrégation de logs) et Prometheus (métriques). Grafana reste le point unique de
+visualisation, lisant à la fois Loki et les datasources Prometheus prod/dev.
+
+Cette collecte centralisée remplace le besoin d'un outil de diagnostic actif branché
+sur la prod : un incident se rejoue depuis les logs structurés (JSON) déjà collectés,
+sans avoir besoin d'un environnement de test connecté à la production. Voir
+`docs/infra-topology.md` pour le détail du déploiement d'Alloy.
 
 **Interface de pilotage**
 
@@ -97,3 +118,4 @@ Voir `docs/adr/` pour le détail de chaque décision :
 - [0006 - Stratégie LLM Opus/Sonnet/Qwen](docs/adr/0006-llm-strategy.md)
 - [0007 - Nommage de branche et commits incrémentaux](docs/adr/0007-branch-naming-and-incremental-commits.md)
 - [0008 - Checklist d'intention produit en Phase 1](docs/adr/0008-checklist-intention-phase1.md)
+- [0009 - Pseudonymisation et traçabilité anti-fraude](docs/adr/0009-pseudonymisation-anti-fraude.md)
