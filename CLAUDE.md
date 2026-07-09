@@ -24,10 +24,10 @@ fichier, pas à la suppression.
 
 ## Commit et push
 
-Quand l'utilisateur demande un commit, celui-ci est automatiquement suivi d'un `git push`
-sans étape de confirmation supplémentaire — sauf indication contraire de l'utilisateur pour
-cette demande précise. Cette autorisation ne change pas la règle de base : un commit n'est
-créé que si l'utilisateur le demande explicitement, jamais de façon proactive.
+À la fin de toute tâche ayant modifié des fichiers du dépôt, Claude Code commit et push
+automatiquement, sans attendre une demande explicite ni une confirmation supplémentaire —
+sauf indication contraire de l'utilisateur pour cette tâche précise. Le message de commit
+suit les conventions habituelles (résumé de l'intention, pas juste de la description).
 
 ## Qu'est-ce que ce dépôt ?
 
