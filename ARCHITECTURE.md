@@ -67,6 +67,19 @@ elle-même tracée. Le cloneur d'un projet choisit explicitement si ses données
 restent locales (`analytics_mode: local`) ou sont partagées vers un système mutualisé
 (`analytics_mode: shared`). Voir ADR 0009.
 
+**10. Quatre piliers non-fonctionnels obligatoires, dette toujours justifiée**
+Résilience, gestion d'erreurs, scalabilité, observabilité sont des dimensions
+non-fonctionnelles obligatoires, vérifiées par l'Architecte en phase 2 et maintenues
+en phase 9 (architect-map), pour devaimazing lui-même et pour tout projet produit.
+Symétrique au principe 8 côté technique : toute dette assumée sur un pilier (ex.
+scalabilité limitée par les ressources CPU disponibles) doit être explicitement
+justifiée et documentée, jamais laissée en silence. Une section de contraintes
+non-fonctionnelles vide sans justification remonte au checkpoint humain. Performance,
+disponibilité et accessibilité sont des dimensions reconnues par les standards
+industriels mais explicitement hors champ au stade POC/LVP : notées comme dette de
+périmètre connue et différée, pas comme trou silencieux, à réintégrer au garde-fou
+quand le projet dépasse ce stade. Voir ADR 0010.
+
 ## Composants externes
 
 devaimazing core est strictement le runtime LangGraph + ses 6 agents + ses outils
@@ -119,3 +132,4 @@ Voir `docs/adr/` pour le détail de chaque décision :
 - [0007 - Nommage de branche et commits incrémentaux](docs/adr/0007-branch-naming-and-incremental-commits.md)
 - [0008 - Checklist d'intention produit en Phase 1](docs/adr/0008-checklist-intention-phase1.md)
 - [0009 - Pseudonymisation et traçabilité anti-fraude](docs/adr/0009-pseudonymisation-anti-fraude.md)
+- [0010 - Quatre piliers non-fonctionnels obligatoires et dette justifiée](docs/adr/0010-quatre-piliers-non-fonctionnels-dette-justifiee.md)

@@ -12,6 +12,7 @@
 
 ### Gestion d'erreurs
 -
+- Dette assumée / Justification :
 
 ### Logging
 - Format :
@@ -22,6 +23,13 @@
 - Pattern de retry :
 - Circuit breaker :
 - Timeout par défaut :
+- Dette assumée / Justification :
+
+### Scalabilité
+- Volume/charge attendue :
+- Pagination / bornage mémoire :
+- Isolation des effets de bord entre features :
+- Dette assumée / Justification :
 
 ### Sécurité
 -
@@ -29,6 +37,19 @@
 ### Observabilité
 - Métriques à exposer :
 - Format des traces :
+- Dette assumée / Justification :
+
+### Hors champ (connu, différé)
+
+<!-- Dimensions NFR reconnues par les standards industriels (ISO/IEC 25010, SRE) mais
+     volontairement exclues du garde-fou "dette assumée" au stade POC/LVP. Voir ADR 0010.
+     Ce n'est pas un oubli : c'est un choix de périmètre écrit, à réévaluer explicitement
+     dès que le projet dépasse le stade POC/LVP. -->
+
+- **Performance / latence** — hors champ (POC/LVP), à réintégrer au garde-fou si le
+  projet dépasse ce stade.
+- **Disponibilité (SLA/uptime)** — hors champ (POC/LVP), idem.
+- **Accessibilité (a11y)** — hors champ (POC/LVP), idem.
 
 ## Patterns établis
 
