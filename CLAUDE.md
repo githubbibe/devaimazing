@@ -22,6 +22,13 @@ Cette règle s'applique aux suppressions de fichiers explicitement demandées co
 « évidents » (fichiers jugés inutiles, obsolètes, ou générés) — le doute profite toujours au
 fichier, pas à la suppression.
 
+## Commit et push
+
+Quand l'utilisateur demande un commit, celui-ci est automatiquement suivi d'un `git push`
+sans étape de confirmation supplémentaire — sauf indication contraire de l'utilisateur pour
+cette demande précise. Cette autorisation ne change pas la règle de base : un commit n'est
+créé que si l'utilisateur le demande explicitement, jamais de façon proactive.
+
 ## Qu'est-ce que ce dépôt ?
 
 devaimazing est un **studio de développement multi-agents local-first** : un orchestrateur
