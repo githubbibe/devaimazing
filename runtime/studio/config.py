@@ -5,15 +5,35 @@ Charge studio.yml (config globale) et le fichier projet cible.
 Les valeurs projet écrasent les valeurs globales si définies.
 """
 
+import os
 from pathlib import Path
 from typing import Any, Optional
+
 import yaml
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """
+    Fusionne récursivement `override` dans une copie de `base`.
+
+    Une clé dont la valeur est un mapping dans les deux dictionnaires est
+    fusionnée récursivement (les sous-clés non redéfinies par `override`
+    sont conservées). Toute autre clé de `override` remplace ou ajoute la
+    valeur correspondante dans `base`.
+    """
+    merged = dict(base)
+    for key, value in override.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 class StudioConfig:
     """
     Configuration complète du studio pour un run donné.
-    
+
     Charge studio.yml puis le fichier projet et fusionne les deux.
     Le fichier projet peut écraser n'importe quelle valeur de studio.yml.
     """
@@ -28,59 +48,100 @@ class StudioConfig:
             FileNotFoundError: Si studio.yml ou le fichier projet est introuvable.
             ValueError: Si le fichier projet est invalide.
         """
-        ...
+        self._project_name = project_name
+        self._config_dir = (
+            Path(config_dir) if config_dir is not None
+            else Path(__file__).resolve().parents[2] / "config"
+        )
+
+        studio_yml_path = self._config_dir / "studio.yml"
+        if not studio_yml_path.is_file():
+            raise FileNotFoundError(f"Configuration globale introuvable : {studio_yml_path}")
+
+        project_yml_path = self._config_dir / "projects" / f"{project_name}.yml"
+        if not project_yml_path.is_file():
+            raise FileNotFoundError(f"Configuration projet introuvable : {project_yml_path}")
+
+        with studio_yml_path.open("r", encoding="utf-8") as f:
+            global_config = yaml.safe_load(f) or {}
+        with project_yml_path.open("r", encoding="utf-8") as f:
+            project_config = yaml.safe_load(f) or {}
+
+        if not isinstance(global_config, dict):
+            raise ValueError(f"Configuration globale invalide (mapping attendu) : {studio_yml_path}")
+        if not isinstance(project_config, dict):
+            raise ValueError(f"Configuration projet invalide (mapping attendu) : {project_yml_path}")
+
+        self._raw = _deep_merge(global_config, project_config)
 
     @property
     def repo_path(self) -> Path:
         """Chemin absolu vers le repo du projet cible."""
-        ...
+        raw = self._raw.get("repo_path")
+        if not raw:
+            raise ValueError(
+                f"repo_path manquant dans la configuration du projet '{self._project_name}'"
+            )
+        return Path(raw).expanduser()
 
     @property
     def project_name(self) -> str:
         """Nom du projet."""
-        ...
+        return self._project_name
 
     @property
     def models(self) -> dict[str, str]:
         """Mapping nom_modèle -> identifiant LLM."""
-        ...
+        return dict(self._raw.get("models", {}))
 
     @property
     def checkpoints(self) -> dict[str, bool]:
         """Mapping phase -> checkpoint activé."""
-        ...
+        return dict(self._raw.get("checkpoints", {}))
 
     @property
     def ollama_base_url(self) -> str:
         """URL de base de l'API Ollama."""
-        ...
+        return self._raw.get("ollama", {}).get("base_url", "http://localhost:11434")
 
     @property
     def metrics_db_path(self) -> Path:
         """Chemin vers metrics.db."""
-        ...
+        raw = self._raw.get("metrics", {}).get("db_path", "~/.devaimazing/metrics.db")
+        return Path(raw).expanduser()
 
     @property
     def state_db_path(self) -> Path:
         """Chemin vers state.db (checkpointer LangGraph)."""
-        ...
+        raw = self._raw.get("state", {}).get("db_path", "~/.devaimazing/state.db")
+        return Path(raw).expanduser()
 
     @property
     def project_constraints(self) -> dict[str, Any]:
         """Contraintes projet transmises à l'Architecte."""
-        ...
+        return dict(self._raw.get("project_constraints", {}))
 
     def get(self, key: str, default: Any = None) -> Any:
         """Accès générique à une clé de config."""
-        ...
+        return self._raw.get(key, default)
 
     @classmethod
     def from_env(cls) -> "StudioConfig":
         """
         Crée une config depuis les variables d'environnement.
-        
+
         Variables attendues :
             DEVAIMAZING_PROJECT: Nom du projet
             DEVAIMAZING_CONFIG_DIR: Répertoire de config (optionnel)
+
+        Raises:
+            ValueError: Si DEVAIMAZING_PROJECT n'est pas défini.
         """
-        ...
+        project_name = os.environ.get("DEVAIMAZING_PROJECT")
+        if not project_name:
+            raise ValueError("Variable d'environnement DEVAIMAZING_PROJECT non définie")
+
+        config_dir_raw = os.environ.get("DEVAIMAZING_CONFIG_DIR")
+        config_dir = Path(config_dir_raw).expanduser() if config_dir_raw else None
+
+        return cls(project_name=project_name, config_dir=config_dir)
