@@ -329,7 +329,24 @@ avant qu'il aille au bout :
    fait foi. La garde-fou `permission_denials` reste en place comme filet de sécurité
    si le prompt échoue à dissuader le modèle une prochaine fois.
 
-Run relancé après ces quatre corrections — en cours, résultat pas encore connu.
+5. **Interdiction Write/Edit du point 4 trop étroite — le même agent a rebondi sur
+   `Bash`** (bug de prompt, pas de code) : après reprise manuelle de
+   `run-20260710-185636` sur le nœud Architecte (voir Backlog ci-dessous pour comment),
+   nouvel échec : `RuntimeError: Claude Code CLI s'est vu refuser l'accès à un outil
+   (Bash)`. Cause : le point 4 n'interdisait explicitement que Write et Edit — la seule
+   mention de Bash dans `prompts/architect.md` était la phrase comportementale « Tu
+   n'exécutes pas de commandes shell », qui décrit ce que l'agent produit, pas une
+   interdiction d'utiliser son propre outil Bash. Sonnet a exploré le repo cible avec
+   Bash (probablement `ls`/`find`/`grep` shell plutôt que les outils dédiés) plutôt que
+   de s'en tenir à Read/Glob/Grep. Fix : généralisation de l'interdiction dans les trois
+   prompts (`architect.md`, `security.md`, `pm.md`) — au lieu d'énumérer Write/Edit,
+   interdiction de **tout outil de mutation**, avec Read/Glob/Grep comme seule liste
+   blanche explicite. Choisi plutôt que d'ajouter Bash à la liste noire pour éviter un
+   troisième aller-retour si un futur outil de mutation (autre que Write/Edit/Bash)
+   apparaît côté Claude Code CLI. Même limite qu'au point 4 : pas de test de régression
+   automatisé possible, seule la vérification empirique fait foi.
+
+Run relancé après ces cinq corrections — en cours, résultat pas encore connu.
 
 **Backlog identifié en marge (2026-07-10, pas bloquant, pour plus tard)** :
 `devaimazing resume` (`cli.py::resume`) ne sait reprendre qu'un run explicitement en
