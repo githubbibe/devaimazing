@@ -104,6 +104,27 @@
   `<PLACEHOLDER_TOPIC>`). 7 tests ajoutés (dont exécution réelle de sous-process via
   `python3 -c`, pas de mock sur `_run_test_command` lui-même). **79/79 au total sur
   `runtime/tests/`.**
+- `nodes/security.py` est implémenté : couche 1 (bandit/semgrep, zéro token) puis couche
+  2 (Sonnet via Claude Code CLI, cwd=repo cible — il lit le code lui-même, pas de
+  réinjection intégrale dans le prompt). **Schémas JSON bandit/semgrep vérifiés par
+  exécution réelle** (pas seulement déduits de la doc) : `bandit` →
+  `results[].issue_severity` (LOW/MEDIUM/HIGH) ; `semgrep` →
+  `results[].extra.severity` (INFO/WARNING/ERROR, normalisé vers LOW/MEDIUM/HIGH).
+  Aucun des deux ne produit nativement `CRITICAL` en config par défaut — noté en Notes.
+  **Décision/correction de contrat** : le stub d'origine disait que
+  `sast.fail_on_severity` bloquait « l'exécution des outils SAST eux-mêmes » — inexact
+  (bandit/semgrep ne s'arrêtent jamais en cours de scan sur une sévérité, vérifié). Contrat
+  clarifié : un finding atteignant le seuil produit et commite quand même le rapport,
+  mais bascule `state.status=WAITING_HUMAN` au lieu d'avancer automatiquement à
+  `Phase.AUDIT_AVAL` (cohérent avec la préférence du projet pour les checkpoints
+  explicites, ADR 0008/0010).
+  **Bug trouvé et corrigé par les tests** : `_run_sast_tool` utilisait `str.format()`
+  sur la commande brute pour substituer `{target_dir}` — casse dès que la commande
+  contient d'autres accolades (ex. un literal JSON dans un test). Remplacé par
+  `.replace("{target_dir}", ...)`. Même bug latent corrigé dans
+  `nodes/test.py::_run_test_command` (test de régression ajouté aux deux). 8 tests
+  ajoutés pour security.py + 1 test de régression pour test.py. **87/87 au total sur
+  `runtime/tests/`.**
 - `examples/demo-todo-app/` n'a pas de code source (`src/` annoncé au README mais absent),
   et il n'existe pas de `config/projects/demo-todo-app.yml`. Aucune cible réelle pour un
   run de bout en bout pour l'instant.
@@ -113,8 +134,8 @@
 1. ~~Compléter les stubs des 7 `nodes/*.py` au contrat complet~~ — fait le 2026-07-10.
 2. Implémenter dans l'ordre de dépendance : ~~`state.py`~~ (rien à faire) → ~~`config.py`~~
    → ~~`tools/filesystem.py`, `tools/git.py`, `tools/ollama.py`, `tools/claude_code.py`~~
-   → ~~`graph.py`~~ → ~~`nodes/backend.py`, `nodes/frontend.py`, `nodes/test.py`~~ (fait
-   le 2026-07-10) → `nodes/security.py`, `nodes/closer.py`, `nodes/architect.py`,
+   → ~~`graph.py`~~ → ~~`nodes/backend.py`, `nodes/frontend.py`, `nodes/test.py`,
+   `nodes/security.py`~~ (fait le 2026-07-10) → `nodes/closer.py`, `nodes/architect.py`,
    `nodes/pm.py` → `cli.py` → `metrics.py`.
 3. Remplir `runtime/tests/test_config.py` (et les futurs tests) avec de vraies assertions
    au fur et à mesure de chaque implémentation.
@@ -125,10 +146,9 @@
 
 ## Point de reprise
 
-Prochaine session : poursuivre `nodes/*.py` par `security.py`, `closer.py`,
-`architect.py`, `pm.py` (chacun a son propre point de conception à trancher — voir
-journal ci-dessus pour test.py/backend.py/frontend.py comme précédent), puis `cli.py` et
-`metrics.py`, sauf décision contraire. Le placeholder ntfy et l'état de
+Prochaine session : poursuivre `nodes/*.py` par `closer.py`, `architect.py`, `pm.py`
+(chacun a son propre point de conception à trancher — voir journal ci-dessus), puis
+`cli.py` et `metrics.py`, sauf décision contraire. Le placeholder ntfy et l'état de
 `demo-todo-app` (étape 4) restent à trancher explicitement avant d'être traités — ne pas
 les combler par une valeur par défaut « raisonnable » sans validation humaine (cohérent
 avec le principe de l'ADR 0008).

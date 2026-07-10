@@ -48,7 +48,7 @@ async def _run_test_command(command_template: str, target_dir: Path) -> tuple[bo
         Tuple (succès, sortie combinée stdout+stderr). succès = code de
         sortie 0.
     """
-    command = shlex.split(command_template.format(target_dir=str(target_dir)))
+    command = shlex.split(command_template.replace("{target_dir}", str(target_dir)))
     process = await asyncio.create_subprocess_exec(
         *command,
         cwd=str(target_dir),

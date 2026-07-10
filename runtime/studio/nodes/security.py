@@ -15,11 +15,81 @@ Agent stateless (ADR 0001). Périmètre : lecture transverse, écriture dans
 specs/run-NNN/security-report.md (voir docs/agents.md).
 """
 
+import asyncio
+import json
+import shlex
+from pathlib import Path
+from typing import Any
+
 from studio.config import StudioConfig
-from studio.state import AgentResult, Phase, StudioState
+from studio.state import AgentResult, Phase, RunStatus, StudioState
 from studio.tools.claude_code import run_claude_code
-from studio.tools.filesystem import write_card
+from studio.tools.filesystem import inject_skills, read_card, write_card
 from studio.tools.git import commit_as_agent
+
+_DEVAIMAZING_ROOT = Path(__file__).resolve().parents[3]
+_PROMPT_PATH = _DEVAIMAZING_ROOT / "prompts" / "security.md"
+_SKILLS_DIR = _DEVAIMAZING_ROOT / "skills"
+_SKILL_NAMES = ["error-handling"]
+
+# Normalisation des sévérités par outil vers une échelle commune, vérifiée
+# contre les schémas JSON réels (bandit results[].issue_severity,
+# semgrep results[].extra.severity) — bandit : LOW/MEDIUM/HIGH (déjà la
+# même échelle) ; semgrep : INFO/WARNING/ERROR par défaut (pas de CRITICAL
+# nativement dans l'un ou l'autre avec la config par défaut).
+_SEVERITY_NORMALIZATION = {
+    "bandit": {"LOW": "LOW", "MEDIUM": "MEDIUM", "HIGH": "HIGH"},
+    "semgrep": {"INFO": "LOW", "WARNING": "MEDIUM", "ERROR": "HIGH"},
+}
+_SEVERITY_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+
+# Tronque le rapport SAST brut injecté dans le prompt Sonnet (évite un
+# prompt démesuré sur un repo avec beaucoup de findings).
+_MAX_SAST_JSON_CHARS = 20000
+
+
+async def _run_sast_tool(command_template: str, target_dir: Path) -> dict[str, Any]:
+    """
+    Exécute un outil SAST (bandit ou semgrep) et retourne son JSON.
+
+    bandit/semgrep sortent avec un code non nul dès qu'ils trouvent des
+    findings (comportement normal, pas une erreur d'outil) : le code de
+    sortie n'est donc pas utilisé pour détecter un échec. Seule une sortie
+    non-JSON (crash de l'outil, mauvaise commande) est traitée comme une
+    erreur.
+
+    Raises:
+        RuntimeError: Si la sortie n'est pas un JSON valide.
+    """
+    command = shlex.split(command_template.replace("{target_dir}", str(target_dir)))
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    try:
+        return json.loads(stdout.decode("utf-8", errors="replace") or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Sortie SAST invalide pour la commande {command_template!r} : {exc}\n"
+            f"{stderr.decode('utf-8', errors='replace').strip()}"
+        ) from exc
+
+
+def _normalized_severities(tool_name: str, payload: dict[str, Any]) -> list[str]:
+    """Extrait les sévérités normalisées des findings d'un rapport SAST."""
+    mapping = _SEVERITY_NORMALIZATION.get(tool_name, {})
+    severities = []
+    for issue in payload.get("results", []):
+        if tool_name == "bandit":
+            raw = issue.get("issue_severity", "")
+        elif tool_name == "semgrep":
+            raw = issue.get("extra", {}).get("severity", "")
+        else:
+            raw = ""
+        severities.append(mapping.get(raw, raw))
+    return severities
 
 
 async def run(state: StudioState) -> StudioState:
@@ -31,30 +101,39 @@ async def run(state: StudioState) -> StudioState:
             Phase.SECURITE. state.agent_cards["secu"] doit être renseigné.
 
     Returns:
-        État mis à jour : state.current_phase=Phase.AUDIT_AVAL une fois le
-        rapport produit, que des findings CRITICAL/HIGH aient été relevés
-        ou non (le blocage sur sévérité, sast.fail_on_severity, arrête
-        l'exécution des outils SAST eux-mêmes, pas la progression du run
-        au-delà de ce node — voir Raises). Un AgentResult est ajouté à
-        state.agent_results.
+        État mis à jour : un AgentResult est ajouté à state.agent_results.
+        Si aucun finding normalisé n'atteint sast.fail_on_severity (voir
+        config/studio.yml) : state.current_phase=Phase.AUDIT_AVAL. Sinon :
+        state.status=RunStatus.WAITING_HUMAN,
+        state.awaiting_human_validation=True — le rapport est produit et
+        commité dans les deux cas, seule la progression automatique change
+        (décision : un finding bloquant remonte à l'humain avant l'audit
+        aval de l'Architecte, cohérent avec la préférence du projet pour
+        les checkpoints explicites — voir ADR 0008/0010 — plutôt que de
+        laisser cette décision aux seuls outils SAST, qui ne s'arrêtent pas
+        en cours de scan sur une sévérité, voir _run_sast_tool).
 
     Raises:
-        RuntimeError: Si un outil SAST (bandit, semgrep) retourne un code
-            d'erreur non nul, ou si l'appel Claude Code CLI échoue. Message
-            ntfy correspondant au premier cas : "❌ SAST échec — <constat
-            brut>" (voir docs/workflow.md, section Notifications).
+        RuntimeError: Si un outil SAST (bandit, semgrep) produit une sortie
+            non-JSON (crash de l'outil), ou si l'appel Claude Code CLI
+            échoue.
         TimeoutError: Si l'appel Sonnet dépasse claude_code.timeout_seconds.
+        FileNotFoundError: Si la fiche de l'agent, ou l'exécutable d'un
+            outil SAST, est introuvable.
 
     Side effects:
-        - Exécute bandit et semgrep (config/studio.yml section sast) sur le
-          code produit par Back/Front, zéro token.
+        - Exécute bandit et semgrep (config/studio.yml section sast) sur
+          config.repo_path, zéro token.
         - Appelle tools.claude_code.run_claude_code (modèle
-          models.agent_auditor) avec le rapport SAST en entrée du prompt
-          (voir prompts/security.md, section Périmètre — Input).
-        - Écrit specs/run-NNN/security-report.md via
-          tools.filesystem.write_card, avec deux sections distinctes
-          (Findings SAST, Findings couche 2 — voir prompts/security.md,
-          section Format du rapport).
+          models.agent_auditor) avec le rapport SAST brut en entrée du
+          prompt (voir prompts/security.md, section Périmètre — Input) ;
+          Claude Code lit le code du repo lui-même (cwd=config.repo_path),
+          il n'est pas réinjecté intégralement dans le prompt.
+        - Écrit specs/<structure.specs_dir>/run-<state.run_id>/
+          security-report.md via tools.filesystem.write_card, avec le
+          contenu produit par Sonnet (voir prompts/security.md, section
+          Format du rapport — Sonnet génère les deux sections, SAST et
+          couche 2, à partir du rapport SAST brut fourni en entrée).
         - Commit sous l'identité security-aimazing <security@aimazing.fr>
           via tools.git.commit_as_agent.
         - Incrémente state.total_tokens_sonnet.
@@ -63,6 +142,7 @@ async def run(state: StudioState) -> StudioState:
         >>> state = StudioState(
         ...     run_id="run-042",
         ...     current_phase=Phase.SECURITE,
+        ...     agent_sequence=["secu"],
         ...     agent_cards={"secu": "specs/run-042/secu.md"},
         ... )
         >>> state = await run(state)
@@ -74,5 +154,94 @@ async def run(state: StudioState) -> StudioState:
         SAST (injections, secrets, patterns connus de bandit/semgrep) —
         elle se concentre sur ce qu'un outil déterministe ne peut pas
         évaluer (voir prompts/security.md).
+
+        Ni bandit ni semgrep ne produisent nativement une sévérité
+        "CRITICAL" en configuration par défaut (bandit : LOW/MEDIUM/HIGH ;
+        semgrep : INFO/WARNING/ERROR, normalisé ici vers LOW/MEDIUM/HIGH) —
+        un `sast.fail_on_severity: CRITICAL` dans la config ne serait donc
+        jamais atteint avec la configuration actuelle de config/studio.yml.
+        Schémas vérifiés contre une exécution réelle des deux outils
+        (2026-07-10), pas seulement déduits de leur documentation.
     """
-    ...
+    config = StudioConfig.from_env()
+    role = state.agent_sequence[state.current_agent_index]
+
+    card_path = config.repo_path / state.agent_cards[role]
+    card_content = await read_card(card_path)
+
+    sast_config = config.get("sast", {})
+    sast_reports: dict[str, Any] = {}
+    all_severities: list[str] = []
+    if sast_config.get("enabled", False):
+        for tool in sast_config.get("tools", []):
+            payload = await _run_sast_tool(tool["command"], config.repo_path)
+            sast_reports[tool["name"]] = payload
+            all_severities += _normalized_severities(tool["name"], payload)
+
+    fail_on_severity = sast_config.get("fail_on_severity")
+    threshold_rank = _SEVERITY_RANK.get(fail_on_severity, len(_SEVERITY_RANK))
+    has_blocking_findings = any(
+        _SEVERITY_RANK.get(severity, -1) >= threshold_rank for severity in all_severities
+    )
+
+    system_prompt = await inject_skills(
+        base_prompt=_PROMPT_PATH.read_text(encoding="utf-8"),
+        skill_names=_SKILL_NAMES,
+        skills_dir=_SKILLS_DIR,
+    )
+    sast_json = json.dumps(sast_reports, indent=2)[:_MAX_SAST_JSON_CHARS]
+    prompt = (
+        f"{system_prompt}\n\n---\n\n{card_content}\n\n"
+        f"## Rapport SAST brut (bandit, semgrep)\n\n```json\n{sast_json}\n```"
+    )
+
+    claude_code_config = config.get("claude_code", {})
+    result = await run_claude_code(
+        prompt=prompt,
+        model=config.models["agent_auditor"],
+        cwd=config.repo_path,
+        timeout_seconds=claude_code_config.get("timeout_seconds", 300),
+        output_format=claude_code_config.get("output_format", "json"),
+    )
+
+    specs_dir = config.get("structure", {}).get("specs_dir", "specs/")
+    report_path = config.repo_path / specs_dir / state.run_id / "security-report.md"
+    await write_card(report_path, result["content"])
+
+    report_relative = str(Path(specs_dir) / state.run_id / "security-report.md")
+    await commit_as_agent(
+        repo_path=config.repo_path,
+        agent="security",
+        message=f"docs: security report ({'blocking findings' if has_blocking_findings else 'clean'})",
+        files=[report_relative],
+    )
+
+    usage = result.get("usage", {})
+    iteration = 1 + sum(
+        1 for r in state.agent_results if r.agent == role and r.phase == state.current_phase
+    )
+    agent_result = AgentResult(
+        agent=role,
+        phase=state.current_phase,
+        status="success",
+        output_files=[report_relative],
+        iteration=iteration,
+        tokens_prompt=usage.get("input_tokens", 0),
+        tokens_completion=usage.get("output_tokens", 0),
+        duration_ms=result.get("duration_ms", 0),
+    )
+
+    updates: dict = {
+        "agent_results": state.agent_results + [agent_result],
+        "total_tokens_sonnet": (
+            state.total_tokens_sonnet + usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+        ),
+    }
+
+    if has_blocking_findings:
+        updates["status"] = RunStatus.WAITING_HUMAN
+        updates["awaiting_human_validation"] = True
+    else:
+        updates["current_phase"] = Phase.AUDIT_AVAL
+
+    return updates

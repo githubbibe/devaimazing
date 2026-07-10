@@ -196,3 +196,14 @@ async def test_run_test_command_reports_success_and_failure(tmp_path: Path):
     )
     assert ok is False
     assert "nope" in output
+
+
+async def test_run_test_command_tolerates_braces_unrelated_to_target_dir(tmp_path: Path):
+    # Régression : un usage naïf de str.format() sur la commande casserait
+    # dès que la commande contient d'autres accolades que {target_dir}
+    # (ex. un dict literal Python) — voir test_security_node.py, même bug
+    # trouvé sur _run_sast_tool.
+    command = "python3 -c \"import json; print(json.dumps({'ok': True}))\""
+    ok, output = await test_node._run_test_command(command, tmp_path)
+    assert ok is True
+    assert '"ok": true' in output
