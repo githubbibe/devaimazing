@@ -1,0 +1,50 @@
+# Configuration projet demo-todo-app
+
+name: demo-todo-app
+description: "Application todo list minimale (FastAPI + React), cible de démonstration devaimazing"
+
+# Localisation du repo projet (absolu ou ~ expansé)
+repo_path: ~/code/aimazing/demo-todo-app/
+
+# Git
+git:
+  base_branch: develop
+  branch_prefix: studio/     # Format studio/<slug-feature>-<hash5> (ADR 0007)
+  remote: origin
+
+# Structure du projet cible
+structure:
+  backend_dir: backend/
+  frontend_dir: frontend/
+  tests_dir: tests/
+  specs_dir: specs/          # Fiches devaimazing dans le repo projet
+  docs_dir: docs/
+
+# Fichiers de référence projet (lus par le PM et l'Architecte)
+reference_files:
+  project_map: specs/project-map.md
+  architect_map: specs/architect-map.md
+
+# Overrides de modèles (optionnel, hérite de studio.yml si non défini)
+# models:
+#   agents_local: qwen2.5:14b-instruct  # si assez de RAM
+
+# Commande de test du projet cible (phase 7, agent Test). Placeholder
+# {target_dir} substitué par repo_path à l'exécution.
+test:
+  command: "pytest {target_dir} -q"
+
+# Overrides de checkpoints (optionnel)
+# checkpoints:
+#   phase_9_audit_aval: false  # Désactiver après rodage
+
+# Contraintes projet spécifiques (transmises à l'Architecte)
+project_constraints:
+  language: python
+  framework_backend: fastapi
+  framework_frontend: react
+  database: sqlite
+  python_version: "3.11"
+  node_version: "20"
+  target_users: "Démonstration devaimazing"
+  key_principle: "Projet volontairement simple : run complet en moins de 15 minutes"

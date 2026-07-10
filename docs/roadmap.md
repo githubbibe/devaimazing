@@ -211,9 +211,27 @@
   16 tests ajoutés (`test_cli.py`, synchrones — `click.testing.CliRunner` + les commandes
   appellent `asyncio.run()` en interne, incompatible avec un test `async def` sous
   pytest-asyncio). **136/136 au total sur `runtime/tests/`.**
-- `examples/demo-todo-app/` n'a pas de code source (`src/` annoncé au README mais absent),
-  et il n'existe pas de `config/projects/demo-todo-app.yml`. Aucune cible réelle pour un
-  run de bout en bout pour l'instant.
+- **Étape 4 terminée** : cible minimale réelle pour `demo-todo-app` construite.
+  **Décision prise avec l'utilisateur** : le vrai dépôt git vit hors de devaimazing, à
+  `~/code/aimazing/demo-todo-app/` (même pattern que `webaimazing-v2.yml` :
+  `repo_path` externe, pas un sous-dossier du dépôt devaimazing). Contenu : backend
+  FastAPI (`GET /todos`, `POST /todos`, `GET /todos/{id}`, SQLite local via `sqlite3`
+  stdlib, pas d'ORM), frontend Vite + React + TypeScript (liste + création de todos,
+  proxy `/todos` vers `localhost:8000`), 4 tests unitaires backend. **Vérifié
+  réellement, pas seulement écrit** : `pytest -q` (4/4 verts), `npx tsc --noEmit`
+  (aucune erreur), `npx vite build` (build réussi). `PATCH /todos/{id}/complete` et le
+  bouton frontend correspondant sont **volontairement absents** — c'est l'objectif du
+  run de démonstration (voir le README du projet cible).
+  `config/projects/demo-todo-app.yml` créé (même structure que `webaimazing-v2.yml`,
+  `test.command: "pytest {target_dir} -q"`), chargement vérifié avec `StudioConfig`
+  réelle (`repo_path`, `test_command`, `project_constraints` corrects).
+  **Nettoyage** : `examples/demo-todo-app/specs/project-map.md` (dans le dépôt
+  devaimazing) décrivait un run-000 fictif avec des fichiers qui n'ont jamais existé —
+  supprimé (déjà poussé, donc suppression sûre selon la règle du CLAUDE.md du dépôt) au
+  profit du vrai `specs/project-map.md` qui vivra dans le repo cible. `README.md` racine
+  corrigé : `devaimazing run examples/demo-todo-app` était un chemin, alors que la CLI
+  attend un nom de projet (`devaimazing run demo-todo-app`, voir `cli.py::run`) ; arbre
+  `examples/demo-todo-app/` annonçait un `src/` qui n'a jamais existé sous cette forme.
 
 ## Prochaines étapes
 
@@ -224,8 +242,7 @@
 3. ~~Remplir les tests avec de vraies assertions au fur et à mesure de chaque
    implémentation~~ — fait en continu tout au long de l'étape 2 (136 tests, tous les
    modules du runtime couverts, aucun stub `...` restant dans `runtime/tests/`).
-4. Construire une cible minimale réelle pour `demo-todo-app` (FastAPI + React +
-   `config/projects/demo-todo-app.yml`) pour avoir quelque chose à exécuter.
+4. ~~Construire une cible minimale réelle pour `demo-todo-app`~~ — fait le 2026-07-10.
 5. Premier run de bout en bout — en mode dégradé (humain + Claude Code, pas devaimazing
    lui-même, puisqu'il ne peut pas encore s'exécuter sur son propre code).
 
@@ -233,15 +250,24 @@
 
 Le runtime devaimazing est fonctionnellement complet (`state.py` → `config.py` →
 `tools/*.py` → `graph.py` → `nodes/*.py` (7/7) → `metrics.py` → `cli.py`, 136 tests
-verts). Prochaine session : étape 4 (cible minimale `demo-todo-app`), sauf décision
-contraire — c'est le prérequis pour l'étape 5 (premier run réel), et le premier moyen
-de vérifier en pratique tous les points laissés volontairement non tranchés faute de
-cible réelle contre laquelle les tester. Avant ce premier run, plusieurs points
-restent à trancher explicitement (listés au fil du journal ci-dessus) et ne doivent pas
-être comblés par une valeur par défaut « raisonnable » sans validation humaine (principe
-de l'ADR 0008) : flags de permissions Claude Code CLI (`--dangerously-skip-permissions`
-ou équivalent, sans quoi les agents producteurs/audit bloqueront sur une invite en
-exécution non interactive), câblage de `MetricsCollector.record_task` dans les nodes
-producteurs (aujourd'hui aucun node ne l'appelle, `metrics`/`get_run_summary` restent
-vides pour un run réel), le placeholder ntfy, et `agents.max_iterations` (limite de 3
-renvois non appliquée par les nodes producteurs).
+verts) et une cible réelle existe (`demo-todo-app`, testée en local — backend, frontend,
+config). Prochaine session : étape 5 (premier run de bout en bout), sauf décision
+contraire. Avant ce premier run, plusieurs points restent à trancher explicitement
+(listés au fil du journal ci-dessus) et ne doivent pas être comblés par une valeur par
+défaut « raisonnable » sans validation humaine (principe de l'ADR 0008) : flags de
+permissions Claude Code CLI (`--dangerously-skip-permissions` ou équivalent, sans quoi
+les agents producteurs/audit bloqueront sur une invite en exécution non interactive),
+câblage de `MetricsCollector.record_task` dans les nodes producteurs (aujourd'hui aucun
+node ne l'appelle, `metrics`/`get_run_summary` restent vides pour un run réel), le
+placeholder ntfy, et `agents.max_iterations` (limite de 3 renvois non appliquée par les
+nodes producteurs).
+
+**Décision prise (2026-07-10, hors code)** : la mise en production de devaimazing
+lui-même devra être conteneurisée Podman, cohérent avec le reste de l'infra prod (voir
+CLAUDE.md du dépôt parent). Implications concrètes non câblées à ce stade : Claude Code
+CLI (actuellement subprocess supposant `claude` installé sur l'hôte), accès réseau à
+Ollama (actuellement `localhost:11434` en dur par défaut, alors qu'un conteneur devra
+joindre `dataimazing-ramiris`/son remplaçant via `dataimazing-network`), montage du repo
+projet cible en volume, persistance de `state.db`/`metrics.db`. Pas de travail engagé
+là-dessus — pertinent seulement une fois qu'il y a un run réel à déployer, pas avant
+l'étape 5.

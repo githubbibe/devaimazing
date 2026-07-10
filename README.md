@@ -228,17 +228,16 @@ devaimazing/
 ├── config/
 │   ├── studio.yml               # Config globale (modeles, paths)
 │   └── projects/                # Config par projet cible
-│       └── webaimazing-v2.yml   # repo_path, branche, params
+│       ├── webaimazing-v2.yml   # repo_path, branche, params
+│       └── demo-todo-app.yml    # idem, pour le projet de demo
 ├── interfaces/
 │   └── telegram-bridge/         # Configuration OpenClaw skills
 ├── infra/
 │   ├── podman/                  # Compose files Prometheus dev
 │   └── ollama/                  # Config modeles a pull
 ├── examples/
-│   └── demo-todo-app/           # Projet exemple standalone pour demo
-│       ├── specs/
-│       ├── src/
-│       └── README.md
+│   └── demo-todo-app/           # Doc sur le projet de demo (le code vit hors
+│       └── README.md            # de ce depot, voir config/projects/demo-todo-app.yml)
 └── scripts/
     ├── setup.sh                 # Installation complete
     └── new-project.sh           # Initialise un nouveau projet cible
@@ -278,8 +277,9 @@ ollama pull qwen2.5:7b-instruct
 cp config/projects/webaimazing-v2.yml config/projects/mon-projet.yml
 # Editer mon-projet.yml avec le chemin vers ton repo
 
-# Lancer un run sur le projet exemple
-devaimazing run examples/demo-todo-app
+# Lancer un run sur le projet exemple (nom de projet, pas un chemin — voir
+# config/projects/demo-todo-app.yml)
+devaimazing run demo-todo-app
 ```
 
 ### Verifier l'environnement
