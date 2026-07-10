@@ -5,7 +5,11 @@ Lecture et écriture des fiches .md, project-map, architect-map.
 Injection des skills dans les prompts.
 """
 
+from datetime import datetime, timezone
 from pathlib import Path
+
+FEEDBACK_HEADING = "## Feedback"
+EMPTY_FEEDBACK_MARKER = "_Aucun feedback pour l'instant._"
 
 
 async def read_card(card_path: Path) -> str:
@@ -21,7 +25,9 @@ async def read_card(card_path: Path) -> str:
     Raises:
         FileNotFoundError: Si la fiche n'existe pas.
     """
-    ...
+    if not card_path.is_file():
+        raise FileNotFoundError(f"Fiche introuvable : {card_path}")
+    return card_path.read_text(encoding="utf-8")
 
 
 async def write_card(card_path: Path, content: str) -> None:
@@ -35,7 +41,8 @@ async def write_card(card_path: Path, content: str) -> None:
     Side effects:
         Crée ou écrase le fichier. Crée les répertoires parents si nécessaire.
     """
-    ...
+    card_path.parent.mkdir(parents=True, exist_ok=True)
+    card_path.write_text(content, encoding="utf-8")
 
 
 async def append_feedback(card_path: Path, agent_source: str, feedback: str) -> None:
@@ -54,7 +61,30 @@ async def append_feedback(card_path: Path, agent_source: str, feedback: str) -> 
         FileNotFoundError: Si la fiche n'existe pas.
         ValueError: Si la fiche ne contient pas de section Feedback.
     """
-    ...
+    if not card_path.is_file():
+        raise FileNotFoundError(f"Fiche introuvable : {card_path}")
+
+    content = card_path.read_text(encoding="utf-8")
+
+    heading_index = content.find(FEEDBACK_HEADING)
+    if heading_index == -1:
+        raise ValueError(
+            f"La fiche {card_path} ne contient pas de section '{FEEDBACK_HEADING}'"
+        )
+
+    section_start = heading_index + len(FEEDBACK_HEADING)
+    next_heading_index = content.find("\n## ", section_start)
+    section_end = next_heading_index if next_heading_index != -1 else len(content)
+
+    section = content[section_start:section_end]
+    section = section.replace(EMPTY_FEEDBACK_MARKER, "").rstrip("\n")
+
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    entry = f"[{date_str}] [{agent_source}] : {feedback}"
+    new_section = f"{section}\n{entry}\n" if section.strip() else f"\n{entry}\n"
+
+    new_content = content[:section_start] + new_section + content[section_end:]
+    card_path.write_text(new_content, encoding="utf-8")
 
 
 async def inject_skills(base_prompt: str, skill_names: list[str], skills_dir: Path) -> str:
@@ -79,4 +109,10 @@ async def inject_skills(base_prompt: str, skill_names: list[str], skills_dir: Pa
         ...     skills_dir=Path("/home/user/devaimazing/skills"),
         ... )
     """
-    ...
+    parts = [base_prompt]
+    for skill_name in skill_names:
+        skill_path = skills_dir / f"{skill_name}.md"
+        if not skill_path.is_file():
+            raise FileNotFoundError(f"Skill introuvable : {skill_path}")
+        parts.append(f"\n\n---\n\n{skill_path.read_text(encoding='utf-8')}")
+    return "".join(parts)

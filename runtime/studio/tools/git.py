@@ -6,9 +6,13 @@ de chaque tâche terminée (pas seulement en phase 10), le nommage et la créati
 de branches de run, et le merge final vers develop.
 """
 
+import asyncio
 import hashlib
+import os
+import re
 import time
 from pathlib import Path
+from typing import Optional
 
 AGENT_GIT_IDENTITIES = {
     "pm":        ("pm-aimazing",        "pm@aimazing.fr"),
@@ -18,6 +22,28 @@ AGENT_GIT_IDENTITIES = {
     "test":      ("test-aimazing",      "test@aimazing.fr"),
     "security":  ("security-aimazing",  "security@aimazing.fr"),
 }
+
+
+async def _run_git(repo_path: Path, *args: str, env: Optional[dict] = None) -> str:
+    """
+    Exécute une commande git dans repo_path et retourne stdout (strippé).
+
+    Raises:
+        RuntimeError: Si git retourne un code de sortie non nul.
+    """
+    process = await asyncio.create_subprocess_exec(
+        "git", "-C", str(repo_path), *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    stdout, stderr = await process.communicate()
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"Commande git échouée (code {process.returncode}) : "
+            f"git {' '.join(args)}\n{stderr.decode('utf-8', errors='replace').strip()}"
+        )
+    return stdout.decode("utf-8", errors="replace").strip()
 
 
 def slugify_feature_name(feature_name: str) -> str:
@@ -36,7 +62,9 @@ def slugify_feature_name(feature_name: str) -> str:
         >>> slugify_feature_name("Features Qui Fait Tout")
         "features-qui-fait-tout"
     """
-    ...
+    slug = feature_name.strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    return slug.strip("-")
 
 
 def generate_branch_name(feature_name: str) -> str:
@@ -57,7 +85,10 @@ def generate_branch_name(feature_name: str) -> str:
         >>> generate_branch_name("features qui fait tout")
         "studio/features-qui-fait-tout-a3f9c"
     """
-    ...
+    slug = slugify_feature_name(feature_name)
+    digest_input = f"{time.time()}{feature_name}".encode("utf-8")
+    digest = hashlib.sha1(digest_input).hexdigest()[:5]
+    return f"studio/{slug}-{digest}"
 
 
 async def create_run_branch(repo_path: Path, feature_name: str, base_branch: str = "develop") -> str:
@@ -81,7 +112,10 @@ async def create_run_branch(repo_path: Path, feature_name: str, base_branch: str
     Side effects:
         Crée une branche Git dans le repo projet.
     """
-    ...
+    branch_name = generate_branch_name(feature_name)
+    await _run_git(repo_path, "checkout", base_branch)
+    await _run_git(repo_path, "checkout", "-b", branch_name)
+    return branch_name
 
 
 async def commit_as_agent(
@@ -121,7 +155,25 @@ async def commit_as_agent(
         ...     files=["backend/auth/endpoints.py"],
         ... )
     """
-    ...
+    if agent not in AGENT_GIT_IDENTITIES:
+        raise ValueError(
+            f"Agent inconnu : {agent!r}. Attendu l'un de {sorted(AGENT_GIT_IDENTITIES)}"
+        )
+    if not files:
+        raise ValueError("La liste de fichiers à committer ne peut pas être vide")
+
+    name, email = AGENT_GIT_IDENTITIES[agent]
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": name,
+        "GIT_AUTHOR_EMAIL": email,
+        "GIT_COMMITTER_NAME": name,
+        "GIT_COMMITTER_EMAIL": email,
+    }
+
+    await _run_git(repo_path, "add", "--", *files)
+    await _run_git(repo_path, "commit", "-m", message, env=env)
+    return await _run_git(repo_path, "rev-parse", "HEAD")
 
 
 async def merge_run_branch(repo_path: Path, branch_name: str, target_branch: str = "develop") -> str:
@@ -143,4 +195,9 @@ async def merge_run_branch(repo_path: Path, branch_name: str, target_branch: str
         Merge la branche dans target_branch. Ne supprime pas la branche du run
         (conservée pour traçabilité et audit).
     """
-    ...
+    await _run_git(repo_path, "checkout", target_branch)
+    await _run_git(
+        repo_path, "merge", "--no-ff", branch_name,
+        "-m", f"merge: {branch_name} into {target_branch}",
+    )
+    return await _run_git(repo_path, "rev-parse", "HEAD")

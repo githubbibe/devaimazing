@@ -24,6 +24,15 @@
   expansion de `~` dans les chemins) et testé : 6 tests dans
   `runtime/tests/test_config.py`, tous verts (les 4 stubs d'origine + 2 tests ajoutés
   pour `from_env`).
+- `tools/filesystem.py` et `tools/git.py` sont implémentés. `filesystem.py` :
+  lecture/écriture de fiches, `append_feedback` s'appuie sur la section `## Feedback` du
+  template `templates/card-agent.md.template` (retire le marqueur `_Aucun feedback pour
+  l'instant._`, ajoute une ligne `[date] [agent] : texte`). `git.py` : commandes git
+  réelles en sous-process (`asyncio.create_subprocess_exec`), identité par agent via
+  `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, hash de branche basé sur timestamp+nom de feature.
+  20 tests ajoutés (`test_filesystem.py`, `test_git.py` — ce dernier sur de vrais dépôts
+  git temporaires, y compris un cas de conflit de merge), tous verts. 26/26 au total sur
+  `runtime/tests/`.
 - `examples/demo-todo-app/` n'a pas de code source (`src/` annoncé au README mais absent),
   et il n'existe pas de `config/projects/demo-todo-app.yml`. Aucune cible réelle pour un
   run de bout en bout pour l'instant.
@@ -32,8 +41,9 @@
 
 1. ~~Compléter les stubs des 7 `nodes/*.py` au contrat complet~~ — fait le 2026-07-10.
 2. Implémenter dans l'ordre de dépendance : ~~`state.py`~~ (rien à faire) → ~~`config.py`~~
-   (fait le 2026-07-10) → `tools/*.py` (filesystem, git, ollama, claude_code) →
-   `graph.py` → `nodes/*.py` → `cli.py` → `metrics.py`.
+   → ~~`tools/filesystem.py`, `tools/git.py`~~ (fait le 2026-07-10) →
+   `tools/ollama.py`, `tools/claude_code.py` → `graph.py` → `nodes/*.py` → `cli.py` →
+   `metrics.py`.
 3. Remplir `runtime/tests/test_config.py` (et les futurs tests) avec de vraies assertions
    au fur et à mesure de chaque implémentation.
 4. Construire une cible minimale réelle pour `demo-todo-app` (FastAPI + React +
@@ -43,9 +53,9 @@
 
 ## Point de reprise
 
-Prochaine session : poursuivre l'étape 2 par `tools/*.py` (filesystem, git, ollama,
-claude_code — dans cet ordre, filesystem et git n'ont pas de dépendance externe réseau,
-ollama et claude_code en ont), sauf décision contraire. Le placeholder ntfy et l'état de
+Prochaine session : poursuivre l'étape 2 par `tools/ollama.py` puis `tools/claude_code.py`
+(dépendance réseau/subprocess externe — Ollama local, Claude Code CLI — donc plus délicats
+à tester que filesystem/git), sauf décision contraire. Le placeholder ntfy et l'état de
 `demo-todo-app` (étape 4) restent à trancher explicitement avant d'être traités — ne pas
 les combler par une valeur par défaut « raisonnable » sans validation humaine (cohérent
 avec le principe de l'ADR 0008).
