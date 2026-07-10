@@ -94,6 +94,41 @@ async def test_test_node_no_command_configured_writes_and_advances(
     assert updates["current_agent_index"] == 0
 
 
+async def test_test_node_includes_existing_file_content_in_prompt(
+    tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _configure_env(tmp_path, repo, monkeypatch, test_command=None)
+    (repo / "backend").mkdir(parents=True)
+    (repo / "backend" / "main.py").write_text(
+        "def complete_todo(todo_id: int):\n    ...\n", encoding="utf-8"
+    )
+
+    async def fake_read_card(path):
+        return "Écrire un test d'intégration pour le handler dans `backend/main.py`."
+
+    captured = {}
+
+    async def fake_run_ollama(**kwargs):
+        captured["user_prompt"] = kwargs["user_prompt"]
+        return _fake_ollama_result(FILE_BLOCK)
+
+    async def fake_write_card(path, content):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(test_node, "read_card", fake_read_card)
+    monkeypatch.setattr(test_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(test_node, "write_card", fake_write_card)
+    monkeypatch.setattr(test_node, "commit_as_agent", fake_commit_as_agent)
+
+    await test_node.run(_base_state(repo))
+
+    assert "def complete_todo(todo_id: int):" in captured["user_prompt"]
+    assert "Écrire un test d'intégration" in captured["user_prompt"]
+
+
 async def test_test_node_command_passes_advances_to_securite(
     tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
 ):

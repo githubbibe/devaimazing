@@ -23,6 +23,7 @@ from studio.tools.filesystem import (
     inject_skills,
     parse_agent_file_blocks,
     read_card,
+    read_referenced_files,
     write_card,
 )
 from studio.tools.git import commit_as_agent
@@ -164,6 +165,10 @@ async def run(state: StudioState) -> StudioState:
 
     card_path = config.repo_path / state.agent_cards[role]
     card_content = await read_card(card_path)
+    existing_files_context = await read_referenced_files(config.repo_path, card_content)
+    user_prompt = (
+        f"{existing_files_context}\n\n---\n\n{card_content}" if existing_files_context else card_content
+    )
 
     system_prompt = await inject_skills(
         base_prompt=_PROMPT_PATH.read_text(encoding="utf-8"),
@@ -174,7 +179,7 @@ async def run(state: StudioState) -> StudioState:
     ollama_config = config.get("ollama", {})
     result = await run_ollama(
         system_prompt=system_prompt,
-        user_prompt=card_content,
+        user_prompt=user_prompt,
         model=config.models["agents_local"],
         base_url=config.ollama_base_url,
         timeout_seconds=ollama_config.get("timeout_seconds", 120),

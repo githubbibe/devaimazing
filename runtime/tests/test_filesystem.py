@@ -11,6 +11,7 @@ from studio.tools.filesystem import (
     inject_skills,
     parse_agent_file_blocks,
     read_card,
+    read_referenced_files,
     write_card,
 )
 
@@ -96,6 +97,41 @@ async def test_append_feedback_missing_section_raises(tmp_path: Path):
 
     with pytest.raises(ValueError):
         await append_feedback(card_path, agent_source="front", feedback="x")
+
+
+async def test_read_referenced_files_includes_existing_file_content(tmp_path: Path):
+    repo = tmp_path / "project"
+    (repo / "backend").mkdir(parents=True)
+    (repo / "backend" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+
+    text = "Modifier `backend/main.py` pour ajouter un handler. Ne pas créer `backend/new.py`."
+
+    context = await read_referenced_files(repo, text)
+
+    assert "backend/main.py" in context
+    assert "from fastapi import FastAPI" in context
+    assert "backend/new.py" not in context  # référencé mais absent du disque
+
+
+async def test_read_referenced_files_returns_empty_when_nothing_exists(tmp_path: Path):
+    repo = tmp_path / "project"
+    repo.mkdir()
+
+    context = await read_referenced_files(repo, "Créer `backend/new.py`.")
+
+    assert context == ""
+
+
+async def test_read_referenced_files_dedupes_repeated_paths(tmp_path: Path):
+    repo = tmp_path / "project"
+    (repo / "backend").mkdir(parents=True)
+    (repo / "backend" / "main.py").write_text("contenu", encoding="utf-8")
+
+    text = "Modifier `backend/main.py`. Voir aussi `backend/main.py` ligne 10."
+
+    context = await read_referenced_files(repo, text)
+
+    assert context.count("Contenu actuel de `backend/main.py`") == 1
 
 
 async def test_inject_skills_appends_skill_content(tmp_path: Path):

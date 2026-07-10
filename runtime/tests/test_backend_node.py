@@ -104,6 +104,48 @@ async def test_backend_stub_phase_writes_files_and_commits(monkeypatch: pytest.M
     assert "current_phase" not in updates
 
 
+async def test_backend_includes_existing_file_content_in_prompt(
+    monkeypatch: pytest.MonkeyPatch, project_repo: Path
+):
+    (project_repo / "backend").mkdir(parents=True)
+    (project_repo / "backend" / "main.py").write_text(
+        "from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8"
+    )
+
+    async def fake_read_card(path):
+        return "Modifier `backend/main.py` pour ajouter un handler."
+
+    captured = {}
+
+    async def fake_run_ollama(**kwargs):
+        captured["user_prompt"] = kwargs["user_prompt"]
+        return _fake_ollama_result(FILE_BLOCK)
+
+    async def fake_write_card(path, content):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(backend_node, "commit_as_agent", fake_commit_as_agent)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back", "front"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+    )
+
+    await backend_node.run(state)
+
+    assert "from fastapi import FastAPI" in captured["user_prompt"]
+    assert "Modifier `backend/main.py`" in captured["user_prompt"]
+
+
 async def test_backend_last_agent_of_stubs_advances_phase(monkeypatch: pytest.MonkeyPatch):
     async def fake_read_card(path):
         return "fiche back"

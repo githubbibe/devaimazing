@@ -22,6 +22,13 @@ _FILE_BLOCK_PATTERN = re.compile(
     re.DOTALL,
 )
 
+# Détection de chemins de fichiers référencés dans une fiche agent (ex :
+# section "Fichiers à modifier"). Chemin entre backticks avec extension de
+# fichier reconnue — voir read_referenced_files.
+_REFERENCED_FILE_PATTERN = re.compile(
+    r'`([\w./-]+\.(?:py|ts|tsx|js|jsx|json|ya?ml|md|css|html|sql))`'
+)
+
 
 async def read_card(card_path: Path) -> str:
     """
@@ -96,6 +103,52 @@ async def append_feedback(card_path: Path, agent_source: str, feedback: str) -> 
 
     new_content = content[:section_start] + new_section + content[section_end:]
     card_path.write_text(new_content, encoding="utf-8")
+
+
+async def read_referenced_files(repo_path: Path, text: str) -> str:
+    """
+    Lit le contenu des fichiers existants référencés dans un texte (fiche agent).
+
+    Args:
+        repo_path: Racine du repo projet cible.
+        text: Texte dans lequel chercher des chemins de fichiers (typiquement
+            le contenu d'une fiche agent, section "Fichiers à modifier").
+
+    Returns:
+        Contenu concaténé des fichiers référencés qui existent réellement sur
+        disque, chacun précédé d'un titre indiquant son chemin exact. Chaîne
+        vide si aucun chemin référencé n'existe sur disque (ex : run qui ne
+        fait que créer des fichiers, rien à modifier).
+
+    Notes:
+        Détection par regex sur les chemins entre backticks avec une
+        extension de fichier reconnue (ex : `backend/main.py`) — pas un
+        parsing strict d'une section markdown dédiée, le format exact des
+        fiches variant selon l'agent producteur (voir prompts/pm.md). Un
+        chemin référencé qui n'existe pas sur disque est simplement ignoré
+        (cas normal : fichier à créer, mentionné dans le même paragraphe
+        qu'un fichier à modifier).
+
+        Existe pour combler un gap réel trouvé en run (2026-07-11, voir
+        docs/roadmap.md) : sans le contenu actuel du fichier à modifier, un
+        agent producteur (Qwen, contexte limité) reconstruit le fichier de
+        mémoire au lieu de l'éditer chirurgicalement — imports et handlers
+        existants perdus ou remplacés par du code générique non conforme au
+        projet.
+
+    Example:
+        >>> content = await read_referenced_files(
+        ...     Path("/home/user/code/demo"), "Modifier `backend/main.py`."
+        ... )
+    """
+    paths = sorted(set(_REFERENCED_FILE_PATTERN.findall(text)))
+    parts = []
+    for relative_path in paths:
+        full_path = repo_path / relative_path
+        if full_path.is_file():
+            content = await read_card(full_path)
+            parts.append(f"### Contenu actuel de `{relative_path}`\n\n```\n{content}\n```")
+    return "\n\n".join(parts)
 
 
 async def inject_skills(base_prompt: str, skill_names: list[str], skills_dir: Path) -> str:

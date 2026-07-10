@@ -90,6 +90,49 @@ async def test_frontend_stub_phase_writes_files_and_commits(monkeypatch: pytest.
     assert updates["current_agent_index"] == 0
 
 
+async def test_frontend_includes_existing_file_content_in_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    repo = tmp_path / "project"
+    (repo / "frontend" / "components").mkdir(parents=True)
+    (repo / "frontend" / "components" / "LoginForm.tsx").write_text(
+        "export const LoginForm = () => <form />;\n", encoding="utf-8"
+    )
+
+    async def fake_read_card(path):
+        return "Modifier `frontend/components/LoginForm.tsx` pour ajouter un champ."
+
+    captured = {}
+
+    async def fake_run_ollama(**kwargs):
+        captured["user_prompt"] = kwargs["user_prompt"]
+        return _fake_ollama_result(FILE_BLOCK)
+
+    async def fake_write_card(path, content):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(frontend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(frontend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(frontend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(frontend_node, "commit_as_agent", fake_commit_as_agent)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["front"],
+        current_agent_index=0,
+        agent_cards={"front": "specs/run-042/front.md"},
+    )
+
+    await frontend_node.run(state)
+
+    assert "export const LoginForm = () => <form />;" in captured["user_prompt"]
+    assert "Modifier `frontend/components/LoginForm.tsx`" in captured["user_prompt"]
+
+
 async def test_frontend_tu_role_uses_test_commit_prefix(monkeypatch: pytest.MonkeyPatch):
     captured_skills = {}
     committed = {}

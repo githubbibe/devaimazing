@@ -407,6 +407,39 @@ Déroulé exact, conforme au design deux-passes documenté dans `pm.py::_run_fic
      patchées manuellement (section `## Feedback` ajoutée) pour permettre la reprise du
      run sans regénération ni nouvel appel Claude Code CLI.
 
+7. **Producteurs Qwen (Back/Front/Test) sans le contenu réel des fichiers à modifier**
+   (gap d'architecture, pas un simple bug de prompt) : après le fix du point 6, l'audit
+   des stubs (phase 5) a détecté un écart réel et légitime — le stub produit par Back pour
+   `backend/main.py` remplaçait le pattern SQLite natif (`get_connection()`) par
+   SQLAlchemy + `Depends`, incompatible avec `database.py`. Feedback annoté correctement
+   (pipeline producteur/auditeur fonctionnel, voir `ARCHITECTURE.md` principe 4). Mais les
+   2 tentatives de correction suivantes (itérations 2 et 3) ont échoué avec le **même**
+   type d'erreur — pas du bruit d'échantillonnage : Qwen reconstruisait `backend/main.py`
+   de mémoire (`from fastapi import APIRouter` au lieu de `FastAPI`, tous les handlers
+   existants réécrits) au lieu d'éditer chirurgicalement, malgré la fiche qui dit
+   explicitement « Conserver tous les imports existants ». Cause racine : `backend.py`,
+   `frontend.py` et `test.py` construisaient tous les trois leur `user_prompt` avec
+   uniquement le texte de la fiche (`user_prompt=card_content`) — jamais le contenu réel
+   du fichier à modifier. Pour une tâche de création pure ça suffit ; pour une
+   modification, l'agent (contexte limité, 7B local) n'a que la description prose de
+   l'existant et invente le reste. Run relancé, confirmé `FAILED`
+   (`back` a atteint `max_iterations=3`) avant de corriger — comportement attendu, pas un
+   bug de `max_iterations_exceeded`.
+   Fix : nouvelle fonction `tools.filesystem.read_referenced_files(repo_path, text)` —
+   détecte par regex les chemins entre backticks avec extension reconnue dans le texte
+   d'une fiche, lit le contenu de ceux qui existent réellement sur disque (ignore
+   silencieusement les chemins qui n'existent pas, cas normal pour les fichiers à créer),
+   retourne un contexte concaténé. Câblée dans `backend.py`, `frontend.py`, `test.py` :
+   le `user_prompt` envoyé à Ollama devient `{contexte fichiers existants}\n\n---\n\n
+   {fiche}` au lieu de la fiche seule. `security.py` non concerné : c'est un auditeur
+   Sonnet via Claude Code CLI, qui peut déjà lire le repo lui-même via Read/Glob/Grep.
+   6 tests de régression ajoutés (3 au niveau `filesystem.py`, 1 par node producteur),
+   vérifiés rouges sans le fix (désactivation temporaire dans `backend.py`, confirmé
+   échec, restauré) avant de committer.
+   **Le run réel `run-20260710-185636` reste en `FAILED`** (le fix ne rétroagit pas sur
+   un run déjà terminé) — décision à prendre avec l'utilisateur pour le débloquer
+   (reprise manuelle du state vs nouveau run propre avec le fix en place).
+
 **Backlog identifié en marge (2026-07-10, pas bloquant, pour plus tard)** :
 `devaimazing resume` (`cli.py::resume`) ne sait reprendre qu'un run explicitement en
 attente d'une validation humaine (`awaiting_human_validation=True` dans le state

@@ -34,6 +34,7 @@ from studio.tools.filesystem import (
     inject_skills,
     parse_agent_file_blocks,
     read_card,
+    read_referenced_files,
     write_card,
 )
 from studio.tools.git import commit_as_agent
@@ -91,6 +92,12 @@ async def run(state: StudioState) -> StudioState:
 
     Side effects:
         - Appelle tools.ollama.run_ollama (modèle models.agents_local).
+        - Avant l'appel, lit sur disque le contenu actuel de tout fichier
+          référencé (chemin entre backticks) dans la fiche qui existe déjà
+          dans le repo (tools.filesystem.read_referenced_files) et l'inclut
+          dans le prompt utilisateur — sans ça, l'agent (contexte limité)
+          reconstruit un fichier "à modifier" de mémoire au lieu de l'éditer,
+          gap réel trouvé en run (2026-07-11, voir docs/roadmap.md).
         - Crée/modifie des fichiers dans /backend/ (périmètre déclaré,
           voir docs/agents.md — jamais hors périmètre : le node écrit
           exactement les chemins renvoyés par l'agent, sans validation de
@@ -148,6 +155,10 @@ async def run(state: StudioState) -> StudioState:
 
     card_path = config.repo_path / state.agent_cards[role]
     card_content = await read_card(card_path)
+    existing_files_context = await read_referenced_files(config.repo_path, card_content)
+    user_prompt = (
+        f"{existing_files_context}\n\n---\n\n{card_content}" if existing_files_context else card_content
+    )
 
     skill_names = list(_SKILL_NAMES)
     if role == "back-tu":
@@ -162,7 +173,7 @@ async def run(state: StudioState) -> StudioState:
     ollama_config = config.get("ollama", {})
     result = await run_ollama(
         system_prompt=system_prompt,
-        user_prompt=card_content,
+        user_prompt=user_prompt,
         model=config.models["agents_local"],
         base_url=config.ollama_base_url,
         timeout_seconds=ollama_config.get("timeout_seconds", 120),
