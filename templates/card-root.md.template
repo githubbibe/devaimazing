@@ -2,6 +2,7 @@
 
 **Date** : {{DATE}}  
 **Projet** : {{PROJECT_NAME}}  
+**Nom de la feature** : {{FEATURE_NAME}}  
 **Objectif brut** : {{OBJECTIVE_RAW}}  
 **Statut** : `draft` | `validated` | `in_progress` | `completed` | `failed`
 

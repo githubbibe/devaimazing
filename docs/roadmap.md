@@ -169,6 +169,28 @@
   appliqué de façon identique aux trois phases (2, 5, 9 ont toutes une entrée dans
   `PHASE_CHECKPOINT_KEYS`). 9 tests ajoutés, tous verts au premier essai. **108/108 au
   total sur `runtime/tests/`.**
+- `nodes/pm.py` est implémenté — **dernier des 7 nodes, `nodes/*.py` est complet.**
+  Phase RECEPTION/CADRAGE : dialogue de cadrage synchrone (`input()`/`print()` réels,
+  seul node du studio à faire de l'I/O terminal) tournant entièrement dans un seul appel
+  de node, jusqu'à validation explicite de l'utilisateur — pas de mécanisme
+  checkpoint/resume LangGraph pour cette phase (l'utilisateur est déjà présent à chaque
+  tour). Nouveau contrat dans `prompts/pm.md` : `QUESTION: ...` pour continuer le
+  dialogue, `FICHE_VALIDEE:\n<contenu>` une fois prêt (le runtime affiche la proposition
+  et demande confirmation, jamais l'inverse). **Gap détecté et corrigé** : le champ
+  **Nom de la feature**, requis par `docs/workflow.md` (« le PM demande explicitement un
+  nom de feature ») mais absent de `templates/card-root.md.template` — ajouté au
+  template, extrait par regex en phase 3 pour nommer la branche.
+  Phase FICHES implémentée **en deux passes**, pour respecter l'ordre documenté
+  (« à la validation de cette phase, la branche du run est créée » — donc après, pas
+  avant) : 1) première invocation, génère et écrit les fiches (contrat `SEQUENCE:` +
+  blocs `<<<DEVAIMAZING_FILE>>>`, même mécanique qu'Architecte/Back/Front/Test) ; si
+  `should_checkpoint` est vrai, s'arrête en `WAITING_HUMAN` **sans créer la branche** ;
+  2) reprise (`state.agent_cards` déjà rempli) : ne rappelle pas le LLM, crée juste la
+  branche et commite. 12 tests ajoutés (dont le dialogue scripté via mock de
+  `builtins.input`), tous verts après une correction de test (comparaison stricte vs
+  contenu `.strip()`, pas un bug du node). **120/120 au total sur `runtime/tests/` —
+  `nodes/*.py` (7/7) et `tools/*.py` complets, seul `cli.py` reste pour boucler le
+  runtime.**
 - `examples/demo-todo-app/` n'a pas de code source (`src/` annoncé au README mais absent),
   et il n'existe pas de `config/projects/demo-todo-app.yml`. Aucune cible réelle pour un
   run de bout en bout pour l'instant.
@@ -178,9 +200,7 @@
 1. ~~Compléter les stubs des 7 `nodes/*.py` au contrat complet~~ — fait le 2026-07-10.
 2. Implémenter dans l'ordre de dépendance : ~~`state.py`~~ (rien à faire) → ~~`config.py`~~
    → ~~`tools/filesystem.py`, `tools/git.py`, `tools/ollama.py`, `tools/claude_code.py`~~
-   → ~~`graph.py`~~ → ~~`nodes/backend.py`, `nodes/frontend.py`, `nodes/test.py`,
-   `nodes/security.py`, `metrics.py`, `nodes/closer.py`, `nodes/architect.py`~~ (fait le
-   2026-07-10) → `nodes/pm.py` → `cli.py`.
+   → ~~`graph.py`~~ → ~~`nodes/*.py` (7/7)~~ (fait le 2026-07-10) → `cli.py`.
 3. Remplir `runtime/tests/test_config.py` (et les futurs tests) avec de vraies assertions
    au fur et à mesure de chaque implémentation.
 4. Construire une cible minimale réelle pour `demo-todo-app` (FastAPI + React +
@@ -190,11 +210,10 @@
 
 ## Point de reprise
 
-Prochaine session : terminer `nodes/*.py` par `pm.py` (le plus complexe — dialogue de
-cadrage phase 1, mécanique déjà tranchée en amont dans le journal de conversation :
-boucle terminale synchrone dans le node, pas de nouveau champ StudioState), puis
-`cli.py` (dernière pièce du runtime), sauf décision contraire. Le placeholder ntfy et
-l'état de
-`demo-todo-app` (étape 4) restent à trancher explicitement avant d'être traités — ne pas
-les combler par une valeur par défaut « raisonnable » sans validation humaine (cohérent
-avec le principe de l'ADR 0008).
+Prochaine session : `cli.py` (dernière pièce du runtime — devaimazing run/resume/runs/
+metrics/projects/doctor, câble config.py + graph.py + tous les nodes), sauf décision
+contraire. Avant un run de bout en bout réel, plusieurs points restent à trancher
+explicitement (listés au fil du journal ci-dessus) et ne doivent pas être comblés par
+une valeur par défaut « raisonnable » sans validation humaine (principe de l'ADR 0008) :
+flags de permissions Claude Code CLI, câblage de `MetricsCollector.record_task` dans
+les nodes producteurs, le placeholder ntfy, et l'état de `demo-todo-app` (étape 4).

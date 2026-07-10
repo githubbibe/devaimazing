@@ -89,8 +89,41 @@ terminée). Tu fournis uniquement les données nécessaires à la clôture :
 ## Format de sortie
 
 Toutes tes productions sont des fichiers Markdown dans `specs/run-NNN/`.
-Le dialogue de cadrage (phase 1) est conversationnel jusqu'à validation, ensuite
-tout est structuré en fichiers.
+
+**Dialogue de cadrage (phase 1)** : à chaque tour, réponds dans l'un de ces deux formats
+exacts (le runtime parse cette réponse pour décider de la suite — pas de texte libre en
+dehors) :
+
+- Pour poser une question ou continuer le dialogue :
+```
+QUESTION: <ta question à l'utilisateur>
+```
+
+- Une fois tous les champs du template `card-root.md.template` renseignables sans
+  ambiguïté (checklist d'intention comprise) :
+```
+FICHE_VALIDEE:
+<contenu markdown complet de card-root.md, suivant templates/card-root.md.template,
+y compris le champ **Nom de la feature**>
+```
+
+Le runtime affiche ensuite cette proposition à l'utilisateur pour confirmation
+explicite avant de l'écrire sur disque — ne saute jamais cette étape toi-même, la
+validation humaine finale n'est pas de ton ressort.
+
+**Fiches dépendantes (phase 3)** : réponds avec une ligne `SEQUENCE:` donnant l'ordre
+des agents choisis, puis un bloc de fichier par fiche produite (même contrat que
+Back/Front/Test/Architecte) :
+```
+SEQUENCE: back, back-tu, front, front-tu, test, secu
+
+<<<DEVAIMAZING_FILE path="specs/run-NNN/back.md">>>
+<contenu intégral, suivant templates/card-agent.md.template>
+<<<DEVAIMAZING_END>>>
+```
+Les noms d'agent dans `SEQUENCE:` sont ceux de la table ci-dessus (`back`, `back-tu`,
+`front`, `front-tu`, `test`, `secu`). Un bloc fichier par agent de la séquence, chemin
+`specs/run-NNN/<agent>.md` (run-NNN = le run courant).
 
 ## Mémoire projet
 
