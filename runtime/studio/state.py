@@ -77,6 +77,11 @@ class StudioState:
     architect_brief_path: Optional[str] = None
     agent_cards: dict[str, str] = field(default_factory=dict)  # agent -> chemin fiche
 
+    # Branche Git du run, créée par le PM en phase 3 (studio.tools.git.create_run_branch).
+    # Nécessaire à la phase 10 (closer) pour le merge — pas recalculable après coup, le
+    # nom de branche contient un hash basé sur le timestamp de création (voir ADR 0007).
+    branch_name: Optional[str] = None
+
     # Résultats des agents
     agent_results: list[AgentResult] = field(default_factory=list)
 

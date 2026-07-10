@@ -134,6 +134,22 @@
   — `psutil` permettrait un monitoring complet mais n'est pas une dépendance du projet ;
   à ajouter explicitement si nécessaire. 5 tests ajoutés. **92/92 au total sur
   `runtime/tests/`.**
+- `nodes/closer.py` est implémenté. **Gap détecté et corrigé** : `StudioState` n'avait
+  aucun champ pour la branche Git créée en phase 3 (PM) — nécessaire pour le merge en
+  phase 10 et non recalculable après coup (le nom contient un hash basé sur le
+  timestamp de création, ADR 0007). Ajout de `StudioState.branch_name`. Mise à jour de
+  `project-map.md` mécanique (pas de LLM) : une ligne par fichier produit dans "Carte
+  des fichiers", une ligne de résumé dans "Historique des runs", en s'appuyant sur la
+  structure de `templates/project-map.md.template` ; crée le fichier depuis le template
+  s'il n'existe pas. Notification ntfy avec garde-fou : no-op tant que
+  `notifications.ntfy.topic` reste `<PLACEHOLDER_TOPIC>`. En cas de conflit de merge :
+  pas de retry, `state.status=WAITING_HUMAN` +
+  `requires_manual_intervention=True`, le repo reste dans l'état de conflit Git (résolu
+  par un humain, cohérent avec `tools/git.py`). **Non câblé (documenté en Notes)** :
+  aucun node déjà implémenté n'appelle encore `MetricsCollector.record_task`, donc
+  `get_run_summary` ici est best-effort (absorbe `ValueError` si aucune tâche
+  enregistrée) — à corriger quand ce câblage sera ajouté aux nodes producteurs. 7 tests
+  ajoutés. **99/99 au total sur `runtime/tests/`.**
 - `examples/demo-todo-app/` n'a pas de code source (`src/` annoncé au README mais absent),
   et il n'existe pas de `config/projects/demo-todo-app.yml`. Aucune cible réelle pour un
   run de bout en bout pour l'instant.
@@ -144,8 +160,8 @@
 2. Implémenter dans l'ordre de dépendance : ~~`state.py`~~ (rien à faire) → ~~`config.py`~~
    → ~~`tools/filesystem.py`, `tools/git.py`, `tools/ollama.py`, `tools/claude_code.py`~~
    → ~~`graph.py`~~ → ~~`nodes/backend.py`, `nodes/frontend.py`, `nodes/test.py`,
-   `nodes/security.py`~~ (fait le 2026-07-10) → `nodes/closer.py`, `nodes/architect.py`,
-   `nodes/pm.py` → `cli.py` → `metrics.py`.
+   `nodes/security.py`, `metrics.py`, `nodes/closer.py`~~ (fait le 2026-07-10) →
+   `nodes/architect.py`, `nodes/pm.py` → `cli.py`.
 3. Remplir `runtime/tests/test_config.py` (et les futurs tests) avec de vraies assertions
    au fur et à mesure de chaque implémentation.
 4. Construire une cible minimale réelle pour `demo-todo-app` (FastAPI + React +
@@ -155,9 +171,10 @@
 
 ## Point de reprise
 
-Prochaine session : poursuivre `nodes/*.py` par `closer.py`, `architect.py`, `pm.py`
-(chacun a son propre point de conception à trancher — voir journal ci-dessus), puis
-`cli.py` et `metrics.py`, sauf décision contraire. Le placeholder ntfy et l'état de
+Prochaine session : poursuivre `nodes/*.py` par `architect.py` puis `pm.py` (le plus
+complexe — dialogue de cadrage phase 1, voir la mécanique déjà tranchée en amont dans le
+journal de conversation : boucle terminale synchrone dans le node, pas de nouveau champ
+StudioState), puis `cli.py`, sauf décision contraire. Le placeholder ntfy et l'état de
 `demo-todo-app` (étape 4) restent à trancher explicitement avant d'être traités — ne pas
 les combler par une valeur par défaut « raisonnable » sans validation humaine (cohérent
 avec le principe de l'ADR 0008).
