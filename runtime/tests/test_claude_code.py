@@ -95,13 +95,34 @@ async def test_run_claude_code_is_error_in_json_raises_runtime_error(
         await run_claude_code(prompt="x", model="claude-opus-4-8", cwd=tmp_path)
 
 
-async def test_run_claude_code_permission_denial_raises_runtime_error(
+async def test_run_claude_code_permission_denial_with_content_does_not_raise(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
+    """Un refus d'outil récupéré (contenu final exploitable) n'est pas fatal."""
     fake_process = _FakeProcess(
         stdout=_success_payload(permission_denials=[
             {"tool_name": "Write", "tool_use_id": "t1", "tool_input": {}}
         ]),
+        stderr=b"", returncode=0,
+    )
+    monkeypatch.setattr(
+        claude_code_tool.asyncio, "create_subprocess_exec", _fake_subprocess_exec(fake_process)
+    )
+
+    result = await run_claude_code(prompt="x", model="claude-opus-4-8", cwd=tmp_path)
+
+    assert result["content"] == "contenu généré"
+
+
+async def test_run_claude_code_permission_denial_without_content_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Un refus d'outil sans contenu exploitable derrière reste fatal."""
+    fake_process = _FakeProcess(
+        stdout=_success_payload(
+            result="",
+            permission_denials=[{"tool_name": "Write", "tool_use_id": "t1", "tool_input": {}}],
+        ),
         stderr=b"", returncode=0,
     )
     monkeypatch.setattr(

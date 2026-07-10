@@ -7,8 +7,11 @@ Capture la sortie, parse le JSON, retourne le résultat.
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Optional
+
+_logger = logging.getLogger(__name__)
 
 
 async def run_claude_code(
@@ -39,7 +42,9 @@ async def run_claude_code(
         TimeoutError: Si le sous-process dépasse timeout_seconds.
         RuntimeError: Si Claude Code retourne un code d'erreur non nul, si la
             sortie JSON contient un champ "is_error" à true, ou si
-            "permission_denials" est non vide (voir Notes).
+            "permission_denials" est non vide ET qu'aucun contenu exploitable
+            n'a été produit (voir Notes — un refus d'outil isolé, suivi d'une
+            réponse texte exploitable, n'est plus fatal).
         ValueError: Si la sortie JSON est invalide.
 
     Example:
@@ -67,6 +72,16 @@ async def run_claude_code(
         point sera à retrancher explicitement (ajouter --allowedTools plutôt
         que --dangerously-skip-permissions, qui n'est de toute façon
         recommandé que pour un sandbox sans accès réseau).
+
+        Un refus d'outil (permission_denials non vide) n'est fatal que si le
+        modèle n'a produit aucun contenu exploitable après coup — constaté en
+        run réel (2026-07-11, voir docs/roadmap.md) qu'un modèle qui tente un
+        outil refusé (variance d'échantillonnage, prompt pourtant correct)
+        s'en remet ensuite normalement et produit quand même une réponse
+        texte valide dans la même invocation. Faire échouer tout le run pour
+        un refus récupéré était trop strict. Le refus reste tracé (logger
+        warning) même quand il n'est pas fatal, pour garder un signal si un
+        prompt donné dérive vers ce comportement de façon récurrente.
     """
     process = await asyncio.create_subprocess_exec(
         "claude", "-p", "--model", model, "--output-format", output_format,
@@ -106,17 +121,26 @@ async def run_claude_code(
             f"Claude Code CLI a retourné une erreur : {payload.get('result') or payload}"
         )
 
+    content = payload.get("result", "")
     denials = payload.get("permission_denials") or []
     if denials:
         denied_tools = ", ".join(sorted({d.get("tool_name", "?") for d in denials}))
-        raise RuntimeError(
-            f"Claude Code CLI s'est vu refuser l'accès à un outil ({denied_tools}) — "
-            f"le design actuel des agents devaimazing ne doit jamais avoir besoin "
-            f"d'écrire via Claude Code (voir Notes de run_claude_code)."
+        if not content.strip():
+            raise RuntimeError(
+                f"Claude Code CLI s'est vu refuser l'accès à un outil ({denied_tools}) "
+                f"et n'a produit aucun contenu exploitable — le design actuel des "
+                f"agents devaimazing ne doit jamais avoir besoin d'écrire via Claude "
+                f"Code (voir Notes de run_claude_code)."
+            )
+        _logger.warning(
+            "Claude Code CLI a tenté d'utiliser un outil refusé (%s) mais a quand "
+            "même produit un contenu exploitable — refus non fatal (voir Notes de "
+            "run_claude_code).",
+            denied_tools,
         )
 
     return {
-        "content": payload.get("result", ""),
+        "content": content,
         "usage": payload.get("usage", {}),
         "duration_ms": payload.get("duration_ms", 0),
     }

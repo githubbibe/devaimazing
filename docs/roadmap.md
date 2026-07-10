@@ -439,6 +439,29 @@ Déroulé exact, conforme au design deux-passes documenté dans `pm.py::_run_fic
    **Le run réel `run-20260710-185636` reste en `FAILED`** (le fix ne rétroagit pas sur
    un run déjà terminé) — décision à prendre avec l'utilisateur pour le débloquer
    (reprise manuelle du state vs nouveau run propre avec le fix en place).
+   **Décision utilisateur (2026-07-11)** : nouveau run propre plutôt que réanimation
+   manuelle du state — plus simple et plus représentatif d'un usage réel futur. Le run
+   `FAILED` reste dans l'historique comme trace du bug.
+
+8. **Nouveau run (`run-20260710-234216`), échec immédiat en phase 1 (PM)** : même
+   refus d'outil (`Bash`), cette fois dans `_run_cadrage` — alors que `prompts/pm.md`
+   contient déjà l'interdiction généralisée depuis le commit `95bbb45`. Confirme la
+   conclusion du diagnostic du point 5 : le refus revient par variance
+   d'échantillonnage du modèle, indépendamment de la qualité du prompt, sur n'importe
+   lequel des 3 agents Sonnet (architect, pm, et probablement secu). Plutôt que de
+   continuer à durcir des prompts déjà corrects, décision prise avec l'utilisateur de
+   traiter la question laissée ouverte au point 5 : **un refus d'outil n'est plus
+   automatiquement fatal dans `run_claude_code`** (`tools/claude_code.py`) — il ne
+   l'est que si le modèle n'a produit aucun contenu exploitable (`result` vide) après
+   le refus. Constat empirique motivant ce changement : un modèle qui tente un outil
+   refusé s'en remet normalement dans la même invocation et produit quand même une
+   réponse texte valide (comportement standard d'un agent Claude Code face à un refus
+   d'outil — l'inverse aurait dû être vérifié avant de coder l'ancien comportement
+   strict, voir Notes mises à jour de `run_claude_code`). Le refus reste tracé via
+   `logging.warning` même non fatal, pour garder un signal si un prompt donné dérive
+   de façon récurrente. Test existant `test_run_claude_code_permission_denial_raises_
+   runtime_error` remplacé par deux tests distincts (avec contenu → pas d'exception ;
+   sans contenu → exception), vérifiés rouge/vert avant de committer.
 
 **Backlog identifié en marge (2026-07-10, pas bloquant, pour plus tard)** :
 `devaimazing resume` (`cli.py::resume`) ne sait reprendre qu'un run explicitement en
