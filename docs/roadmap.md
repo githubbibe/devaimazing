@@ -31,8 +31,19 @@
   réelles en sous-process (`asyncio.create_subprocess_exec`), identité par agent via
   `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, hash de branche basé sur timestamp+nom de feature.
   20 tests ajoutés (`test_filesystem.py`, `test_git.py` — ce dernier sur de vrais dépôts
-  git temporaires, y compris un cas de conflit de merge), tous verts. 26/26 au total sur
-  `runtime/tests/`.
+  git temporaires, y compris un cas de conflit de merge), tous verts.
+- `tools/ollama.py` est implémenté, via le client officiel `ollama.AsyncClient`
+  (`/api/chat`, messages system+user). Retry avec backoff exponentiel (3 tentatives,
+  aligné sur `ollama.max_retries` dans `config/studio.yml`, pattern de
+  `skills/retry-patterns.md`) sur les erreurs de connexion et les 5xx ; pas de retry sur
+  un timeout ni sur les codes non retryables (400/401/403/404, voir
+  `skills/retry-patterns.md`). `ExternalServiceError` (déclarée dans le module — pas
+  encore de hiérarchie d'exceptions partagée côté runtime devaimazing, contrairement aux
+  projets cibles qui ont `backend/exceptions.py`) et `TimeoutError` sont levées selon le
+  contrat du stub. `httpx` ajouté en dépendance explicite de `pyproject.toml` (utilisé
+  directement pour capter `httpx.TimeoutException`, jusque-là seulement transitif via le
+  paquet `ollama`). 7 tests ajoutés (`test_ollama.py`, faux client scripté — aucun appel
+  réseau réel), tous verts. 33/33 au total sur `runtime/tests/`.
 - `examples/demo-todo-app/` n'a pas de code source (`src/` annoncé au README mais absent),
   et il n'existe pas de `config/projects/demo-todo-app.yml`. Aucune cible réelle pour un
   run de bout en bout pour l'instant.
@@ -41,8 +52,8 @@
 
 1. ~~Compléter les stubs des 7 `nodes/*.py` au contrat complet~~ — fait le 2026-07-10.
 2. Implémenter dans l'ordre de dépendance : ~~`state.py`~~ (rien à faire) → ~~`config.py`~~
-   → ~~`tools/filesystem.py`, `tools/git.py`~~ (fait le 2026-07-10) →
-   `tools/ollama.py`, `tools/claude_code.py` → `graph.py` → `nodes/*.py` → `cli.py` →
+   → ~~`tools/filesystem.py`, `tools/git.py`~~ → ~~`tools/ollama.py`~~ (fait le
+   2026-07-10) → `tools/claude_code.py` → `graph.py` → `nodes/*.py` → `cli.py` →
    `metrics.py`.
 3. Remplir `runtime/tests/test_config.py` (et les futurs tests) avec de vraies assertions
    au fur et à mesure de chaque implémentation.
@@ -53,9 +64,9 @@
 
 ## Point de reprise
 
-Prochaine session : poursuivre l'étape 2 par `tools/ollama.py` puis `tools/claude_code.py`
-(dépendance réseau/subprocess externe — Ollama local, Claude Code CLI — donc plus délicats
-à tester que filesystem/git), sauf décision contraire. Le placeholder ntfy et l'état de
+Prochaine session : poursuivre l'étape 2 par `tools/claude_code.py` (dernier `tools/*.py`
+restant — wrapper subprocess CLI, pas de client officiel comme pour Ollama), sauf
+décision contraire. Le placeholder ntfy et l'état de
 `demo-todo-app` (étape 4) restent à trancher explicitement avant d'être traités — ne pas
 les combler par une valeur par défaut « raisonnable » sans validation humaine (cohérent
 avec le principe de l'ADR 0008).
