@@ -298,7 +298,38 @@ avant qu'il aille au bout :
    conséquence (installation hors du dépôt, alias `devaimazing=~/.venvs/devaimazing/bin/
    devaimazing`).
 
-Run relancé après ces deux corrections — en cours, résultat pas encore connu.
+3. **Connexion SQLite du checkpointer jamais fermée** (bug de code, corrigé commit
+   `7c458cf`) : le run s'est bien lancé (phase 1, dialogue PM en terminal réussi), mais
+   après validation de la fiche racine par l'utilisateur, le process ne rendait jamais
+   la main — ni erreur ni sortie, juste un blocage silencieux (signalé par l'utilisateur :
+   « je ne vois pas de progression je ne sais pas si le processus est planté ou en cours
+   de calcul »). Diagnostiqué avec l'outil macOS `sample` sur le process bloqué :
+   `_Py_Finalize` → `wait_for_thread_shutdown` attendait indéfiniment le thread worker
+   d'arrière-plan d'`aiosqlite` (`_connection_worker_thread`), jamais fermé explicitement
+   après la fin du graphe. Fix : `try/finally` autour de `graph.ainvoke(...)` dans
+   `_run_async`/`_resume_async`, avec `await graph.checkpointer.conn.close()` dans le
+   `finally`. Test de régression vérifié rouge sans le correctif (fix temporairement
+   neutralisé, 3 tests passent au rouge, restauré) avant d'être committé.
+4. **Prompts Sonnet (Architecte/Sécu/PM) réclamant leurs outils Write/Edit** (bug de
+   prompt, pas de code) : après le fix du point 3, le run a atteint la phase 2 (audit
+   amont Architecte) puis a échoué avec `RuntimeError: Claude Code CLI s'est vu refuser
+   l'accès à un outil (Write)`. Cause : le contrat de sortie de `prompts/architect.md`
+   dit que le contenu de la réponse est « écrit tel quel » dans `architect-brief.md`,
+   mais ne dit jamais explicitement à l'agent de ne pas utiliser lui-même son outil
+   Write — Sonnet, invité à « produire le brief », tente naturellement d'écrire le
+   fichier directement plutôt que de répondre en texte. Le refus est correctement
+   détecté par la vérification `permission_denials` ajoutée au point 1 (`RuntimeError`
+   propre, pas de hang silencieux) — mais le run échoue quand même puisque
+   `architect-brief.md` n'est jamais produit. Fix : ajout d'une interdiction explicite
+   « Tu n'utilises jamais tes outils Write ou Edit » dans `prompts/architect.md`,
+   `prompts/security.md` et `prompts/pm.md` (les trois prompts qui passent par
+   `run_claude_code`). **Pas de test de régression automatisé possible** : c'est un
+   comportement de modèle de langage face à un prompt, pas une branche de code
+   Python testable unitairement — seule la vérification empirique (relancer le run)
+   fait foi. La garde-fou `permission_denials` reste en place comme filet de sécurité
+   si le prompt échoue à dissuader le modèle une prochaine fois.
+
+Run relancé après ces quatre corrections — en cours, résultat pas encore connu.
 
 **Décision prise (2026-07-10, hors code)** : la mise en production de devaimazing
 lui-même devra être conteneurisée Podman, cohérent avec le reste de l'infra prod (voir

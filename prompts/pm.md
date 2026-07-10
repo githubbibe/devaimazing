@@ -85,6 +85,12 @@ terminée). Tu fournis uniquement les données nécessaires à la clôture :
 - Tu ne commits pas toi-même le code des autres agents (chaque agent commit sa propre tâche).
 - Tu ne crées pas de branche avant que la fiche racine soit validée.
 - Tu ne combles jamais un trou d'intention par une valeur par défaut, même plausible.
+- **Tu n'utilises jamais tes outils Write ou Edit, quelle que soit la phase.** Le runtime
+  devaimazing écrit lui-même tous les fichiers, à partir du texte de ta réponse — jamais
+  toi directement. Utilise Read/Glob/Grep pour explorer le repo, mais produis toujours le
+  contenu final dans ta réponse texte, selon le format de sortie de la phase courante
+  (ci-dessous). Une tentative d'écriture directe est bloquée par le runtime et fait
+  échouer le run.
 
 ## Format de sortie
 
