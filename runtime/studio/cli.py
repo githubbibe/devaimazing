@@ -122,16 +122,24 @@ async def _run_async(project: str, objective: Optional[str], dry_run: bool) -> N
         return
 
     graph = await build_graph(config)
-    initial_state = StudioState(
-        run_id=run_id,
-        project_name=project,
-        objective_raw=objective,
-        current_phase=Phase.RECEPTION,
-        status=RunStatus.IN_PROGRESS,
-        started_at=datetime.now(timezone.utc),
-    )
-    final_state = await graph.ainvoke(initial_state, config=_thread_config(run_id))
-    _print_run_outcome(run_id, final_state)
+    try:
+        initial_state = StudioState(
+            run_id=run_id,
+            project_name=project,
+            objective_raw=objective,
+            current_phase=Phase.RECEPTION,
+            status=RunStatus.IN_PROGRESS,
+            started_at=datetime.now(timezone.utc),
+        )
+        final_state = await graph.ainvoke(initial_state, config=_thread_config(run_id))
+        _print_run_outcome(run_id, final_state)
+    finally:
+        # build_graph() laisse la connexion SQLite du checkpointer ouverte
+        # par conception (voir sa docstring) : sans cette fermeture, le
+        # process ne se termine jamais (Py_Finalize attend indéfiniment le
+        # thread worker aiosqlite) — trouvé lors du premier run réel
+        # (2026-07-10), voir docs/roadmap.md.
+        await graph.checkpointer.conn.close()
 
 
 @main.command()
@@ -146,22 +154,26 @@ async def _resume_async(run_id: str, project: str) -> None:
     _export_project_env(project)
     config = _load_config(project)
     graph = await build_graph(config)
-    thread_config = _thread_config(run_id)
+    try:
+        thread_config = _thread_config(run_id)
 
-    snapshot = await graph.aget_state(thread_config)
-    if not snapshot.values:
-        console.print(f"[red]Run {run_id} introuvable pour le projet {project}.[/red]")
-        return
-    if not snapshot.values.get("awaiting_human_validation"):
-        console.print(f"[yellow]Run {run_id} n'est pas en attente de validation.[/yellow]")
-        return
+        snapshot = await graph.aget_state(thread_config)
+        if not snapshot.values:
+            console.print(f"[red]Run {run_id} introuvable pour le projet {project}.[/red]")
+            return
+        if not snapshot.values.get("awaiting_human_validation"):
+            console.print(f"[yellow]Run {run_id} n'est pas en attente de validation.[/yellow]")
+            return
 
-    await graph.aupdate_state(
-        thread_config,
-        {"status": RunStatus.IN_PROGRESS, "awaiting_human_validation": False},
-    )
-    final_state = await graph.ainvoke(None, config=thread_config)
-    _print_run_outcome(run_id, final_state)
+        await graph.aupdate_state(
+            thread_config,
+            {"status": RunStatus.IN_PROGRESS, "awaiting_human_validation": False},
+        )
+        final_state = await graph.ainvoke(None, config=thread_config)
+        _print_run_outcome(run_id, final_state)
+    finally:
+        # Voir le commentaire équivalent dans _run_async.
+        await graph.checkpointer.conn.close()
 
 
 def _parse_run_history_table(content: str) -> list[list[str]]:

@@ -52,6 +52,19 @@ class _FakeSnapshot:
         self.values = values
 
 
+def _fake_checkpointer(closed: list) -> SimpleNamespace:
+    """
+    Checkpointer factice : `closed` accumule un True à chaque appel de
+    `.conn.close()`, pour vérifier dans les tests que cli.py ferme bien la
+    connexion SQLite après usage (voir régression :
+    test_run_closes_checkpointer_connection_even_on_error).
+    """
+    async def _close():
+        closed.append(True)
+
+    return SimpleNamespace(conn=SimpleNamespace(close=_close))
+
+
 # --- run ---
 
 def test_run_dry_run_does_not_invoke_graph(monkeypatch: pytest.MonkeyPatch):
@@ -67,10 +80,12 @@ def test_run_dry_run_does_not_invoke_graph(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_run_completed_prints_success(monkeypatch: pytest.MonkeyPatch):
+    closed = []
+
     async def fake_ainvoke(state, config):
         return {"status": RunStatus.COMPLETED, "current_phase": Phase.CLOTURE}
 
-    fake_graph = SimpleNamespace(ainvoke=fake_ainvoke)
+    fake_graph = SimpleNamespace(ainvoke=fake_ainvoke, checkpointer=_fake_checkpointer(closed))
 
     async def fake_build_graph(config):
         return fake_graph
@@ -81,13 +96,14 @@ def test_run_completed_prints_success(monkeypatch: pytest.MonkeyPatch):
 
     assert result.exit_code == 0
     assert "terminé" in result.output
+    assert closed == [True]  # connexion checkpointer fermée aussi sur le chemin nominal
 
 
 def test_run_waiting_human_prints_resume_hint(monkeypatch: pytest.MonkeyPatch):
     async def fake_ainvoke(state, config):
         return {"status": RunStatus.WAITING_HUMAN, "current_phase": Phase.FICHES}
 
-    fake_graph = SimpleNamespace(ainvoke=fake_ainvoke)
+    fake_graph = SimpleNamespace(ainvoke=fake_ainvoke, checkpointer=_fake_checkpointer([]))
 
     async def fake_build_graph(config):
         return fake_graph
@@ -113,7 +129,7 @@ def test_run_exports_project_env_before_invoking_graph(monkeypatch: pytest.Monke
         seen_env["project"] = os.environ.get("DEVAIMAZING_PROJECT")
         return {"status": RunStatus.COMPLETED}
 
-    fake_graph = SimpleNamespace(ainvoke=fake_ainvoke)
+    fake_graph = SimpleNamespace(ainvoke=fake_ainvoke, checkpointer=_fake_checkpointer([]))
 
     async def fake_build_graph(config):
         return fake_graph
@@ -126,12 +142,38 @@ def test_run_exports_project_env_before_invoking_graph(monkeypatch: pytest.Monke
     assert seen_env["project"] == "demo"
 
 
+def test_run_closes_checkpointer_connection_even_on_error(monkeypatch: pytest.MonkeyPatch):
+    # Régression : build_graph() laisse la connexion SQLite du checkpointer
+    # ouverte par conception (voir sa docstring, "à la charge de
+    # l'appelant"). Sans fermeture explicite, le process ne se termine
+    # jamais (Py_Finalize attend indéfiniment le thread worker aiosqlite) —
+    # trouvé lors du premier run réel de bout en bout (2026-07-10) : le
+    # process restait bloqué après la fin du run, sans traceback ni
+    # message, juste un terminal qui ne rendait jamais la main.
+    closed = []
+
+    async def fake_ainvoke(state, config):
+        raise RuntimeError("erreur pendant le run")
+
+    fake_graph = SimpleNamespace(ainvoke=fake_ainvoke, checkpointer=_fake_checkpointer(closed))
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["run", "demo", "--objective", "x"])
+
+    assert result.exit_code != 0  # l'exception se propage toujours
+    assert closed == [True]  # mais la connexion a bien été fermée (finally)
+
+
 def test_run_prompts_for_objective_when_missing(monkeypatch: pytest.MonkeyPatch):
     async def fake_ainvoke(state, config):
         assert state.objective_raw == "objectif tapé au prompt"
         return {"status": RunStatus.COMPLETED}
 
-    fake_graph = SimpleNamespace(ainvoke=fake_ainvoke)
+    fake_graph = SimpleNamespace(ainvoke=fake_ainvoke, checkpointer=_fake_checkpointer([]))
 
     async def fake_build_graph(config):
         return fake_graph
@@ -148,6 +190,7 @@ def test_run_prompts_for_objective_when_missing(monkeypatch: pytest.MonkeyPatch)
 def test_resume_not_waiting_prints_warning(monkeypatch: pytest.MonkeyPatch):
     fake_graph = SimpleNamespace(
         aget_state=None, aupdate_state=None, ainvoke=None,
+        checkpointer=_fake_checkpointer([]),
     )
 
     async def fake_aget_state(config):
@@ -169,6 +212,7 @@ def test_resume_not_waiting_prints_warning(monkeypatch: pytest.MonkeyPatch):
 def test_resume_success_clears_flag_and_continues(monkeypatch: pytest.MonkeyPatch):
     state = {"awaiting_human_validation": True, "status": RunStatus.WAITING_HUMAN}
     updated = {}
+    closed = []
 
     async def fake_aget_state(config):
         return _FakeSnapshot(dict(state))
@@ -185,6 +229,7 @@ def test_resume_success_clears_flag_and_continues(monkeypatch: pytest.MonkeyPatc
 
     fake_graph = SimpleNamespace(
         aget_state=fake_aget_state, aupdate_state=fake_aupdate_state, ainvoke=fake_ainvoke,
+        checkpointer=_fake_checkpointer(closed),
     )
 
     async def fake_build_graph(config):
@@ -197,13 +242,14 @@ def test_resume_success_clears_flag_and_continues(monkeypatch: pytest.MonkeyPatc
     assert result.exit_code == 0
     assert updated["awaiting_human_validation"] is False
     assert "terminé" in result.output
+    assert closed == [True]  # régression : voir test_run_closes_checkpointer_connection_even_on_error
 
 
 def test_resume_unknown_run_prints_error(monkeypatch: pytest.MonkeyPatch):
     async def fake_aget_state(config):
         return _FakeSnapshot({})
 
-    fake_graph = SimpleNamespace(aget_state=fake_aget_state)
+    fake_graph = SimpleNamespace(aget_state=fake_aget_state, checkpointer=_fake_checkpointer([]))
 
     async def fake_build_graph(config):
         return fake_graph
