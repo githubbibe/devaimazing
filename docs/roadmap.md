@@ -43,7 +43,18 @@
   contrat du stub. `httpx` ajouté en dépendance explicite de `pyproject.toml` (utilisé
   directement pour capter `httpx.TimeoutException`, jusque-là seulement transitif via le
   paquet `ollama`). 7 tests ajoutés (`test_ollama.py`, faux client scripté — aucun appel
-  réseau réel), tous verts. 33/33 au total sur `runtime/tests/`.
+  réseau réel), tous verts.
+- `tools/claude_code.py` est implémenté : sous-process `claude -p --model <model>
+  --output-format json`, prompt transmis via stdin (pas en argument, pour éviter les
+  limites de taille d'argv sur les fiches/skills volumineux), schéma JSON de sortie
+  vérifié par un appel réel au CLI (`result`, `usage.input_tokens`/`output_tokens`,
+  `duration_ms`, `is_error`). **Point non tranché, noté dans le docstring** : aucun flag
+  de permissions (`--dangerously-skip-permissions`, `--allowedTools`) n'est ajouté —
+  un agent dont la fiche implique des accès fichiers déclenchera une invite de
+  permission bloquante en exécution non interactive ; à trancher avant un run de bout en
+  bout. 5 tests ajoutés (`test_claude_code.py`, faux sous-process scripté — aucun appel
+  API réel), tous verts. **`tools/*.py` complet — étape 2 terminée pour les tools.**
+  38/38 au total sur `runtime/tests/`.
 - `examples/demo-todo-app/` n'a pas de code source (`src/` annoncé au README mais absent),
   et il n'existe pas de `config/projects/demo-todo-app.yml`. Aucune cible réelle pour un
   run de bout en bout pour l'instant.
@@ -52,9 +63,8 @@
 
 1. ~~Compléter les stubs des 7 `nodes/*.py` au contrat complet~~ — fait le 2026-07-10.
 2. Implémenter dans l'ordre de dépendance : ~~`state.py`~~ (rien à faire) → ~~`config.py`~~
-   → ~~`tools/filesystem.py`, `tools/git.py`~~ → ~~`tools/ollama.py`~~ (fait le
-   2026-07-10) → `tools/claude_code.py` → `graph.py` → `nodes/*.py` → `cli.py` →
-   `metrics.py`.
+   → ~~`tools/filesystem.py`, `tools/git.py`, `tools/ollama.py`, `tools/claude_code.py`~~
+   (fait le 2026-07-10) → `graph.py` → `nodes/*.py` → `cli.py` → `metrics.py`.
 3. Remplir `runtime/tests/test_config.py` (et les futurs tests) avec de vraies assertions
    au fur et à mesure de chaque implémentation.
 4. Construire une cible minimale réelle pour `demo-todo-app` (FastAPI + React +
@@ -64,9 +74,9 @@
 
 ## Point de reprise
 
-Prochaine session : poursuivre l'étape 2 par `tools/claude_code.py` (dernier `tools/*.py`
-restant — wrapper subprocess CLI, pas de client officiel comme pour Ollama), sauf
-décision contraire. Le placeholder ntfy et l'état de
+Prochaine session : poursuivre l'étape 2 par `graph.py` (câblage LangGraph — nodes,
+routing dynamique selon state.current_phase/agent_sequence, checkpoints), sauf décision
+contraire. Le placeholder ntfy et l'état de
 `demo-todo-app` (étape 4) restent à trancher explicitement avant d'être traités — ne pas
 les combler par une valeur par défaut « raisonnable » sans validation humaine (cohérent
 avec le principe de l'ADR 0008).
