@@ -139,10 +139,10 @@ async def test_reception_phase_also_runs_cadrage_dialogue(monkeypatch: pytest.Mo
 FICHES_RESPONSE = (
     "SEQUENCE: back, front\n\n"
     '<<<DEVAIMAZING_FILE path="specs/run-042/back.md">>>\n'
-    'fiche back\n'
+    'fiche back\n\n## Feedback\n\n_Aucun feedback pour l\'instant._\n'
     '<<<DEVAIMAZING_END>>>\n'
     '<<<DEVAIMAZING_FILE path="specs/run-042/front.md">>>\n'
-    'fiche front\n'
+    'fiche front\n\n## Feedback\n\n_Aucun feedback pour l\'instant._\n'
     '<<<DEVAIMAZING_END>>>'
 )
 
@@ -189,7 +189,7 @@ async def test_fiches_first_pass_no_checkpoint_creates_branch(
     assert updates["agent_cards"] == {
         "back": "specs/run-042/back.md", "front": "specs/run-042/front.md",
     }
-    assert (repo / "specs" / "run-042" / "back.md").read_text(encoding="utf-8") == "fiche back"
+    assert "fiche back" in (repo / "specs" / "run-042" / "back.md").read_text(encoding="utf-8")
     assert committed["agent"] == "pm"
 
 
@@ -297,6 +297,35 @@ async def test_fiches_missing_agent_file_block_raises_runtime_error(
     )
     with pytest.raises(RuntimeError):
         await pm_node.run(state)
+
+
+async def test_fiches_missing_feedback_section_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    _write_card_root(repo)
+
+    async def fake_run_claude_code(**kwargs):
+        return _fake_claude_result(
+            'SEQUENCE: back, front\n\n'
+            '<<<DEVAIMAZING_FILE path="specs/run-042/back.md">>>\n'
+            'fiche back sans section feedback\n'
+            '<<<DEVAIMAZING_END>>>\n'
+            '<<<DEVAIMAZING_FILE path="specs/run-042/front.md">>>\n'
+            'fiche front\n\n## Feedback\n\n_Aucun feedback pour l\'instant._\n'
+            '<<<DEVAIMAZING_END>>>'
+        )  # fiche "back" sans section '## Feedback'
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+
+    state = StudioState(
+        run_id="run-042", current_phase=Phase.FICHES, card_root_path="specs/run-042/card-root.md",
+        architect_brief_path="specs/run-042/architect-brief.md",
+    )
+    with pytest.raises(RuntimeError):
+        await pm_node.run(state)
+
+    assert not (repo / "specs" / "run-042" / "back.md").is_file()
+    assert not (repo / "specs" / "run-042" / "front.md").is_file()
 
 
 async def test_fiches_missing_feature_name_raises_runtime_error(repo: Path):

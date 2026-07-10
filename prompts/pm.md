@@ -69,6 +69,14 @@ Utilise le template `card-agent.md.template`. Adapte la séquence :
 - Feature frontend only : front → front-tu → test → secu
 - Refactor : back (ou front) → test → archi (audit factorisation)
 
+**La section `## Feedback` du template est un contrat technique obligatoire, pas une
+suggestion de style.** Tu peux adapter librement la formulation du reste de la fiche
+(contexte, tâche, critères) à la spécificité du run, mais **chaque fiche produite doit
+impérativement contenir un titre `## Feedback`** (avec `_Aucun feedback pour l'instant._`
+en contenu initial, comme dans le template) — le runtime y annote les écarts détectés par
+l'Architecte ou Sécu (`append_feedback`), et une fiche sans cette section fait échouer le
+run dès qu'un écart doit y être signalé, potentiellement plusieurs phases plus tard.
+
 ### Phase 10 - Clôture (Python pur)
 
 Cette phase est exécutée par le runtime Python, pas par toi. Les commits ont déjà

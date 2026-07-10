@@ -25,7 +25,12 @@ from studio.metrics import record_agent_result
 from studio.routing import should_checkpoint
 from studio.state import AgentResult, Phase, RunStatus, StudioState
 from studio.tools.claude_code import run_claude_code
-from studio.tools.filesystem import parse_agent_file_blocks, read_card, write_card
+from studio.tools.filesystem import (
+    FEEDBACK_HEADING,
+    parse_agent_file_blocks,
+    read_card,
+    write_card,
+)
 from studio.tools.git import commit_as_agent, create_run_branch
 
 _DEVAIMAZING_ROOT = Path(__file__).resolve().parents[3]
@@ -207,6 +212,15 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
                 "absent de la réponse du PM (voir prompts/pm.md, section Format de sortie — phase 3)"
             )
         agent_cards[agent] = expected_path
+
+    for agent, expected_path in agent_cards.items():
+        if FEEDBACK_HEADING not in files[expected_path]:
+            raise RuntimeError(
+                f"Fiche produite pour l'agent {agent!r} ({expected_path!r}) sans section "
+                f"'{FEEDBACK_HEADING}' — contrat requis par templates/card-agent.md.template "
+                "(l'Architecte et Sécu y annotent leurs écarts via append_feedback, voir "
+                "prompts/pm.md, section Format de sortie — phase 3)"
+            )
 
     for relative_path, file_content in files.items():
         await write_card(config.repo_path / relative_path, file_content)

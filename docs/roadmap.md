@@ -372,6 +372,41 @@ eu lieu — traiter le refus comme un signal à logger, pas comme un échec en s
 l'agent a fini par respecter le contrat de sortie. Décision à valider avant implémentation
 (changement de comportement de sécurité, pas un simple fix de prompt).
 
+**Suite (2026-07-11, après reset du quota)** : run repris avec succès jusqu'à la phase 3
+— confirmation de l'hypothèse de variance du point ci-dessus, aucun nouveau refus d'outil.
+Déroulé exact, conforme au design deux-passes documenté dans `pm.py::_run_fiches` :
+1. `devaimazing resume run-20260710-185636 --project demo-todo-app` (1er appel) : phase 2
+   (Architecte) puis phase 3 1re passe (PM génère les fiches `back.md`, `back-tu.md`,
+   `test.md`, `secu.md`) — checkpoint avant création de branche, comme prévu.
+2. 2e appel `resume` : progression bien plus loin que prévu en une seule invocation
+   (branche créée, phase 4 stubs, phase 5 audit stubs Architecte) — jusqu'à un nouveau
+   bug réel (point 6 ci-dessous).
+
+6. **Fiches PM (phase 3) sans section `## Feedback`** (bug de code + prompt) : l'Architecte,
+   en phase 5 (audit des stubs), a détecté un écart sur `back.md` et tenté de l'annoter via
+   `append_feedback` — `ValueError: La fiche .../back.md ne contient pas de section
+   '## Feedback'`. Cause : `prompts/pm.md` dit d'« utiliser le template
+   `card-agent.md.template` » pour la phase 3, mais sans indiquer que la section
+   `## Feedback` est un contrat technique obligatoire (dont dépend `append_feedback`,
+   `filesystem.py:59-98`) plutôt qu'une simple suggestion de structure — Sonnet a produit
+   des fiches reformulées librement (contenu pertinent, bien structuré) mais sans cette
+   section, un écart non détecté avant la phase 5, bien après l'écriture des fiches.
+   Fix à deux niveaux :
+   - **Prompt** (`prompts/pm.md`) : section `## Feedback` explicitement décrite comme
+     contrat obligatoire, distincte du reste (librement adaptable).
+   - **Code** (`nodes/pm.py::_run_fiches`) : validation de la présence de `## Feedback`
+     dans chaque fiche générée, **avant** l'écriture sur disque (pas seulement au moment
+     où l'Architecte en aurait besoin, potentiellement 2 phases plus tard) — échec net et
+     atomique (aucune fiche écrite si une seule est non conforme) avec message actionnable
+     référençant `prompts/pm.md`. Contrairement aux bugs 4/5 (comportement de modèle non
+     testable), celui-ci a un test de régression : `test_fiches_missing_feedback_section_
+     raises_runtime_error` (`test_pm_node.py`), vérifié rouge sans le fix (RuntimeError non
+     levée, fiches écrites sur disque) avant d'être committé.
+   - **Données déjà produites** : les 4 fiches déjà écrites par le run réel
+     (`~/code/aimazing/demo-todo-app/specs/run-20260710-185636/{back,back-tu,test,secu}.md`)
+     patchées manuellement (section `## Feedback` ajoutée) pour permettre la reprise du
+     run sans regénération ni nouvel appel Claude Code CLI.
+
 **Backlog identifié en marge (2026-07-10, pas bloquant, pour plus tard)** :
 `devaimazing resume` (`cli.py::resume`) ne sait reprendre qu'un run explicitement en
 attente d'une validation humaine (`awaiting_human_validation=True` dans le state
