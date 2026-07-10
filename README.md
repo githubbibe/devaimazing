@@ -250,7 +250,8 @@ devaimazing/
 ### Prerequis
 
 - macOS (Apple Silicon recommande) ou Linux
-- [uv](https://github.com/astral-sh/uv) installe
+- Python 3.11+ et pip (ou [uv](https://github.com/astral-sh/uv) si installe — attention
+  a l'emplacement du venv dans ce cas aussi, voir Setup ci-dessous)
 - [Ollama](https://ollama.ai/) installe et operationnel
 - [Claude Code CLI](https://claude.ai/code) installe et configure
 - [OpenClaw](https://openclaw.ai/) installe (optionnel, interface Telegram)
@@ -258,14 +259,24 @@ devaimazing/
 
 ### Setup
 
+**Important — emplacement du venv** : ce depot vit sous iCloud Drive (`~/Library/Mobile
+Documents/com~apple~CloudDocs/...`). Un `.venv` cree *dans* le depot (comportement par
+defaut de `uv sync`/`python -m venv .venv`) subit la synchronisation iCloud en tache de
+fond, ce qui provoque des echecs intermittents `ModuleNotFoundError: No module named
+'studio'` sur l'installation editable (des milliers de petits fichiers/symlinks dans un
+`.venv` sont un tres mauvais candidat pour la sync cloud — deja constate et corrige le
+2026-07-10, voir `docs/roadmap.md`). Creer le venv **hors** du depot :
+
 ```bash
 # Cloner le repo
 git clone git@github.com:<username>/devaimazing.git
 cd devaimazing
 
-# Installer les dependances et le CLI
-uv sync
-uv pip install -e .
+# Installer les dependances et le CLI — venv HORS du depot (hors iCloud Drive)
+python3 -m venv ~/.venvs/devaimazing
+~/.venvs/devaimazing/bin/pip install -e .
+# alias pratique pour la suite :
+alias devaimazing=~/.venvs/devaimazing/bin/devaimazing
 
 # Verifier l'installation
 devaimazing --version

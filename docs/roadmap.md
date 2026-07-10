@@ -271,7 +271,34 @@ config).
    par `StudioConfig` par-dessus `studio.yml`/le projet. Le vrai topic (64 caractères
    hex, fourni par l'utilisateur) vit dans ce fichier local, jamais commité.
 
-Prochaine session : étape 5 (premier run de bout en bout), sauf décision contraire.
+**Étape 5 démarrée (2026-07-10)** : premier run réel lancé par l'utilisateur
+(`devaimazing run demo-todo-app --objective "..."`), deux bugs réels trouvés et corrigés
+avant qu'il aille au bout :
+
+1. **`DEVAIMAZING_PROJECT` non propagée** (bug de code, corrigé commit `f5a9c1f`) :
+   chaque node appelle `StudioConfig.from_env()` en interne, qui lit
+   `DEVAIMAZING_PROJECT` depuis `os.environ` — mais `cli.py::_load_config()` construisait
+   une config pour l'usage de la commande CLI elle-même sans jamais exporter la variable
+   dans l'environnement du process. Le node `pm` levait `ValueError` dès sa première
+   activation. Fix : `_export_project_env()` appelée en tête de `_run_async`/
+   `_resume_async`, avant tout appel à `build_graph`/`ainvoke`. Test de régression
+   vérifié rouge sans le correctif avant d'être committé (règle du CLAUDE.md du dépôt).
+2. **Environnement, pas du code — `.venv` sous iCloud Drive** : ce dépôt vit sous
+   `~/Library/Mobile Documents/com~apple~CloudDocs/...`. Un `.venv` créé *dans* le dépôt
+   (`uv sync` par défaut) subit la synchronisation iCloud en tâche de fond sur des
+   milliers de petits fichiers/symlinks, causant des échecs intermittents
+   `ModuleNotFoundError: No module named 'studio'` sur l'installation editable — pas
+   reproductible à chaque appel (le `.pth` d'installation editable, pourtant
+   octet-pour-octet identique à une copie qui fonctionnait, échouait sporadiquement à
+   être pris en compte). Diagnostiqué par élimination (fichier .pth minimal de test hors
+   nom original fonctionnait, le fichier réel non, de façon intermittente ; `brctl
+   status` a confirmé une synchronisation active au moment des échecs). Fix : `.venv`
+   recréé hors du dépôt, à `~/.venvs/devaimazing/` — stable sur 5+ appels consécutifs
+   depuis plusieurs répertoires après la correction. `README.md` mis à jour en
+   conséquence (installation hors du dépôt, alias `devaimazing=~/.venvs/devaimazing/bin/
+   devaimazing`).
+
+Run relancé après ces deux corrections — en cours, résultat pas encore connu.
 
 **Décision prise (2026-07-10, hors code)** : la mise en production de devaimazing
 lui-même devra être conteneurisée Podman, cohérent avec le reste de l'infra prod (voir
