@@ -5,11 +5,14 @@ Stockage : SQLite (metrics.db)
 Export : Prometheus (prometheus_client)
 """
 
+import sqlite3
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import aiosqlite
 from prometheus_client import Counter, Histogram, Gauge
 
 
@@ -45,6 +48,25 @@ OLLAMA_LATENCY = Histogram(
     buckets=[1, 2, 5, 10, 30, 60, 120]
 )
 
+_CREATE_TASKS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS tasks (
+    task_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    card_id TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    phase INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    tokens_prompt INTEGER NOT NULL,
+    tokens_completion INTEGER NOT NULL,
+    llm_duration_ms INTEGER NOT NULL,
+    total_duration_ms INTEGER NOT NULL,
+    claude_code_calls INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    iteration INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+)
+"""
+
 
 @dataclass
 class TaskMetrics:
@@ -68,7 +90,7 @@ class TaskMetrics:
 class MetricsCollector:
     """
     Collecte les métriques par tâche, fiche et run.
-    
+
     Persiste dans metrics.db et exporte vers Prometheus.
     """
 
@@ -76,8 +98,17 @@ class MetricsCollector:
         """
         Args:
             db_path: Chemin vers metrics.db.
+
+        Side effects:
+            Crée le répertoire parent de db_path si nécessaire, et la table
+            `tasks` si elle n'existe pas déjà (schéma initialisé de façon
+            synchrone — opération rapide, unique par processus).
         """
-        ...
+        self._db_path = db_path
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(str(self._db_path)) as conn:
+            conn.execute(_CREATE_TASKS_TABLE_SQL)
+            conn.commit()
 
     async def record_task(self, metrics: TaskMetrics) -> None:
         """
@@ -87,9 +118,40 @@ class MetricsCollector:
             metrics: Métriques de la tâche complétée.
 
         Side effects:
-            Insert dans metrics.db, met à jour les compteurs Prometheus.
+            Insert (ou remplace, si task_id déjà présent) dans metrics.db,
+            met à jour les compteurs Prometheus (TOKENS_TOTAL, TASK_DURATION,
+            AGENT_ITERATIONS).
         """
-        ...
+        async with aiosqlite.connect(str(self._db_path)) as conn:
+            await conn.execute(
+                """
+                INSERT OR REPLACE INTO tasks (
+                    task_id, run_id, card_id, agent, phase, model,
+                    tokens_prompt, tokens_completion, llm_duration_ms,
+                    total_duration_ms, claude_code_calls, status, iteration,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    metrics.task_id, metrics.run_id, metrics.card_id, metrics.agent,
+                    metrics.phase, metrics.model, metrics.tokens_prompt,
+                    metrics.tokens_completion, metrics.llm_duration_ms,
+                    metrics.total_duration_ms, metrics.claude_code_calls,
+                    metrics.status, metrics.iteration, metrics.created_at.isoformat(),
+                ),
+            )
+            await conn.commit()
+
+        TOKENS_TOTAL.labels(agent=metrics.agent, model=metrics.model, type="prompt").inc(
+            metrics.tokens_prompt
+        )
+        TOKENS_TOTAL.labels(agent=metrics.agent, model=metrics.model, type="completion").inc(
+            metrics.tokens_completion
+        )
+        TASK_DURATION.labels(agent=metrics.agent, phase=str(metrics.phase)).observe(
+            metrics.total_duration_ms / 1000
+        )
+        AGENT_ITERATIONS.labels(agent=metrics.agent, status=metrics.status).inc()
 
     async def get_run_summary(self, run_id: str) -> dict:
         """
@@ -99,12 +161,50 @@ class MetricsCollector:
             run_id: Identifiant du run.
 
         Returns:
-            Dictionnaire avec tokens par type, durée, répartition par agent et phase.
+            Dictionnaire avec : run_id, task_count, tokens_prompt,
+            tokens_completion, total_duration_ms (agrégats globaux),
+            by_agent et by_phase (mêmes agrégats, ventilés par agent et par
+            phase respectivement).
 
         Raises:
-            ValueError: Si run_id inconnu.
+            ValueError: Si run_id inconnu (aucune tâche enregistrée).
         """
-        ...
+        async with aiosqlite.connect(str(self._db_path)) as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.execute("SELECT * FROM tasks WHERE run_id = ?", (run_id,))
+            rows = await cursor.fetchall()
+
+        if not rows:
+            raise ValueError(f"Run inconnu : {run_id!r}")
+
+        def _empty_bucket() -> dict:
+            return {"tokens_prompt": 0, "tokens_completion": 0, "duration_ms": 0, "task_count": 0}
+
+        by_agent: dict[str, dict] = {}
+        by_phase: dict[int, dict] = {}
+        total = _empty_bucket()
+
+        for row in rows:
+            for bucket_map, key in ((by_agent, row["agent"]), (by_phase, row["phase"])):
+                bucket = bucket_map.setdefault(key, _empty_bucket())
+                bucket["tokens_prompt"] += row["tokens_prompt"]
+                bucket["tokens_completion"] += row["tokens_completion"]
+                bucket["duration_ms"] += row["total_duration_ms"]
+                bucket["task_count"] += 1
+            total["tokens_prompt"] += row["tokens_prompt"]
+            total["tokens_completion"] += row["tokens_completion"]
+            total["duration_ms"] += row["total_duration_ms"]
+            total["task_count"] += 1
+
+        return {
+            "run_id": run_id,
+            "task_count": total["task_count"],
+            "tokens_prompt": total["tokens_prompt"],
+            "tokens_completion": total["tokens_completion"],
+            "total_duration_ms": total["duration_ms"],
+            "by_agent": by_agent,
+            "by_phase": by_phase,
+        }
 
     async def record_system_metrics(self) -> None:
         """
@@ -112,6 +212,22 @@ class MetricsCollector:
         Appelée périodiquement pendant un run.
 
         Side effects:
-            Met à jour les gauges Prometheus système.
+            Met à jour les gauges Prometheus système (RAM_USAGE).
+
+        Notes:
+            Mesure limitée à la RSS (Resident Set Size) du process
+            devaimazing courant, via le module stdlib `resource` — pas la
+            RAM système globale du Mac mini, et pas de métrique CPU/GPU.
+            `psutil` (qui permettrait un monitoring système complet)
+            n'est pas une dépendance du projet ; à ajouter explicitement si
+            un monitoring plus complet est nécessaire (voir
+            docs/roadmap.md). OLLAMA_LATENCY n'est pas mise à jour ici :
+            elle relève de tools/ollama.py, pas de cette collecte
+            périodique.
         """
-        ...
+        import resource
+
+        max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # macOS (RUSAGE_SELF.ru_maxrss en octets) vs Linux (en kilooctets).
+        ram_gb = max_rss / (1024 ** 3) if sys.platform == "darwin" else max_rss / (1024 ** 2)
+        RAM_USAGE.set(ram_gb)

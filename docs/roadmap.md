@@ -125,6 +125,15 @@
   `nodes/test.py::_run_test_command` (test de régression ajouté aux deux). 8 tests
   ajoutés pour security.py + 1 test de régression pour test.py. **87/87 au total sur
   `runtime/tests/`.**
+- `metrics.py` est implémenté (`MetricsCollector`, `TaskMetrics`) : table SQLite `tasks`
+  (schéma créé de façon synchrone dans `__init__`, écritures/lectures async via
+  `aiosqlite`), `get_run_summary` agrège tokens/durée par agent et par phase, lève
+  `ValueError` si le run est inconnu. **Limitation documentée** :
+  `record_system_metrics` ne mesure que la RSS du process devaimazing courant (module
+  stdlib `resource`), pas la RAM système globale du Mac mini, et ne couvre ni CPU ni GPU
+  — `psutil` permettrait un monitoring complet mais n'est pas une dépendance du projet ;
+  à ajouter explicitement si nécessaire. 5 tests ajoutés. **92/92 au total sur
+  `runtime/tests/`.**
 - `examples/demo-todo-app/` n'a pas de code source (`src/` annoncé au README mais absent),
   et il n'existe pas de `config/projects/demo-todo-app.yml`. Aucune cible réelle pour un
   run de bout en bout pour l'instant.
