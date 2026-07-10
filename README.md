@@ -169,11 +169,19 @@ devaimazing/
 │   ├── agents.md                # Roles, perimetres, sequencement
 │   ├── metrics.md               # Schema metriques complet
 │   ├── llm-strategy.md          # Opus/Sonnet/Qwen : quand quoi
+│   ├── infra-topology.md        # Topologie reseau Podman
+│   ├── roadmap.md               # Feuille de route runtime
 │   └── adr/                     # Architecture Decision Records
 │       ├── 0001-stateless-agents.md
 │       ├── 0002-stub-first.md
 │       ├── 0003-sqlite-checkpointer.md
-│       └── 0004-agpl-licence.md
+│       ├── 0004-agpl-licence.md
+│       ├── 0005-langgraph.md
+│       ├── 0006-llm-strategy.md
+│       ├── 0007-branch-naming-and-incremental-commits.md
+│       ├── 0008-checklist-intention-phase1.md
+│       ├── 0009-pseudonymisation-anti-fraude.md
+│       └── 0010-quatre-piliers-non-fonctionnels-dette-justifiee.md
 ├── prompts/                     # Prompts systeme des agents
 │   ├── pm.md
 │   ├── architect.md
@@ -188,7 +196,9 @@ devaimazing/
 │   ├── non-regression.md
 │   ├── factorization.md
 │   ├── documentation.md
-│   └── stub-first.md
+│   ├── stub-first.md
+│   ├── data-privacy.md
+│   └── scalability.md
 ├── templates/                   # Squelettes de fiches generiques
 │   ├── card-root.md.template
 │   ├── card-agent.md.template
@@ -327,12 +337,14 @@ devaimazing peut piloter n'importe quel repo projet via un fichier de config :
 # config/projects/mon-projet.yml
 name: mon-projet
 repo_path: ~/code/aimazing/mon-projet/
-branch_prefix: studio/
-specs_dir: specs/
-model:
-  pm_opus: claude-opus-4-8
-  pm_sonnet: claude-sonnet-4-6
-  agents: qwen2.5:7b-instruct
+git:
+  branch_prefix: studio/
+structure:
+  specs_dir: specs/
+
+# Overrides de modeles (optionnel, herite de config/studio.yml sinon)
+# models:
+#   agents_local: qwen2.5:14b-instruct  # si assez de RAM
 ```
 
 Les projets vivent dans `~/code/aimazing/<projet>/`, au meme niveau que devaimazing. Aucun fichier projet n'est stocke dans le repo studio.
