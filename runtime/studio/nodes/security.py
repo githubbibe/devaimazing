@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any
 
 from studio.config import StudioConfig
+from studio.metrics import record_agent_result
+from studio.routing import agent_iteration_count, max_iterations_exceeded
 from studio.state import AgentResult, Phase, RunStatus, StudioState
 from studio.tools.claude_code import run_claude_code
 from studio.tools.filesystem import inject_skills, read_card, write_card
@@ -111,7 +113,9 @@ async def run(state: StudioState) -> StudioState:
         aval de l'Architecte, cohérent avec la préférence du projet pour
         les checkpoints explicites — voir ADR 0008/0010 — plutôt que de
         laisser cette décision aux seuls outils SAST, qui ne s'arrêtent pas
-        en cours de scan sur une sévérité, voir _run_sast_tool).
+        en cours de scan sur une sévérité, voir _run_sast_tool). Si l'agent
+        a déjà atteint agents.max_iterations tentatives pour cette phase :
+        aucun appel n'est fait, state.status=RunStatus.FAILED (voir Notes).
 
     Raises:
         RuntimeError: Si un outil SAST (bandit, semgrep) produit une sortie
@@ -162,9 +166,31 @@ async def run(state: StudioState) -> StudioState:
         jamais atteint avec la configuration actuelle de config/studio.yml.
         Schémas vérifiés contre une exécution réelle des deux outils
         (2026-07-10), pas seulement déduits de leur documentation.
+
+        Si un humain reprend le run (voir cli.py resume) sans corriger les
+        findings bloquants, ce node serait ré-invoqué et pourrait boucler
+        indéfiniment sur les mêmes findings : agents.max_iterations
+        (config/studio.yml) s'applique aussi ici, comme filet de sécurité
+        (voir studio.routing.max_iterations_exceeded). Chaque tentative est
+        enregistrée via studio.metrics.record_agent_result.
     """
     config = StudioConfig.from_env()
     role = state.agent_sequence[state.current_agent_index]
+
+    if max_iterations_exceeded(state, config, role):
+        max_iterations = config.get("agents", {}).get("max_iterations", 3)
+        return {
+            "status": RunStatus.FAILED,
+            "requires_manual_intervention": True,
+            "intervention_reason": (
+                f"Agent {role!r} a atteint la limite de {max_iterations} itérations "
+                f"en phase {state.current_phase.name} sans succès."
+            ),
+            "failed_agents": (
+                state.failed_agents if role in state.failed_agents
+                else state.failed_agents + [role]
+            ),
+        }
 
     card_path = config.repo_path / state.agent_cards[role]
     card_content = await read_card(card_path)
@@ -217,9 +243,7 @@ async def run(state: StudioState) -> StudioState:
     )
 
     usage = result.get("usage", {})
-    iteration = 1 + sum(
-        1 for r in state.agent_results if r.agent == role and r.phase == state.current_phase
-    )
+    iteration = agent_iteration_count(state, role) + 1
     agent_result = AgentResult(
         agent=role,
         phase=state.current_phase,
@@ -230,6 +254,7 @@ async def run(state: StudioState) -> StudioState:
         tokens_completion=usage.get("output_tokens", 0),
         duration_ms=result.get("duration_ms", 0),
     )
+    await record_agent_result(config, state, agent_result, model=config.models["agent_auditor"], claude_code_calls=1)
 
     updates: dict = {
         "agent_results": state.agent_results + [agent_result],

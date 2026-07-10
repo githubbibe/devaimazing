@@ -81,6 +81,36 @@ def is_last_agent_of_phase(state: StudioState) -> bool:
     return state.current_agent_index >= len(sequence) - 1
 
 
+def agent_iteration_count(state: StudioState, agent: str) -> int:
+    """
+    Nombre de tentatives déjà enregistrées pour cet agent à la phase
+    courante (avant la tentative en cours) — compte les entrées de
+    state.agent_results dont agent et phase correspondent.
+    """
+    return sum(1 for r in state.agent_results if r.agent == agent and r.phase == state.current_phase)
+
+
+def max_iterations_exceeded(state: StudioState, config: StudioConfig, agent: str) -> bool:
+    """
+    True si une nouvelle tentative de `agent` à la phase courante
+    dépasserait agents.max_iterations (config/studio.yml, défaut 3).
+
+    Args:
+        state: État courant, avant la tentative envisagée.
+        config: Configuration du run.
+        agent: Nom de l'agent (tel qu'écrit dans state.agent_sequence).
+
+    Returns:
+        True si agent_iteration_count(state, agent) a déjà atteint
+        max_iterations — la tentative en cours serait donc la
+        (max_iterations + 1)-ième, à refuser (voir docs/workflow.md,
+        section Boucle de feedback : "Si N échoue après 3 itérations, la
+        fiche est marquée status: failed").
+    """
+    max_iterations = config.get("agents", {}).get("max_iterations", 3)
+    return agent_iteration_count(state, agent) >= max_iterations
+
+
 def should_checkpoint(state: StudioState) -> bool:
     """
     Détermine si un checkpoint humain est nécessaire pour la phase courante.

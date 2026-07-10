@@ -163,3 +163,39 @@ async def test_run_missing_branch_name_raises_value_error(repo: Path):
 
     with pytest.raises(ValueError):
         await closer_node.run(state)
+
+
+async def test_run_records_own_metrics_and_includes_summary_in_notification(
+    monkeypatch: pytest.MonkeyPatch, repo: Path, tmp_path: Path
+):
+    from studio.metrics import MetricsCollector, TaskMetrics
+    from datetime import datetime, timezone
+
+    async def fake_merge_run_branch(repo_path, branch_name, target_branch="develop"):
+        return "mergehash123"
+
+    monkeypatch.setattr(closer_node, "merge_run_branch", fake_merge_run_branch)
+
+    # Simule une tâche déjà enregistrée par un node producteur en amont.
+    collector = MetricsCollector(tmp_path / "metrics.db")
+    await collector.record_task(TaskMetrics(
+        task_id="t1", run_id="run-042", card_id="c1", agent="back", phase=4,
+        model="qwen2.5:7b-instruct", tokens_prompt=10, tokens_completion=5,
+        llm_duration_ms=100, total_duration_ms=100, claude_code_calls=0,
+        status="success", iteration=1, created_at=datetime(2026, 7, 10, tzinfo=timezone.utc),
+    ))
+
+    notified = []
+
+    async def fake_notify(config, message):
+        notified.append(message)
+
+    monkeypatch.setattr(closer_node, "_notify", fake_notify)
+
+    await closer_node.run(_base_state())
+
+    assert "1 tâches" in notified[0]
+    assert "15 tokens" in notified[0]
+
+    summary = await collector.get_run_summary("run-042")
+    assert summary["by_agent"]["closer"]["task_count"] == 1

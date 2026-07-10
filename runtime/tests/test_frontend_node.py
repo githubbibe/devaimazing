@@ -25,6 +25,8 @@ def _env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _write_yaml(config_dir / "studio.yml", {
         "models": {"agents_local": "qwen2.5:7b-instruct"},
         "ollama": {"base_url": "http://localhost:11434", "timeout_seconds": 120},
+        "metrics": {"db_path": str(tmp_path / "metrics.db")},
+        "agents": {"max_iterations": 3},
     })
     _write_yaml(config_dir / "projects" / "demo.yml", {"repo_path": str(repo)})
     monkeypatch.setenv("DEVAIMAZING_PROJECT", "demo")
@@ -160,3 +162,65 @@ async def test_frontend_no_file_blocks_appends_feedback_and_waits_for_human(monk
     assert updates["status"] == RunStatus.WAITING_HUMAN
     assert updates["awaiting_human_validation"] is True
     assert updates["agent_results"][0].status == "feedback_sent"
+
+
+async def test_frontend_max_iterations_exceeded_fails_without_calling_ollama(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def fail_run_ollama(**kwargs):
+        raise AssertionError("run_ollama ne doit pas être appelé au-delà de max_iterations")
+
+    monkeypatch.setattr(frontend_node, "run_ollama", fail_run_ollama)
+
+    prior_attempts = [
+        AgentResult(agent="front", phase=Phase.STUBS, status="feedback_sent", iteration=i + 1)
+        for i in range(3)
+    ]
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back", "front"],
+        current_agent_index=1,
+        agent_cards={"front": "specs/run-042/front.md"},
+        agent_results=prior_attempts,
+    )
+
+    updates = await frontend_node.run(state)
+
+    assert updates["status"] == RunStatus.FAILED
+    assert updates["requires_manual_intervention"] is True
+    assert "front" in updates["failed_agents"]
+
+
+async def test_frontend_records_metrics_on_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    async def fake_read_card(path):
+        return "fiche front"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(FILE_BLOCK)
+
+    async def fake_write_card(path, content):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(frontend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(frontend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(frontend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(frontend_node, "commit_as_agent", fake_commit_as_agent)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back", "front"],
+        current_agent_index=1,
+        agent_cards={"front": "specs/run-042/front.md"},
+    )
+
+    await frontend_node.run(state)
+
+    from studio.metrics import MetricsCollector
+    collector = MetricsCollector(tmp_path / "metrics.db")
+    summary = await collector.get_run_summary("run-042")
+    assert summary["by_agent"]["front"]["task_count"] == 1

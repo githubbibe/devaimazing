@@ -31,6 +31,8 @@ def _configure_env(tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch, 
     _write_yaml(config_dir / "studio.yml", {
         "models": {"agents_local": "qwen2.5:7b-instruct"},
         "ollama": {"base_url": "http://localhost:11434", "timeout_seconds": 120},
+        "metrics": {"db_path": str(tmp_path / "metrics.db")},
+        "agents": {"max_iterations": 3},
     })
     project_data = {"repo_path": str(repo)}
     if test_command is not None:
@@ -185,6 +187,60 @@ async def test_test_node_no_file_blocks_appends_feedback(
     assert updates["agent_results"][0].status == "feedback_sent"
     assert updates["status"] == RunStatus.WAITING_HUMAN
     assert feedback_calls[0][0] == "test"
+
+
+async def test_test_node_max_iterations_exceeded_fails_without_calling_ollama(
+    tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _configure_env(tmp_path, repo, monkeypatch, test_command=None)
+
+    async def fail_run_ollama(**kwargs):
+        raise AssertionError("run_ollama ne doit pas être appelé au-delà de max_iterations")
+
+    monkeypatch.setattr(test_node, "run_ollama", fail_run_ollama)
+
+    prior_attempts = [
+        AgentResult(agent="test", phase=Phase.TESTS, status="error", iteration=i + 1)
+        for i in range(3)
+    ]
+    state = _base_state(repo)
+    state.agent_results = prior_attempts
+
+    updates = await test_node.run(state)
+
+    assert updates["status"] == RunStatus.FAILED
+    assert updates["requires_manual_intervention"] is True
+    assert "test" in updates["failed_agents"]
+
+
+async def test_test_node_records_metrics_on_success(
+    tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _configure_env(tmp_path, repo, monkeypatch, test_command=None)
+
+    async def fake_read_card(path):
+        return "fiche test"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(FILE_BLOCK)
+
+    async def fake_write_card(path, content):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(test_node, "read_card", fake_read_card)
+    monkeypatch.setattr(test_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(test_node, "write_card", fake_write_card)
+    monkeypatch.setattr(test_node, "commit_as_agent", fake_commit_as_agent)
+
+    await test_node.run(_base_state(repo))
+
+    from studio.metrics import MetricsCollector
+    collector = MetricsCollector(tmp_path / "metrics.db")
+    summary = await collector.get_run_summary("run-042")
+    assert summary["by_agent"]["test"]["task_count"] == 1
 
 
 async def test_run_test_command_reports_success_and_failure(tmp_path: Path):

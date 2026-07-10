@@ -34,6 +34,7 @@ def _env(tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch):
         "claude_code": {"timeout_seconds": 300, "output_format": "json"},
         "structure": {"specs_dir": "specs/"},
         "git": {"base_branch": "develop"},
+        "metrics": {"db_path": str(tmp_path / "metrics.db")},
     })
     _write_yaml(config_dir / "projects" / "demo.yml", {"repo_path": str(repo)})
     monkeypatch.setenv("DEVAIMAZING_PROJECT", "demo")
@@ -74,6 +75,30 @@ async def test_cadrage_question_then_validated(monkeypatch: pytest.MonkeyPatch, 
     assert updates["card_root_path"] == "specs/run-042/card-root.md"
     assert (repo / "specs" / "run-042" / "card-root.md").read_text(encoding="utf-8") == VALID_FICHE.strip()
     assert updates["total_tokens_opus"] == 60  # 2 tours x (10+20)
+
+
+async def test_cadrage_records_metrics_with_total_claude_code_calls(
+    monkeypatch: pytest.MonkeyPatch, repo: Path, tmp_path: Path
+):
+    responses = [
+        _fake_claude_result("QUESTION: quel est le nom de la feature ?"),
+        _fake_claude_result(f"FICHE_VALIDEE:\n{VALID_FICHE}"),
+    ]
+
+    async def fake_run_claude_code(**kwargs):
+        return responses.pop(0)
+
+    inputs = iter(["ajout-panier", "oui"])
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
+
+    state = StudioState(run_id="run-042", objective_raw="x", current_phase=Phase.CADRAGE)
+    await pm_node.run(state)
+
+    from studio.metrics import MetricsCollector
+    collector = MetricsCollector(tmp_path / "metrics.db")
+    summary = await collector.get_run_summary("run-042")
+    assert summary["by_agent"]["pm"]["task_count"] == 1
 
 
 async def test_cadrage_rejection_loops_again(monkeypatch: pytest.MonkeyPatch, repo: Path):
@@ -180,6 +205,7 @@ async def test_fiches_first_pass_with_checkpoint_stops_before_branch(
         "claude_code": {"timeout_seconds": 300, "output_format": "json"},
         "structure": {"specs_dir": "specs/"},
         "git": {"base_branch": "develop"},
+        "metrics": {"db_path": str(tmp_path / "metrics.db")},
     })
     _write_yaml(config_dir / "projects" / "demo.yml", {"repo_path": str(repo)})
     monkeypatch.setenv("DEVAIMAZING_CONFIG_DIR", str(config_dir))

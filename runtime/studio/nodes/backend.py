@@ -21,7 +21,13 @@ state.agent_sequence, pas par un node séparé.
 from pathlib import Path
 
 from studio.config import StudioConfig
-from studio.routing import NEXT_PHASE_AFTER, is_last_agent_of_phase
+from studio.metrics import record_agent_result
+from studio.routing import (
+    NEXT_PHASE_AFTER,
+    agent_iteration_count,
+    is_last_agent_of_phase,
+    max_iterations_exceeded,
+)
 from studio.state import AgentResult, Phase, RunStatus, StudioState
 from studio.tools.filesystem import (
     append_feedback,
@@ -69,6 +75,13 @@ async def run(state: StudioState) -> StudioState:
         state.awaiting_human_validation=True (un blocage auto-détecté
         remonte à l'humain, pas de progression silencieuse).
 
+        Si l'agent a déjà atteint agents.max_iterations tentatives pour
+        cette phase (voir studio.routing.max_iterations_exceeded) : aucun
+        appel Ollama n'est fait, state.status=RunStatus.FAILED,
+        state.requires_manual_intervention=True,
+        state.intervention_reason renseigné, l'agent est ajouté à
+        state.failed_agents.
+
     Raises:
         RuntimeError: Si l'appel Ollama échoue après agents.max_iterations
             tentatives (config/studio.yml) — propagé tel quel depuis
@@ -105,15 +118,33 @@ async def run(state: StudioState) -> StudioState:
 
     Notes:
         Après agents.max_iterations échecs consécutifs (3 par défaut), la
-        fiche est marquée status: failed et le run s'arrête avec une
-        notification — pas de retry silencieux au-delà de cette limite
-        (docs/workflow.md, section Boucle de feedback). Cette limite N'EST
-        PAS encore appliquée par ce node (compteur d'itération informatif
-        uniquement sur AgentResult.iteration) : à trancher explicitement
-        avant un run de bout en bout, voir docs/roadmap.md.
+        fiche est marquée status: failed et le run s'arrête — pas de retry
+        silencieux au-delà de cette limite (docs/workflow.md, section
+        Boucle de feedback ; limite appliquée via
+        studio.routing.max_iterations_exceeded, voir docs/roadmap.md pour
+        la décision). La notification ntfy correspondante n'est pas
+        câblée (pas d'outil de notification implémenté).
+
+        Chaque tentative (succès, feedback_sent, ou l'échec final) est
+        enregistrée via studio.metrics.record_agent_result.
     """
     config = StudioConfig.from_env()
     role = state.agent_sequence[state.current_agent_index]
+
+    if max_iterations_exceeded(state, config, role):
+        max_iterations = config.get("agents", {}).get("max_iterations", 3)
+        return {
+            "status": RunStatus.FAILED,
+            "requires_manual_intervention": True,
+            "intervention_reason": (
+                f"Agent {role!r} a atteint la limite de {max_iterations} itérations "
+                f"en phase {state.current_phase.name} sans succès."
+            ),
+            "failed_agents": (
+                state.failed_agents if role in state.failed_agents
+                else state.failed_agents + [role]
+            ),
+        }
 
     card_path = config.repo_path / state.agent_cards[role]
     card_content = await read_card(card_path)
@@ -137,9 +168,7 @@ async def run(state: StudioState) -> StudioState:
         timeout_seconds=ollama_config.get("timeout_seconds", 120),
     )
 
-    iteration = 1 + sum(
-        1 for r in state.agent_results if r.agent == role and r.phase == state.current_phase
-    )
+    iteration = agent_iteration_count(state, role) + 1
 
     try:
         files = parse_agent_file_blocks(result["content"])
@@ -154,6 +183,7 @@ async def run(state: StudioState) -> StudioState:
             tokens_completion=result["tokens_completion"],
             duration_ms=result["duration_ms"],
         )
+        await record_agent_result(config, state, agent_result, model=config.models["agents_local"])
         return {
             "agent_results": state.agent_results + [agent_result],
             "status": RunStatus.WAITING_HUMAN,
@@ -189,6 +219,7 @@ async def run(state: StudioState) -> StudioState:
         tokens_completion=result["tokens_completion"],
         duration_ms=result["duration_ms"],
     )
+    await record_agent_result(config, state, agent_result, model=config.models["agents_local"])
 
     updates: dict = {
         "agent_results": state.agent_results + [agent_result],

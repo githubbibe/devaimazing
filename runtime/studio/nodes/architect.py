@@ -21,7 +21,8 @@ from pathlib import Path
 from typing import Optional
 
 from studio.config import StudioConfig
-from studio.routing import PHASE_AGENT_ROLES, should_checkpoint
+from studio.metrics import record_agent_result
+from studio.routing import PHASE_AGENT_ROLES, agent_iteration_count, should_checkpoint
 from studio.state import AgentResult, Phase, RunStatus, StudioState
 from studio.tools.claude_code import run_claude_code
 from studio.tools.filesystem import (
@@ -107,21 +108,24 @@ async def _call_architect(config: StudioConfig, user_prompt: str) -> dict:
     )
 
 
-def _make_agent_result(state: StudioState, result: dict, output_files: list[str]) -> AgentResult:
+async def _make_agent_result(
+    state: StudioState, config: StudioConfig, result: dict, output_files: list[str]
+) -> AgentResult:
     usage = result.get("usage", {})
-    iteration = 1 + sum(
-        1 for r in state.agent_results if r.agent == "architect" and r.phase == state.current_phase
-    )
-    return AgentResult(
+    agent_result = AgentResult(
         agent="architect",
         phase=state.current_phase,
         status="success",
         output_files=output_files,
-        iteration=iteration,
+        iteration=agent_iteration_count(state, "architect") + 1,
         tokens_prompt=usage.get("input_tokens", 0),
         tokens_completion=usage.get("output_tokens", 0),
         duration_ms=result.get("duration_ms", 0),
     )
+    await record_agent_result(
+        config, state, agent_result, model=config.models["agent_auditor"], claude_code_calls=1
+    )
+    return agent_result
 
 
 def _with_checkpoint(state: StudioState, updates: dict) -> dict:
@@ -160,8 +164,9 @@ async def _run_audit_amont(state: StudioState, config: StudioConfig) -> dict:
     )
 
     usage = result.get("usage", {})
+    agent_result = await _make_agent_result(state, config, result, [brief_relative])
     updates: dict = {
-        "agent_results": state.agent_results + [_make_agent_result(state, result, [brief_relative])],
+        "agent_results": state.agent_results + [agent_result],
         "architect_brief_path": brief_relative,
         "current_phase": Phase.FICHES,
         "total_tokens_sonnet": (
@@ -190,8 +195,9 @@ async def _run_audit_stubs(state: StudioState, config: StudioConfig) -> dict:
     conforme, faulty_agent, feedback = _parse_audit_decision(result["content"])
 
     usage = result.get("usage", {})
+    agent_result = await _make_agent_result(state, config, result, [])
     updates: dict = {
-        "agent_results": state.agent_results + [_make_agent_result(state, result, [])],
+        "agent_results": state.agent_results + [agent_result],
         "total_tokens_sonnet": (
             state.total_tokens_sonnet + usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
         ),
@@ -241,9 +247,9 @@ async def _run_audit_aval(state: StudioState, config: StudioConfig) -> dict:
     )
 
     usage = result.get("usage", {})
+    agent_result = await _make_agent_result(state, config, result, sorted(files.keys()))
     updates: dict = {
-        "agent_results": state.agent_results
-        + [_make_agent_result(state, result, sorted(files.keys()))],
+        "agent_results": state.agent_results + [agent_result],
         "current_phase": Phase.CLOTURE,
         "total_tokens_sonnet": (
             state.total_tokens_sonnet + usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
@@ -343,6 +349,9 @@ async def run(state: StudioState) -> StudioState:
         Un seul écart traité par audit (phase 5) même si plusieurs agents
         en ont un — voir prompts/architect.md, cohérent avec le contrat
         d'origine du stub ("l'agent fautif", singulier).
+
+        Chaque activation est enregistrée via
+        studio.metrics.record_agent_result (voir _make_agent_result).
     """
     config = StudioConfig.from_env()
     handler = _HANDLERS.get(state.current_phase)

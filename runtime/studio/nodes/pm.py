@@ -21,6 +21,7 @@ import re
 from pathlib import Path
 
 from studio.config import StudioConfig
+from studio.metrics import record_agent_result
 from studio.routing import should_checkpoint
 from studio.state import AgentResult, Phase, RunStatus, StudioState
 from studio.tools.claude_code import run_claude_code
@@ -69,8 +70,10 @@ async def _run_cadrage(state: StudioState, config: StudioConfig) -> dict:
     tokens_prompt_total = 0
     tokens_completion_total = 0
     duration_total_ms = 0
+    claude_code_calls = 0
 
     while True:
+        claude_code_calls += 1
         result = await run_claude_code(
             prompt=f"{system_prompt}\n\n---\n\n" + "\n\n".join(transcript),
             model=config.models["pm_opus"],
@@ -101,6 +104,10 @@ async def _run_cadrage(state: StudioState, config: StudioConfig) -> dict:
                     tokens_prompt=tokens_prompt_total,
                     tokens_completion=tokens_completion_total,
                     duration_ms=duration_total_ms,
+                )
+                await record_agent_result(
+                    config, state, agent_result, model=config.models["pm_opus"],
+                    claude_code_calls=claude_code_calls,
                 )
                 return {
                     "agent_results": state.agent_results + [agent_result],
@@ -214,6 +221,7 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
         tokens_completion=usage.get("output_tokens", 0),
         duration_ms=result.get("duration_ms", 0),
     )
+    await record_agent_result(config, state, agent_result, model=config.models["pm_sonnet"], claude_code_calls=1)
 
     updates: dict = {
         "agent_results": state.agent_results + [agent_result],
@@ -307,6 +315,11 @@ async def run(state: StudioState) -> StudioState:
 
         La config du run (repo_path, modèles, chemins) est chargée via
         StudioConfig.from_env(), pas transmise dans StudioState.
+
+        Chaque activation menant à une écriture de fiche est enregistrée
+        via studio.metrics.record_agent_result (claude_code_calls compte
+        tous les tours du dialogue en Phase.CADRAGE, pas seulement le
+        dernier).
     """
     config = StudioConfig.from_env()
 

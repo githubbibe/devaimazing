@@ -15,6 +15,8 @@ import shlex
 from pathlib import Path
 
 from studio.config import StudioConfig
+from studio.metrics import record_agent_result
+from studio.routing import agent_iteration_count, max_iterations_exceeded
 from studio.state import AgentResult, Phase, RunStatus, StudioState
 from studio.tools.filesystem import (
     append_feedback,
@@ -135,9 +137,30 @@ async def run(state: StudioState) -> StudioState:
         automatique — la correction implique potentiellement Back ou
         Front, hors périmètre de l'agent Test (docs/agents.md, Règles de
         périmètre).
+
+        Si l'agent a déjà atteint agents.max_iterations tentatives pour
+        cette phase (voir studio.routing.max_iterations_exceeded) : aucun
+        appel Ollama n'est fait, state.status=RunStatus.FAILED (voir
+        Returns). Chaque tentative est enregistrée via
+        studio.metrics.record_agent_result.
     """
     config = StudioConfig.from_env()
     role = state.agent_sequence[state.current_agent_index]
+
+    if max_iterations_exceeded(state, config, role):
+        max_iterations = config.get("agents", {}).get("max_iterations", 3)
+        return {
+            "status": RunStatus.FAILED,
+            "requires_manual_intervention": True,
+            "intervention_reason": (
+                f"Agent {role!r} a atteint la limite de {max_iterations} itérations "
+                f"en phase {state.current_phase.name} sans succès."
+            ),
+            "failed_agents": (
+                state.failed_agents if role in state.failed_agents
+                else state.failed_agents + [role]
+            ),
+        }
 
     card_path = config.repo_path / state.agent_cards[role]
     card_content = await read_card(card_path)
@@ -158,9 +181,7 @@ async def run(state: StudioState) -> StudioState:
     )
     tokens_used = result["tokens_prompt"] + result["tokens_completion"]
 
-    iteration = 1 + sum(
-        1 for r in state.agent_results if r.agent == role and r.phase == state.current_phase
-    )
+    iteration = agent_iteration_count(state, role) + 1
 
     try:
         files = parse_agent_file_blocks(result["content"])
@@ -175,6 +196,7 @@ async def run(state: StudioState) -> StudioState:
             tokens_completion=result["tokens_completion"],
             duration_ms=result["duration_ms"],
         )
+        await record_agent_result(config, state, agent_result, model=config.models["agents_local"])
         return {
             "agent_results": state.agent_results + [agent_result],
             "status": RunStatus.WAITING_HUMAN,
@@ -210,6 +232,7 @@ async def run(state: StudioState) -> StudioState:
                 card_path, agent_source=role, feedback=output[-_MAX_FEEDBACK_OUTPUT_CHARS:]
             )
             agent_result = AgentResult(status="error", **result_kwargs)
+            await record_agent_result(config, state, agent_result, model=config.models["agents_local"])
             return {
                 "agent_results": state.agent_results + [agent_result],
                 "status": RunStatus.WAITING_HUMAN,
@@ -218,6 +241,7 @@ async def run(state: StudioState) -> StudioState:
             }
 
     agent_result = AgentResult(status="success", **result_kwargs)
+    await record_agent_result(config, state, agent_result, model=config.models["agents_local"])
     return {
         "agent_results": state.agent_results + [agent_result],
         "total_tokens_ollama": state.total_tokens_ollama + tokens_used,

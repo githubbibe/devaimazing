@@ -12,7 +12,7 @@ import pytest
 import yaml
 
 import studio.nodes.security as security_node
-from studio.state import Phase, RunStatus, StudioState
+from studio.state import AgentResult, Phase, RunStatus, StudioState
 
 
 def _write_yaml(path: Path, data: dict) -> None:
@@ -42,6 +42,8 @@ def _env(tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch):
         },
         "claude_code": {"timeout_seconds": 300, "output_format": "json"},
         "structure": {"specs_dir": "specs/"},
+        "metrics": {"db_path": str(tmp_path / "metrics.db")},
+        "agents": {"max_iterations": 3},
     })
     _write_yaml(config_dir / "projects" / "demo.yml", {"repo_path": str(repo)})
     monkeypatch.setenv("DEVAIMAZING_PROJECT", "demo")
@@ -169,6 +171,58 @@ async def test_security_semgrep_error_severity_normalizes_to_high(
     updates = await security_node.run(_base_state())
 
     assert updates["status"] == RunStatus.WAITING_HUMAN
+
+
+async def test_security_max_iterations_exceeded_fails_without_calling_claude_code(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    async def fail_run_claude_code(**kwargs):
+        raise AssertionError("run_claude_code ne doit pas être appelé au-delà de max_iterations")
+
+    monkeypatch.setattr(security_node, "run_claude_code", fail_run_claude_code)
+
+    prior_attempts = [
+        AgentResult(agent="secu", phase=Phase.SECURITE, status="success", iteration=i + 1)
+        for i in range(3)
+    ]
+    state = _base_state()
+    state.agent_results = prior_attempts
+
+    updates = await security_node.run(state)
+
+    assert updates["status"] == RunStatus.FAILED
+    assert updates["requires_manual_intervention"] is True
+    assert "secu" in updates["failed_agents"]
+
+
+async def test_security_records_metrics_on_success(monkeypatch: pytest.MonkeyPatch, repo: Path, tmp_path: Path):
+    async def fake_read_card(path):
+        return "fiche secu"
+
+    async def fake_run_sast_tool(command, target_dir):
+        return {"results": [{"issue_severity": "LOW"}]}
+
+    async def fake_run_claude_code(**kwargs):
+        return _fake_claude_result()
+
+    async def fake_write_card(path, content):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(security_node, "read_card", fake_read_card)
+    monkeypatch.setattr(security_node, "_run_sast_tool", fake_run_sast_tool)
+    monkeypatch.setattr(security_node, "run_claude_code", fake_run_claude_code)
+    monkeypatch.setattr(security_node, "write_card", fake_write_card)
+    monkeypatch.setattr(security_node, "commit_as_agent", fake_commit_as_agent)
+
+    await security_node.run(_base_state())
+
+    from studio.metrics import MetricsCollector
+    collector = MetricsCollector(tmp_path / "metrics.db")
+    summary = await collector.get_run_summary("run-042")
+    assert summary["by_agent"]["secu"]["task_count"] == 1
 
 
 def test_normalized_severities_bandit():

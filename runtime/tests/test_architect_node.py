@@ -41,6 +41,8 @@ def _env(tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch):
         },
         "claude_code": {"timeout_seconds": 300, "output_format": "json"},
         "structure": {"specs_dir": "specs/"},
+        "metrics": {"db_path": str(tmp_path / "metrics.db")},
+        "agents": {"max_iterations": 3},
     })
     _write_yaml(config_dir / "projects" / "demo.yml", {"repo_path": str(repo)})
     monkeypatch.setenv("DEVAIMAZING_PROJECT", "demo")
@@ -100,6 +102,7 @@ async def test_audit_amont_with_checkpoint_enabled_waits_for_human(
         "checkpoints": {"phase_2_audit_amont": True},
         "claude_code": {"timeout_seconds": 300, "output_format": "json"},
         "structure": {"specs_dir": "specs/"},
+        "metrics": {"db_path": str(tmp_path / "metrics.db")},
     })
     _write_yaml(config_dir / "projects" / "demo.yml", {"repo_path": str(repo)})
     monkeypatch.setenv("DEVAIMAZING_CONFIG_DIR", str(config_dir))
@@ -215,6 +218,24 @@ async def test_unknown_phase_raises_key_error(repo: Path):
     state = _base_state(current_phase=Phase.SECURITE)
     with pytest.raises(KeyError):
         await architect_node.run(state)
+
+
+async def test_audit_amont_records_metrics(monkeypatch: pytest.MonkeyPatch, repo: Path, tmp_path: Path):
+    async def fake_run_claude_code(**kwargs):
+        return _fake_claude_result("# Brief")
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(architect_node, "run_claude_code", fake_run_claude_code)
+    monkeypatch.setattr(architect_node, "commit_as_agent", fake_commit_as_agent)
+
+    await architect_node.run(_base_state(current_phase=Phase.AUDIT_AMONT))
+
+    from studio.metrics import MetricsCollector
+    collector = MetricsCollector(tmp_path / "metrics.db")
+    summary = await collector.get_run_summary("run-042")
+    assert summary["by_agent"]["architect"]["task_count"] == 1
 
 
 # --- Helpers purs ---

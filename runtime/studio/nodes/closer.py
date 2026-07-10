@@ -13,7 +13,7 @@ from pathlib import Path
 import httpx
 
 from studio.config import StudioConfig
-from studio.metrics import MetricsCollector
+from studio.metrics import MetricsCollector, record_agent_result
 from studio.state import AgentResult, RunStatus, StudioState
 from studio.tools.filesystem import read_card, write_card
 from studio.tools.git import merge_run_branch
@@ -121,10 +121,10 @@ async def run(state: StudioState) -> StudioState:
         - Si le merge réussit : met à jour project-map.md du projet cible
           (voir _update_project_map) — nouveaux fichiers produits par le
           run, ligne d'historique.
-        - Consulte MetricsCollector.get_run_summary(state.run_id) — best
-          effort, un run sans tâche enregistrée (aucun node n'appelle
-          encore MetricsCollector.record_task, voir Notes) n'est pas
-          bloquant.
+        - Consulte MetricsCollector.get_run_summary(state.run_id) et inclut
+          le nombre de tâches et le total de tokens dans la notification
+          finale — best effort, un run sans tâche enregistrée n'est pas
+          bloquant (ex. run minimal en test).
         - Envoie une notification ntfy ("✅ ... terminé" ou, en cas
           d'échec de merge, un message d'attente de validation) — no-op si
           le topic est toujours le placeholder par défaut.
@@ -144,14 +144,9 @@ async def run(state: StudioState) -> StudioState:
         Ce node n'appelle jamais tools.claude_code.run_claude_code ni
         tools.ollama.run_ollama — toute la logique est déterministe (voir
         docs/roadmap.md, étape 1 : "closer en phase 10 est Python pur,
-        sans appel LLM").
-
-        **Point non câblé** : aucun des nodes déjà implémentés (backend,
-        frontend, test, security) n'appelle
-        MetricsCollector.record_task — metrics.db est donc vide pour un run
-        réel tant que ce câblage n'est pas ajouté à chaque node. L'appel à
-        get_run_summary ici est best-effort (ValueError absorbée) en
-        attendant.
+        sans appel LLM"). Sa propre activation est tout de même enregistrée
+        via studio.metrics.record_agent_result (model="n/a", zéro token)
+        pour que metrics.db reflète l'intégralité du run, closer compris.
     """
     config = StudioConfig.from_env()
 
@@ -181,13 +176,17 @@ async def run(state: StudioState) -> StudioState:
 
     metrics = MetricsCollector(config.metrics_db_path)
     try:
-        await metrics.get_run_summary(state.run_id)
+        summary = await metrics.get_run_summary(state.run_id)
+        tokens_total = summary["tokens_prompt"] + summary["tokens_completion"]
+        summary_suffix = f" ({summary['task_count']} tâches, {tokens_total} tokens)"
     except ValueError:
-        pass  # Aucune tâche enregistrée pour ce run — pas bloquant, voir Notes.
+        # Aucune tâche enregistrée pour ce run (ex. run minimal en test) — pas bloquant.
+        summary_suffix = ""
 
-    await _notify(config, f"✅ {state.project_name} terminé")
+    await _notify(config, f"✅ {state.project_name} terminé{summary_suffix}")
 
     agent_result = AgentResult(agent="closer", phase=state.current_phase, status="success")
+    await record_agent_result(config, state, agent_result, model="n/a")
 
     return {
         "agent_results": state.agent_results + [agent_result],

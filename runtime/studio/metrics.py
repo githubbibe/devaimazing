@@ -8,12 +8,15 @@ Export : Prometheus (prometheus_client)
 import sqlite3
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import aiosqlite
 from prometheus_client import Counter, Histogram, Gauge
+
+from studio.config import StudioConfig
+from studio.state import AgentResult, StudioState
 
 
 # Métriques Prometheus
@@ -231,3 +234,55 @@ class MetricsCollector:
         # macOS (RUSAGE_SELF.ru_maxrss en octets) vs Linux (en kilooctets).
         ram_gb = max_rss / (1024 ** 3) if sys.platform == "darwin" else max_rss / (1024 ** 2)
         RAM_USAGE.set(ram_gb)
+
+
+async def record_agent_result(
+    config: StudioConfig,
+    state: StudioState,
+    agent_result: AgentResult,
+    model: str,
+    claude_code_calls: int = 0,
+) -> None:
+    """
+    Construit un TaskMetrics depuis un AgentResult déjà produit par un node
+    et l'enregistre — évite de dupliquer cette construction dans chaque
+    node producteur/auditeur.
+
+    Args:
+        config: Configuration du run (fournit metrics_db_path).
+        state: État courant AVANT la mise à jour retournée par le node
+            (utilisé pour state.run_id et state.agent_cards).
+        agent_result: Résultat déjà construit par le node (agent, phase,
+            status, tokens, duration, iteration, output_files).
+        model: Identifiant du modèle utilisé pour cette tâche.
+        claude_code_calls: Nombre d'appels Claude Code CLI effectués pour
+            cette tâche (0 pour les agents sur Ollama).
+
+    Side effects:
+        Insert dans metrics.db, met à jour les compteurs Prometheus (voir
+        MetricsCollector.record_task).
+
+    Notes:
+        task_id est construit à partir de run_id/agent/phase/iteration —
+        stable et unique pour une même tentative, ce qui permet un
+        INSERT OR REPLACE idempotent si un node est rejoué (voir
+        MetricsCollector.record_task).
+    """
+    collector = MetricsCollector(config.metrics_db_path)
+    task_id = f"{state.run_id}-{agent_result.agent}-{agent_result.phase.value}-{agent_result.iteration}"
+    await collector.record_task(TaskMetrics(
+        task_id=task_id,
+        run_id=state.run_id,
+        card_id=state.agent_cards.get(agent_result.agent, agent_result.agent),
+        agent=agent_result.agent,
+        phase=agent_result.phase.value,
+        model=model,
+        tokens_prompt=agent_result.tokens_prompt,
+        tokens_completion=agent_result.tokens_completion,
+        llm_duration_ms=agent_result.duration_ms,
+        total_duration_ms=agent_result.duration_ms,
+        claude_code_calls=claude_code_calls,
+        status=agent_result.status,
+        iteration=agent_result.iteration,
+        created_at=datetime.now(timezone.utc),
+    ))

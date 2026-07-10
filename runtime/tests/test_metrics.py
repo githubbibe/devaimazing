@@ -8,8 +8,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+import yaml
 
-from studio.metrics import MetricsCollector, TaskMetrics
+from studio.config import StudioConfig
+from studio.metrics import MetricsCollector, TaskMetrics, record_agent_result
+from studio.state import AgentResult, Phase, StudioState
 
 
 def _make_task(**overrides) -> TaskMetrics:
@@ -96,3 +99,28 @@ async def test_record_system_metrics_does_not_raise(tmp_path: Path):
     collector = MetricsCollector(tmp_path / "metrics.db")
 
     await collector.record_system_metrics()
+
+
+def _write_yaml(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+
+async def test_record_agent_result_writes_task_matching_agent_result(tmp_path: Path):
+    config_dir = tmp_path / "config"
+    _write_yaml(config_dir / "studio.yml", {"metrics": {"db_path": str(tmp_path / "metrics.db")}})
+    _write_yaml(config_dir / "projects" / "demo.yml", {"repo_path": str(tmp_path / "project")})
+    config = StudioConfig(project_name="demo", config_dir=config_dir)
+
+    state = StudioState(run_id="run-042", agent_cards={"back": "specs/run-042/back.md"})
+    agent_result = AgentResult(
+        agent="back", phase=Phase.STUBS, status="success", iteration=1,
+        tokens_prompt=10, tokens_completion=5, duration_ms=200,
+    )
+
+    await record_agent_result(config, state, agent_result, model="qwen2.5:7b-instruct")
+
+    collector = MetricsCollector(config.metrics_db_path)
+    summary = await collector.get_run_summary("run-042")
+    assert summary["task_count"] == 1
+    assert summary["by_agent"]["back"]["tokens_prompt"] == 10
