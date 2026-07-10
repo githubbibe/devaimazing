@@ -69,6 +69,41 @@
   checkpoints, construction structurelle du graphe compilé), tous verts.
   **`tools/*.py` + `graph.py` : étape 2 terminée pour l'infrastructure.**
   57/57 au total sur `runtime/tests/`.
+- Extrait `studio/routing.py` (AGENT_TO_NODE, PHASE_NODE, PHASE_AGENT_ROLES,
+  PHASE_CHECKPOINT_KEYS, NEXT_PHASE_AFTER + helpers `phase_agent_sequence`/
+  `is_last_agent_of_phase`) pour partager la logique de routage entre `graph.py` et
+  `nodes/*.py` sans import circulaire (`graph.py` importe `studio.nodes`). `graph.py`
+  refactoré pour consommer ce module, sans changement de comportement.
+- **Décision prise avec l'utilisateur** : contrat de sortie fichiers pour les agents
+  producteurs de code — `<<<DEVAIMAZING_FILE path="...">>>...<<<DEVAIMAZING_END>>>`
+  (délimiteurs distinctifs plutôt que des ``` markdown, pour éviter toute ambiguïté avec
+  du code cité en dehors d'un vrai bloc fichier). Alternative écartée : function-calling
+  Ollama (donner à Qwen de vrais outils Read/Write/Edit) — plus robuste mais nettement
+  plus de travail, reporté. Contrat documenté dans `prompts/backend.md`,
+  `prompts/frontend.md`, `prompts/test.md` (section Format de sortie). Parseur :
+  `tools/filesystem.py::parse_agent_file_blocks`.
+- `nodes/backend.py` et `nodes/frontend.py` sont implémentés : lecture fiche, appel
+  Ollama, parsing des blocs, écriture des fichiers, commit conventionnel sous l'identité
+  back/front (back-tu et front-tu commitent sous l'identité de leur agent principal, avec
+  le skill `non-regression.md` injecté en plus), avancement de
+  `current_agent_index`/`current_phase` via `studio.routing`. Si l'agent ne produit aucun
+  bloc reconnu (auto-détection de blocage) : le texte est ajouté à sa propre section
+  Feedback et le run passe en `WAITING_HUMAN` plutôt que d'échouer silencieusement.
+  **Non appliqué** : `agents.max_iterations` (limite de 3 renvois) — compteur
+  `AgentResult.iteration` informatif seulement. 14 tests ajoutés. 72/72 au total.
+- `nodes/test.py` est implémenté (génération des tests d'intégration/non-régression via
+  le même contrat que Back/Front). **Décision prise avec l'utilisateur** : la commande de
+  test est définie par projet (`config/projects/<nom>.yml`, nouvelle section
+  `test.command`, placeholder `{target_dir}`) plutôt que globalement — les stacks cibles
+  sont hétérogènes, et ça permet de tester le SI dans un environnement de développement
+  distinct de celui de devaimazing. `StudioConfig.test_command` ajouté (None si non
+  défini pour le projet — pas de commande par défaut). Si la commande est définie et
+  échoue : traité comme non-régression (feedback + `WAITING_HUMAN`). Si non définie : les
+  tests sont écrits et commités mais pas exécutés (dégradé, non bloquant). **Non câblé** :
+  la notification ntfy sur échec (pas d'outil de notification, topic toujours
+  `<PLACEHOLDER_TOPIC>`). 7 tests ajoutés (dont exécution réelle de sous-process via
+  `python3 -c`, pas de mock sur `_run_test_command` lui-même). **79/79 au total sur
+  `runtime/tests/`.**
 - `examples/demo-todo-app/` n'a pas de code source (`src/` annoncé au README mais absent),
   et il n'existe pas de `config/projects/demo-todo-app.yml`. Aucune cible réelle pour un
   run de bout en bout pour l'instant.
@@ -78,7 +113,9 @@
 1. ~~Compléter les stubs des 7 `nodes/*.py` au contrat complet~~ — fait le 2026-07-10.
 2. Implémenter dans l'ordre de dépendance : ~~`state.py`~~ (rien à faire) → ~~`config.py`~~
    → ~~`tools/filesystem.py`, `tools/git.py`, `tools/ollama.py`, `tools/claude_code.py`~~
-   → ~~`graph.py`~~ (fait le 2026-07-10) → `nodes/*.py` → `cli.py` → `metrics.py`.
+   → ~~`graph.py`~~ → ~~`nodes/backend.py`, `nodes/frontend.py`, `nodes/test.py`~~ (fait
+   le 2026-07-10) → `nodes/security.py`, `nodes/closer.py`, `nodes/architect.py`,
+   `nodes/pm.py` → `cli.py` → `metrics.py`.
 3. Remplir `runtime/tests/test_config.py` (et les futurs tests) avec de vraies assertions
    au fur et à mesure de chaque implémentation.
 4. Construire une cible minimale réelle pour `demo-todo-app` (FastAPI + React +
@@ -88,10 +125,10 @@
 
 ## Point de reprise
 
-Prochaine session : poursuivre l'étape 2 par `nodes/*.py` (implémentation des corps,
-aujourd'hui uniquement des contrats — c'est la partie la plus dense en logique métier :
-appels tools, gestion des checkpoints via should_checkpoint, boucle de feedback), sauf
-décision contraire. Le placeholder ntfy et l'état de
+Prochaine session : poursuivre `nodes/*.py` par `security.py`, `closer.py`,
+`architect.py`, `pm.py` (chacun a son propre point de conception à trancher — voir
+journal ci-dessus pour test.py/backend.py/frontend.py comme précédent), puis `cli.py` et
+`metrics.py`, sauf décision contraire. Le placeholder ntfy et l'état de
 `demo-todo-app` (étape 4) restent à trancher explicitement avant d'être traités — ne pas
 les combler par une valeur par défaut « raisonnable » sans validation humaine (cohérent
 avec le principe de l'ADR 0008).

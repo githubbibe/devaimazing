@@ -79,6 +79,27 @@ def test_config_missing_project_raises(config_dir: Path):
         StudioConfig(project_name="inconnu", config_dir=config_dir)
 
 
+def test_config_test_command_none_when_not_defined(config_dir: Path):
+    """Aucune commande de test globale par défaut : None si le projet ne la définit pas."""
+    _write_project(config_dir, "demo", {"repo_path": "~/code/demo"})
+
+    config = StudioConfig(project_name="demo", config_dir=config_dir)
+
+    assert config.test_command is None
+
+
+def test_config_test_command_from_project(config_dir: Path):
+    """La commande de test est définie par projet (config/projects/<nom>.yml)."""
+    _write_project(config_dir, "demo", {
+        "repo_path": "~/code/demo",
+        "test": {"command": "pytest {target_dir} -q"},
+    })
+
+    config = StudioConfig(project_name="demo", config_dir=config_dir)
+
+    assert config.test_command == "pytest {target_dir} -q"
+
+
 def test_config_from_env_requires_project(monkeypatch: pytest.MonkeyPatch):
     """Vérifie que from_env lève ValueError si DEVAIMAZING_PROJECT est absent."""
     monkeypatch.delenv("DEVAIMAZING_PROJECT", raising=False)

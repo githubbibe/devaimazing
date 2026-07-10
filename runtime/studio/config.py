@@ -121,6 +121,18 @@ class StudioConfig:
         """Contraintes projet transmises à l'Architecte."""
         return dict(self._raw.get("project_constraints", {}))
 
+    @property
+    def test_command(self) -> Optional[str]:
+        """
+        Commande d'exécution de la suite de tests du projet cible (phase 7,
+        voir config/projects/<nom>.yml section `test`). Contient le
+        placeholder `{target_dir}`, substitué par repo_path à l'exécution
+        (voir studio.nodes.test). None si le projet n'a pas défini cette
+        section — décision volontairement par projet, pas de commande
+        globale par défaut, les stacks cibles étant hétérogènes.
+        """
+        return self._raw.get("test", {}).get("command")
+
     def get(self, key: str, default: Any = None) -> Any:
         """Accès générique à une clé de config."""
         return self._raw.get(key, default)

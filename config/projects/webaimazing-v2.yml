@@ -30,6 +30,14 @@ reference_files:
 # models:
 #   agents_local: qwen2.5:14b-instruct  # si assez de RAM
 
+# Commande de test du projet cible (phase 7, agent Test). Placeholder
+# {target_dir} substitué par repo_path à l'exécution. Par projet (pas de
+# commande globale par défaut dans studio.yml) : permet de tester le SI
+# dans un environnement de développement distinct de celui de devaimazing,
+# et s'adapte aux stacks hétérogènes entre projets cibles.
+test:
+  command: "pytest {target_dir} -q"
+
 # Overrides de checkpoints (optionnel)
 # checkpoints:
 #   phase_9_audit_aval: false  # Désactiver après rodage
