@@ -5,11 +5,22 @@ Lecture et écriture des fiches .md, project-map, architect-map.
 Injection des skills dans les prompts.
 """
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 FEEDBACK_HEADING = "## Feedback"
 EMPTY_FEEDBACK_MARKER = "_Aucun feedback pour l'instant._"
+
+# Contrat de sortie des agents producteurs de code (Back, Front, Test — voir
+# prompts/backend.md, prompts/frontend.md, prompts/test.md, section "Format
+# de sortie"). Délimiteurs distinctifs (pas des ``` markdown standards) pour
+# éviter toute ambiguïté avec des blocs de code que l'agent citerait dans son
+# raisonnement en dehors d'un vrai bloc fichier.
+_FILE_BLOCK_PATTERN = re.compile(
+    r'<<<DEVAIMAZING_FILE path="([^"]+)">>>\n(.*?)\n<<<DEVAIMAZING_END>>>',
+    re.DOTALL,
+)
 
 
 async def read_card(card_path: Path) -> str:
@@ -116,3 +127,43 @@ async def inject_skills(base_prompt: str, skill_names: list[str], skills_dir: Pa
             raise FileNotFoundError(f"Skill introuvable : {skill_path}")
         parts.append(f"\n\n---\n\n{skill_path.read_text(encoding='utf-8')}")
     return "".join(parts)
+
+
+def parse_agent_file_blocks(text: str) -> dict[str, str]:
+    """
+    Extrait les blocs de fichiers du contrat de sortie des agents
+    producteurs de code (voir prompts/backend.md, prompts/frontend.md,
+    prompts/test.md, section "Format de sortie").
+
+    Format attendu par bloc :
+        <<<DEVAIMAZING_FILE path="chemin/relatif/fichier.py">>>
+        <contenu du fichier>
+        <<<DEVAIMAZING_END>>>
+
+    Args:
+        text: Sortie brute générée par l'agent (champ "content" du retour
+            de tools.ollama.run_ollama).
+
+    Returns:
+        Mapping chemin relatif -> contenu du fichier, dans l'ordre
+        d'apparition dans `text`. Si plusieurs blocs déclarent le même
+        chemin, le dernier l'emporte.
+
+    Raises:
+        ValueError: Si `text` ne contient aucun bloc de fichier reconnu.
+
+    Example:
+        >>> parse_agent_file_blocks(
+        ...     '<<<DEVAIMAZING_FILE path="backend/a.py">>>\\n'
+        ...     'print(1)\\n'
+        ...     '<<<DEVAIMAZING_END>>>'
+        ... )
+        {'backend/a.py': 'print(1)'}
+    """
+    matches = _FILE_BLOCK_PATTERN.findall(text)
+    if not matches:
+        raise ValueError(
+            "Aucun bloc de fichier reconnu dans la sortie de l'agent "
+            '(format attendu : <<<DEVAIMAZING_FILE path="...">>> ... <<<DEVAIMAZING_END>>>)'
+        )
+    return {path: content for path, content in matches}

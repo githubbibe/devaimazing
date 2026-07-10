@@ -15,53 +15,16 @@ from langgraph.graph.state import CompiledStateGraph
 
 from studio.config import StudioConfig
 from studio.nodes import architect, backend, closer, frontend, pm, security, test
-from studio.state import Phase, RunStatus, StudioState
+from studio.routing import (
+    AGENT_TO_NODE,
+    PHASE_AGENT_ROLES,
+    PHASE_CHECKPOINT_KEYS,
+    PHASE_NODE,
+    phase_agent_sequence,
+)
+from studio.state import RunStatus, StudioState
 
 NODE_NAMES = ["pm", "architect", "backend", "frontend", "test", "security", "closer"]
-
-# Mapping agent (tel qu'écrit dans state.agent_sequence par le PM en phase 3,
-# voir docs/workflow.md phase 3) -> node du graphe. back-tu/front-tu partagent
-# le node de leur agent principal (même identité Git, voir docs/agents.md).
-AGENT_TO_NODE = {
-    "pm": "pm",
-    "architect": "architect",
-    "back": "backend",
-    "back-tu": "backend",
-    "front": "frontend",
-    "front-tu": "frontend",
-    "test": "test",
-    "secu": "security",
-}
-
-# Node par défaut pour les phases qui ne dépendent pas de state.agent_sequence.
-PHASE_NODE = {
-    Phase.RECEPTION: "pm",
-    Phase.CADRAGE: "pm",
-    Phase.AUDIT_AMONT: "architect",
-    Phase.FICHES: "pm",
-    Phase.AUDIT_STUBS: "architect",
-    Phase.TESTS: "test",
-    Phase.SECURITE: "security",
-    Phase.AUDIT_AVAL: "architect",
-    Phase.CLOTURE: "closer",
-}
-
-# Phases où plusieurs agents s'enchaînent selon state.agent_sequence, filtré aux
-# rôles concernés par cette phase précise (voir docs/workflow.md phases 4 et 6 —
-# back-tu/front-tu/test/secu ne participent pas à la phase 4, contrairement à la 6).
-PHASE_AGENT_ROLES = {
-    Phase.STUBS: {"back", "front"},
-    Phase.IMPLEMENTATION: {"back", "back-tu", "front", "front-tu"},
-}
-
-# Checkpoint humain configurable (config/studio.yml section checkpoints) par phase.
-PHASE_CHECKPOINT_KEYS = {
-    Phase.CADRAGE: "phase_1_cadrage",
-    Phase.AUDIT_AMONT: "phase_2_audit_amont",
-    Phase.FICHES: "phase_3_fiches",
-    Phase.AUDIT_STUBS: "phase_5_audit_stubs",
-    Phase.AUDIT_AVAL: "phase_9_audit_aval",
-}
 
 
 async def build_graph(config: StudioConfig) -> CompiledStateGraph:
@@ -145,8 +108,7 @@ def router(state: StudioState) -> str:
         return END
 
     if state.current_phase in PHASE_AGENT_ROLES:
-        roles = PHASE_AGENT_ROLES[state.current_phase]
-        phase_sequence = [agent for agent in state.agent_sequence if agent in roles]
+        phase_sequence = phase_agent_sequence(state)
         if state.current_agent_index >= len(phase_sequence):
             raise ValueError(
                 f"current_agent_index ({state.current_agent_index}) hors bornes pour "

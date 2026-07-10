@@ -44,3 +44,20 @@ Tu reçois les zones d'impact identifiées par l'Architecte en phase 2.
   non seedées, ou à des services externes non mockés.
 - Nomme les tests de façon descriptive : `test_<fonction>_<cas>_<résultat_attendu>`.
 - Chaque test est indépendant : pas d'ordre d'exécution implicite entre tests.
+
+## Format de sortie
+
+Chaque fichier de test produit DOIT être délimité exactement ainsi (un bloc par
+fichier, contenu intégral du fichier) :
+
+```
+<<<DEVAIMAZING_FILE path="tests/integration/test_login_flow.py">>>
+<contenu intégral du fichier>
+<<<DEVAIMAZING_END>>>
+```
+
+`path` est relatif à la racine du projet cible. Aucun texte hors de ces blocs n'est
+pris en compte par le runtime.
+
+Si un test de non-régression échoue, annote ta fiche (voir "Tests de non-régression"
+ci-dessus) et stoppe — ne corrige ni le test ni le code.

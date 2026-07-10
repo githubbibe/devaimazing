@@ -1,0 +1,211 @@
+"""
+Tests du node Back (studio.nodes.backend).
+
+Toutes les dépendances externes (Ollama, filesystem projet cible, git) sont
+mockées : ces tests vérifient le câblage et la logique du node, pas les
+tools eux-mêmes (déjà testés séparément).
+"""
+
+from pathlib import Path
+
+import pytest
+import yaml
+
+import studio.nodes.backend as backend_node
+from studio.state import AgentResult, Phase, RunStatus, StudioState
+
+
+def _write_yaml(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+
+@pytest.fixture
+def project_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "project"
+    repo.mkdir()
+    return repo
+
+
+@pytest.fixture(autouse=True)
+def _env(tmp_path: Path, project_repo: Path, monkeypatch: pytest.MonkeyPatch):
+    config_dir = tmp_path / "config"
+    _write_yaml(config_dir / "studio.yml", {
+        "models": {"agents_local": "qwen2.5:7b-instruct"},
+        "ollama": {"base_url": "http://localhost:11434", "timeout_seconds": 120},
+    })
+    _write_yaml(config_dir / "projects" / "demo.yml", {"repo_path": str(project_repo)})
+    monkeypatch.setenv("DEVAIMAZING_PROJECT", "demo")
+    monkeypatch.setenv("DEVAIMAZING_CONFIG_DIR", str(config_dir))
+
+
+def _fake_ollama_result(content: str, tokens_prompt=5, tokens_completion=10, duration_ms=100) -> dict:
+    return {
+        "content": content,
+        "tokens_prompt": tokens_prompt,
+        "tokens_completion": tokens_completion,
+        "duration_ms": duration_ms,
+    }
+
+
+FILE_BLOCK = (
+    '<<<DEVAIMAZING_FILE path="backend/auth/endpoints.py">>>\n'
+    'def login():\n'
+    '    ...\n'
+    '<<<DEVAIMAZING_END>>>'
+)
+
+
+async def test_backend_stub_phase_writes_files_and_commits(monkeypatch: pytest.MonkeyPatch):
+    written = {}
+    committed = {}
+
+    async def fake_read_card(path):
+        return "fiche back"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(FILE_BLOCK)
+
+    async def fake_write_card(path, content):
+        written[str(path)] = content
+
+    async def fake_commit_as_agent(repo_path, agent, message, files):
+        committed.update(repo_path=repo_path, agent=agent, message=message, files=files)
+        return "abc123"
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(backend_node, "commit_as_agent", fake_commit_as_agent)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back", "front"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+    )
+
+    updates = await backend_node.run(state)
+
+    assert len(updates["agent_results"]) == 1
+    result: AgentResult = updates["agent_results"][0]
+    assert result.agent == "back"
+    assert result.status == "success"
+    assert result.output_files == ["backend/auth/endpoints.py"]
+    assert any(p.endswith("backend/auth/endpoints.py") for p in written)
+    assert committed["agent"] == "back"
+    assert committed["files"] == ["backend/auth/endpoints.py"]
+    assert updates["total_tokens_ollama"] == 15
+    # Pas le dernier agent de la phase (front n'a pas encore joué) -> avance l'index, pas la phase.
+    assert updates["current_agent_index"] == 1
+    assert "current_phase" not in updates
+
+
+async def test_backend_last_agent_of_stubs_advances_phase(monkeypatch: pytest.MonkeyPatch):
+    async def fake_read_card(path):
+        return "fiche back"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(FILE_BLOCK)
+
+    async def fake_write_card(path, content):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(backend_node, "commit_as_agent", fake_commit_as_agent)
+
+    # "back" est en dernière position de la séquence filtrée (front, back).
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["front", "back"],
+        current_agent_index=1,
+        agent_cards={"back": "specs/run-042/back.md"},
+    )
+
+    updates = await backend_node.run(state)
+
+    assert updates["current_phase"] == Phase.AUDIT_STUBS
+    assert updates["current_agent_index"] == 0
+
+
+async def test_backend_tu_role_uses_test_commit_prefix_and_extra_skill(monkeypatch: pytest.MonkeyPatch):
+    captured_skills = {}
+
+    async def fake_read_card(path):
+        return "fiche back-tu"
+
+    async def fake_inject_skills(base_prompt, skill_names, skills_dir):
+        captured_skills["names"] = skill_names
+        return base_prompt
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(FILE_BLOCK)
+
+    async def fake_write_card(path, content):
+        pass
+
+    committed = {}
+
+    async def fake_commit_as_agent(repo_path, agent, message, files):
+        committed.update(agent=agent, message=message)
+        return "abc123"
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "inject_skills", fake_inject_skills)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(backend_node, "commit_as_agent", fake_commit_as_agent)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.IMPLEMENTATION,
+        agent_sequence=["back-tu"],
+        current_agent_index=0,
+        agent_cards={"back-tu": "specs/run-042/back-tu.md"},
+    )
+
+    await backend_node.run(state)
+
+    assert "non-regression" in captured_skills["names"]
+    assert committed["agent"] == "back"  # back-tu commit sous l'identité back
+    assert committed["message"].startswith("test:")
+
+
+async def test_backend_no_file_blocks_appends_feedback_and_waits_for_human(monkeypatch: pytest.MonkeyPatch):
+    feedback_calls = []
+
+    async def fake_read_card(path):
+        return "fiche back"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result("Contradiction détectée avec le brief architecte, je m'arrête.")
+
+    async def fake_append_feedback(card_path, agent_source, feedback):
+        feedback_calls.append((agent_source, feedback))
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "append_feedback", fake_append_feedback)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back", "front"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+    )
+
+    updates = await backend_node.run(state)
+
+    assert len(feedback_calls) == 1
+    assert feedback_calls[0][0] == "back"
+    assert updates["status"] == RunStatus.WAITING_HUMAN
+    assert updates["awaiting_human_validation"] is True
+    assert updates["agent_results"][0].status == "feedback_sent"

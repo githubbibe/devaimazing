@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from studio.tools.filesystem import append_feedback, inject_skills, read_card, write_card
+from studio.tools.filesystem import (
+    append_feedback,
+    inject_skills,
+    parse_agent_file_blocks,
+    read_card,
+    write_card,
+)
 
 CARD_WITH_FEEDBACK = """# Fiche agent - back - Run run-001
 
@@ -118,3 +124,53 @@ async def test_inject_skills_missing_skill_raises(tmp_path: Path):
             skill_names=["inexistant"],
             skills_dir=skills_dir,
         )
+
+
+def test_parse_agent_file_blocks_single_file():
+    text = (
+        'Voici le fichier :\n\n'
+        '<<<DEVAIMAZING_FILE path="backend/auth/endpoints.py">>>\n'
+        'def login():\n'
+        '    ...\n'
+        '<<<DEVAIMAZING_END>>>\n'
+        '\nVoilà.'
+    )
+
+    files = parse_agent_file_blocks(text)
+
+    assert files == {"backend/auth/endpoints.py": "def login():\n    ..."}
+
+
+def test_parse_agent_file_blocks_multiple_files():
+    text = (
+        '<<<DEVAIMAZING_FILE path="backend/a.py">>>\n'
+        'contenu a\n'
+        '<<<DEVAIMAZING_END>>>\n'
+        '<<<DEVAIMAZING_FILE path="backend/b.py">>>\n'
+        'contenu b\n'
+        '<<<DEVAIMAZING_END>>>'
+    )
+
+    files = parse_agent_file_blocks(text)
+
+    assert files == {"backend/a.py": "contenu a", "backend/b.py": "contenu b"}
+
+
+def test_parse_agent_file_blocks_no_block_raises_value_error():
+    with pytest.raises(ValueError):
+        parse_agent_file_blocks("Je ne peux pas produire ce fichier, contradiction détectée.")
+
+
+def test_parse_agent_file_blocks_last_duplicate_wins():
+    text = (
+        '<<<DEVAIMAZING_FILE path="backend/a.py">>>\n'
+        'v1\n'
+        '<<<DEVAIMAZING_END>>>\n'
+        '<<<DEVAIMAZING_FILE path="backend/a.py">>>\n'
+        'v2\n'
+        '<<<DEVAIMAZING_END>>>'
+    )
+
+    files = parse_agent_file_blocks(text)
+
+    assert files == {"backend/a.py": "v2"}

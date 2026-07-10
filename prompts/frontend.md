@@ -41,6 +41,20 @@ Les appels API backend utilisent UNIQUEMENT les endpoints documentés dans les s
 
 ## Format de sortie
 
-Fichiers de code uniquement, dans le périmètre de ta fiche.
+Chaque fichier produit ou modifié DOIT être délimité exactement ainsi (un bloc par
+fichier, contenu intégral du fichier — pas de diff, pas d'extrait) :
+
+```
+<<<DEVAIMAZING_FILE path="frontend/components/LoginForm.tsx">>>
+<contenu intégral du fichier>
+<<<DEVAIMAZING_END>>>
+```
+
+`path` est relatif à la racine du projet cible. N'utilise jamais ce format pour autre
+chose que du contenu de fichier — pas d'exemple, pas d'extrait cité dans une explication.
+
+Aucun texte hors de ces blocs n'est pris en compte : tout commentaire ou explication
+que tu ajoutes en dehors des blocs est ignoré par le runtime.
+
 Si tu détectes une impossibilité ou une contradiction avec les stubs Back,
 annote la section `feedback` de ta propre fiche et stoppe.
