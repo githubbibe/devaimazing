@@ -6,6 +6,7 @@ circulaire : graph.py importe studio.nodes (pour enregistrer les nodes du
 graphe), donc studio.nodes ne peut pas importer studio.graph en retour.
 """
 
+from studio.config import StudioConfig
 from studio.state import Phase, StudioState
 
 # Mapping agent (tel qu'écrit dans state.agent_sequence par le PM en phase 3,
@@ -78,3 +79,40 @@ def is_last_agent_of_phase(state: StudioState) -> bool:
     """
     sequence = phase_agent_sequence(state)
     return state.current_agent_index >= len(sequence) - 1
+
+
+def should_checkpoint(state: StudioState) -> bool:
+    """
+    Détermine si un checkpoint humain est nécessaire pour la phase courante.
+
+    Args:
+        state: État courant.
+
+    Returns:
+        True si un interrupt doit être déclenché avant la prochaine phase :
+        soit parce que state.awaiting_human_validation est déjà à True (par
+        exemple un trou d'intention détecté en phase 1 — ce cas n'est jamais
+        désactivable par la config, voir ADR 0008), soit parce que le
+        checkpoint de la phase courante est activé dans
+        config/studio.yml (section checkpoints).
+
+    Notes:
+        La configuration est chargée via StudioConfig.from_env() (le stub
+        d'origine mentionnait `state.config`, qui n'existe pas sur
+        StudioState — corrigé après implémentation de config.py, voir
+        docs/roadmap.md).
+
+        Déplacée de graph.py vers routing.py : les nodes (architect.py,
+        pm.py) doivent aussi pouvoir l'appeler, et studio.nodes ne peut pas
+        importer studio.graph (import circulaire, graph.py importe
+        studio.nodes).
+    """
+    if state.awaiting_human_validation:
+        return True
+
+    checkpoint_key = PHASE_CHECKPOINT_KEYS.get(state.current_phase)
+    if checkpoint_key is None:
+        return False
+
+    config = StudioConfig.from_env()
+    return bool(config.checkpoints.get(checkpoint_key, False))
