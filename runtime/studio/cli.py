@@ -45,6 +45,25 @@ def _load_config(project: str) -> StudioConfig:
     return StudioConfig(project_name=project, config_dir=_resolve_config_dir())
 
 
+def _export_project_env(project: str) -> None:
+    """
+    Propage `project` (et DEVAIMAZING_CONFIG_DIR s'il est déjà résolu) dans
+    l'environnement du process.
+
+    Nécessaire avant toute invocation du graphe (build_graph + ainvoke) :
+    chaque node appelle StudioConfig.from_env() en interne (voir leurs
+    docstrings — la config n'est pas transmise via StudioState), et
+    from_env() lit DEVAIMAZING_PROJECT depuis os.environ. _load_config()
+    seul ne suffit pas : il construit une StudioConfig pour l'usage de la
+    commande CLI elle-même, mais ne modifie pas l'environnement que les
+    nodes liront plus tard pendant l'exécution du graphe.
+    """
+    os.environ["DEVAIMAZING_PROJECT"] = project
+    config_dir = _resolve_config_dir()
+    if config_dir is not None:
+        os.environ["DEVAIMAZING_CONFIG_DIR"] = str(config_dir)
+
+
 def _generate_run_id() -> str:
     """
     Identifiant de run basé sur l'horodatage (pas de compteur séquentiel
@@ -90,6 +109,7 @@ def run(project: str, objective: Optional[str], dry_run: bool):
 
 
 async def _run_async(project: str, objective: Optional[str], dry_run: bool) -> None:
+    _export_project_env(project)
     config = _load_config(project)
     if not objective:
         objective = click.prompt("Objectif du run")
@@ -123,6 +143,7 @@ def resume(run_id: str, project: str):
 
 
 async def _resume_async(run_id: str, project: str) -> None:
+    _export_project_env(project)
     config = _load_config(project)
     graph = await build_graph(config)
     thread_config = _thread_config(run_id)

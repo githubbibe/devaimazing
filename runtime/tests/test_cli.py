@@ -8,6 +8,7 @@ mode auto). CliRunner.invoke() reste un appel synchrone normal ici.
 """
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -99,6 +100,32 @@ def test_run_waiting_human_prints_resume_hint(monkeypatch: pytest.MonkeyPatch):
     assert "devaimazing resume" in result.output
 
 
+def test_run_exports_project_env_before_invoking_graph(monkeypatch: pytest.MonkeyPatch):
+    # Régression : les nodes appellent StudioConfig.from_env() en interne
+    # (voir leurs docstrings), qui lit DEVAIMAZING_PROJECT depuis
+    # os.environ. _load_config() seul (utilisé par la commande CLI pour
+    # elle-même) ne suffit pas à le propager — trouvé lors du premier run
+    # réel de bout en bout (2026-07-10) : ValueError "DEVAIMAZING_PROJECT
+    # non définie" levée par le node pm au moment où le graphe l'invoque.
+    seen_env = {}
+
+    async def fake_ainvoke(state, config):
+        seen_env["project"] = os.environ.get("DEVAIMAZING_PROJECT")
+        return {"status": RunStatus.COMPLETED}
+
+    fake_graph = SimpleNamespace(ainvoke=fake_ainvoke)
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["run", "demo", "--objective", "x"])
+
+    assert result.exit_code == 0
+    assert seen_env["project"] == "demo"
+
+
 def test_run_prompts_for_objective_when_missing(monkeypatch: pytest.MonkeyPatch):
     async def fake_ainvoke(state, config):
         assert state.objective_raw == "objectif tapé au prompt"
@@ -151,6 +178,9 @@ def test_resume_success_clears_flag_and_continues(monkeypatch: pytest.MonkeyPatc
 
     async def fake_ainvoke(input_state, config):
         assert input_state is None  # reprise : pas de nouvel état initial
+        # Régression : même bug que pour `run`, voir
+        # test_run_exports_project_env_before_invoking_graph.
+        assert os.environ.get("DEVAIMAZING_PROJECT") == "demo"
         return {"status": RunStatus.COMPLETED}
 
     fake_graph = SimpleNamespace(
