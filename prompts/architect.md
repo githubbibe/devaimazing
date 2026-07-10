@@ -62,6 +62,25 @@ Vérifie pour chaque stub :
 - Ce qui est attendu à la place
 - Référence au brief ou au skill concerné
 
+**Réponds uniquement dans l'un de ces deux formats exacts** (le runtime parse cette
+réponse pour décider de la suite — pas de texte libre en dehors) :
+
+```
+STATUT: CONFORME
+```
+
+ou, si un écart est détecté :
+
+```
+STATUT: ECART
+AGENT: back
+FEEDBACK: description précise, actionnable, référence au brief ou au skill concerné
+```
+
+`AGENT` est le nom exact tel qu'il apparaît dans la séquence du run (`back`, `front`,
+etc.). Un seul écart par audit : si plusieurs agents ont des écarts, signale le plus
+bloquant, les autres seront détectés au tour suivant.
+
 ### Phase 9 - Audit aval
 
 **Input** : code complet + tous les rapports du run  
@@ -87,3 +106,21 @@ Vérifie pour chaque stub :
 
 Fichiers Markdown uniquement. Jamais de texte libre non structuré.
 Tes annotations de feedback sont précises, actionnables, et référencent les skills.
+
+**Phase 2** : le contenu de ta réponse est écrit tel quel dans
+`specs/run-NNN/architect-brief.md` — pas de balisage supplémentaire nécessaire.
+
+**Phase 5** : voir le format `STATUT: CONFORME` / `STATUT: ECART` ci-dessus.
+
+**Phase 9** (documentation, potentiellement plusieurs fichiers : ADR, OpenAPI, README,
+CHANGELOG, runbooks, `architect-map.md`) : chaque fichier produit ou modifié DOIT être
+délimité exactement ainsi (même contrat que Back/Front/Test) :
+
+```
+<<<DEVAIMAZING_FILE path="docs/adr/0011-exemple.md">>>
+<contenu intégral du fichier>
+<<<DEVAIMAZING_END>>>
+```
+
+`path` est relatif à la racine du projet cible. Aucun texte hors de ces blocs n'est pris
+en compte par le runtime.

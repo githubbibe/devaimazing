@@ -150,6 +150,25 @@
   `get_run_summary` ici est best-effort (absorbe `ValueError` si aucune tâche
   enregistrée) — à corriger quand ce câblage sera ajouté aux nodes producteurs. 7 tests
   ajoutés. **99/99 au total sur `runtime/tests/`.**
+- Refactor : `should_checkpoint` déplacée de `graph.py` vers `studio/routing.py` (même
+  raison que le refactor précédent — `architect.py`/`pm.py` doivent aussi pouvoir
+  l'appeler, import circulaire sinon). Ré-exportée depuis `graph.py` pour compatibilité,
+  aucun changement de comportement.
+- `nodes/architect.py` est implémenté : trois handlers (`_run_audit_amont`,
+  `_run_audit_stubs`, `_run_audit_aval`) sélectionnés par `state.current_phase`, tous via
+  Claude Code CLI (cwd=repo cible — il lit le code/stubs lui-même). Deux nouveaux
+  contrats ajoutés à `prompts/architect.md` : phase 5 répond `STATUT: CONFORME` ou
+  `STATUT: ECART` + `AGENT:`/`FEEDBACK:` (parsé par `_parse_audit_decision`, lève
+  `RuntimeError` si le format n'est pas respecté — pas de défaut silencieux type
+  "conforme par défaut") ; phase 9 réutilise le contrat de blocs `<<<DEVAIMAZING_FILE>>>`
+  déjà en place pour Back/Front/Test (documentation potentiellement multi-fichiers : ADR,
+  OpenAPI, README, CHANGELOG, `architect-map.md`). Sur écart détecté en phase 5 : la
+  fiche fautive est annotée, `state.current_phase` repasse à `Phase.STUBS` avec
+  `current_agent_index` repositionné sur l'agent fautif dans la sous-séquence filtrée
+  (pas de nouveau champ nécessaire, réutilise `PHASE_AGENT_ROLES`). `should_checkpoint`
+  appliqué de façon identique aux trois phases (2, 5, 9 ont toutes une entrée dans
+  `PHASE_CHECKPOINT_KEYS`). 9 tests ajoutés, tous verts au premier essai. **108/108 au
+  total sur `runtime/tests/`.**
 - `examples/demo-todo-app/` n'a pas de code source (`src/` annoncé au README mais absent),
   et il n'existe pas de `config/projects/demo-todo-app.yml`. Aucune cible réelle pour un
   run de bout en bout pour l'instant.
@@ -160,8 +179,8 @@
 2. Implémenter dans l'ordre de dépendance : ~~`state.py`~~ (rien à faire) → ~~`config.py`~~
    → ~~`tools/filesystem.py`, `tools/git.py`, `tools/ollama.py`, `tools/claude_code.py`~~
    → ~~`graph.py`~~ → ~~`nodes/backend.py`, `nodes/frontend.py`, `nodes/test.py`,
-   `nodes/security.py`, `metrics.py`, `nodes/closer.py`~~ (fait le 2026-07-10) →
-   `nodes/architect.py`, `nodes/pm.py` → `cli.py`.
+   `nodes/security.py`, `metrics.py`, `nodes/closer.py`, `nodes/architect.py`~~ (fait le
+   2026-07-10) → `nodes/pm.py` → `cli.py`.
 3. Remplir `runtime/tests/test_config.py` (et les futurs tests) avec de vraies assertions
    au fur et à mesure de chaque implémentation.
 4. Construire une cible minimale réelle pour `demo-todo-app` (FastAPI + React +
@@ -171,10 +190,11 @@
 
 ## Point de reprise
 
-Prochaine session : poursuivre `nodes/*.py` par `architect.py` puis `pm.py` (le plus
-complexe — dialogue de cadrage phase 1, voir la mécanique déjà tranchée en amont dans le
-journal de conversation : boucle terminale synchrone dans le node, pas de nouveau champ
-StudioState), puis `cli.py`, sauf décision contraire. Le placeholder ntfy et l'état de
+Prochaine session : terminer `nodes/*.py` par `pm.py` (le plus complexe — dialogue de
+cadrage phase 1, mécanique déjà tranchée en amont dans le journal de conversation :
+boucle terminale synchrone dans le node, pas de nouveau champ StudioState), puis
+`cli.py` (dernière pièce du runtime), sauf décision contraire. Le placeholder ntfy et
+l'état de
 `demo-todo-app` (étape 4) restent à trancher explicitement avant d'être traités — ne pas
 les combler par une valeur par défaut « raisonnable » sans validation humaine (cohérent
 avec le principe de l'ADR 0008).
