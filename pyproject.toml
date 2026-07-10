@@ -11,6 +11,7 @@ license = { text = "AGPL-3.0" }
 requires-python = ">=3.11"
 dependencies = [
     "langgraph>=0.2.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
     "langchain-core>=0.3.0",
     "ollama>=0.3.0",
     "prometheus-client>=0.21.0",

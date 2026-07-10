@@ -10,21 +10,21 @@
   remplacer avant que les notifications fonctionnent. Non bloquant pour le développement.
 - Stubs runtime (~933 lignes) : `config.py`, `graph.py`, `state.py`, `metrics.py`,
   `tools/*.py` sont avancés (docstrings substantielles, typage, structure claire).
-- **Trou concret** : les 6 fichiers `runtime/studio/nodes/*.py` (pm, architect, backend,
-  frontend, test, security) sont des templates génériques identiques (21 lignes chacun,
-  `run(state) -> state` avec docstring minimale). Aucun n'a de `Raises`, `Side effects`,
-  `Example`, ni de contrat spécifique à son agent — non conforme à la checklist de
-  `skills/stub-first.md`. Implémenter la logique métier dessus reproduirait la dérive que
-  le stub-first est censé cadrer.
+- **Trou concret** : les 7 fichiers `runtime/studio/nodes/*.py` (pm, architect, backend,
+  frontend, test, security, closer) sont des templates génériques identiques (21 lignes
+  chacun, `run(state) -> state` avec docstring minimale). Aucun n'a de `Raises`,
+  `Side effects`, `Example`, ni de contrat spécifique à son agent — non conforme à la
+  checklist de `skills/stub-first.md`. Implémenter la logique métier dessus reproduirait
+  la dérive que le stub-first est censé cadrer.
 - `examples/demo-todo-app/` n'a pas de code source (`src/` annoncé au README mais absent),
   et il n'existe pas de `config/projects/demo-todo-app.yml`. Aucune cible réelle pour un
   run de bout en bout pour l'instant.
 
 ## Prochaines étapes
 
-1. Compléter les stubs des 6 `nodes/*.py` au contrat complet (Args/Returns/Raises/Side
+1. Compléter les stubs des 7 `nodes/*.py` au contrat complet (Args/Returns/Raises/Side
    effects/Example, spécifique à chaque agent — ce que fait le PM en phase 1/3 diffère de
-   ce que fait Sécu en phase 8).
+   ce que fait Sécu en phase 8, et closer en phase 10 est Python pur, sans appel LLM).
 2. Implémenter dans l'ordre de dépendance : `state.py` → `config.py` → `tools/*.py`
    (filesystem, git, ollama, claude_code) → `graph.py` → `nodes/*.py` → `cli.py` →
    `metrics.py`.

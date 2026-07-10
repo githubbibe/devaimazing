@@ -8,7 +8,7 @@ repo_path: ~/code/aimazing/webaimazing-v2/
 
 # Git
 git:
-  default_branch: develop
+  base_branch: develop
   branch_prefix: studio/     # Format studio/<slug-feature>-<hash5> (ADR 0007), ex : studio/ajout-panier-a3f9c
   remote: origin
 
