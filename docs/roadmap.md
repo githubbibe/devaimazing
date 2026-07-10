@@ -53,8 +53,22 @@
   un agent dont la fiche implique des accès fichiers déclenchera une invite de
   permission bloquante en exécution non interactive ; à trancher avant un run de bout en
   bout. 5 tests ajoutés (`test_claude_code.py`, faux sous-process scripté — aucun appel
-  API réel), tous verts. **`tools/*.py` complet — étape 2 terminée pour les tools.**
-  38/38 au total sur `runtime/tests/`.
+  API réel), tous verts. **`tools/*.py` complet.**
+- `graph.py` est implémenté. `build_graph` est passée **async** (changement de contrat
+  par rapport au stub d'origine, justifié : `AsyncSqliteSaver` de
+  `langgraph-checkpoint-sqlite` exige une connexion `aiosqlite` ouverte via `await`,
+  vérifié contre l'API réelle du paquet installé — impossible en fonction synchrone).
+  `router` résout le prochain node depuis `state.current_phase`, et pour les phases 4/6
+  (stubs/implémentation) filtre `state.agent_sequence` aux rôles concernés par la phase
+  (phase 4 : back/front seuls ; phase 6 : + back-tu/front-tu) avant d'indexer avec
+  `current_agent_index` — un état incohérent (index hors bornes, agent inconnu) lève
+  `ValueError` plutôt que d'être absorbé silencieusement. `should_checkpoint` corrige une
+  référence obsolète du stub (`state.config`, qui n'existe pas) : charge la config via
+  `StudioConfig.from_env()`, avec `state.awaiting_human_validation` comme garde-fou
+  prioritaire et non désactivable (ADR 0008). 19 tests ajoutés (`test_graph.py` : router,
+  checkpoints, construction structurelle du graphe compilé), tous verts.
+  **`tools/*.py` + `graph.py` : étape 2 terminée pour l'infrastructure.**
+  57/57 au total sur `runtime/tests/`.
 - `examples/demo-todo-app/` n'a pas de code source (`src/` annoncé au README mais absent),
   et il n'existe pas de `config/projects/demo-todo-app.yml`. Aucune cible réelle pour un
   run de bout en bout pour l'instant.
@@ -64,7 +78,7 @@
 1. ~~Compléter les stubs des 7 `nodes/*.py` au contrat complet~~ — fait le 2026-07-10.
 2. Implémenter dans l'ordre de dépendance : ~~`state.py`~~ (rien à faire) → ~~`config.py`~~
    → ~~`tools/filesystem.py`, `tools/git.py`, `tools/ollama.py`, `tools/claude_code.py`~~
-   (fait le 2026-07-10) → `graph.py` → `nodes/*.py` → `cli.py` → `metrics.py`.
+   → ~~`graph.py`~~ (fait le 2026-07-10) → `nodes/*.py` → `cli.py` → `metrics.py`.
 3. Remplir `runtime/tests/test_config.py` (et les futurs tests) avec de vraies assertions
    au fur et à mesure de chaque implémentation.
 4. Construire une cible minimale réelle pour `demo-todo-app` (FastAPI + React +
@@ -74,9 +88,10 @@
 
 ## Point de reprise
 
-Prochaine session : poursuivre l'étape 2 par `graph.py` (câblage LangGraph — nodes,
-routing dynamique selon state.current_phase/agent_sequence, checkpoints), sauf décision
-contraire. Le placeholder ntfy et l'état de
+Prochaine session : poursuivre l'étape 2 par `nodes/*.py` (implémentation des corps,
+aujourd'hui uniquement des contrats — c'est la partie la plus dense en logique métier :
+appels tools, gestion des checkpoints via should_checkpoint, boucle de feedback), sauf
+décision contraire. Le placeholder ntfy et l'état de
 `demo-todo-app` (étape 4) restent à trancher explicitement avant d'être traités — ne pas
 les combler par une valeur par défaut « raisonnable » sans validation humaine (cohérent
 avec le principe de l'ADR 0008).
