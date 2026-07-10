@@ -331,6 +331,21 @@ avant qu'il aille au bout :
 
 Run relancé après ces quatre corrections — en cours, résultat pas encore connu.
 
+**Backlog identifié en marge (2026-07-10, pas bloquant, pour plus tard)** :
+`devaimazing resume` (`cli.py::resume`) ne sait reprendre qu'un run explicitement en
+attente d'une validation humaine (`awaiting_human_validation=True` dans le state
+checkpointé) — pas un run interrompu au milieu d'un nœud (crash, `kill`, coupure).
+Constaté en pratique après le bug 4 : `run-20260710-185636` s'est arrêté en
+`IN_PROGRESS`/phase `AUDIT_AMONT` (crash dans le nœud Architecte, pas un checkpoint
+volontaire) — `resume` refuse ce cas avec « n'est pas en attente de validation », alors
+que LangGraph sait très bien rejouer le nœud interrompu via `graph.ainvoke(None,
+config=thread_config)` sur le même `thread_id` (vérifié manuellement, hors CLI, pour
+reprendre ce run précis sans repasser par le dialogue PM de la phase 1). À faire : soit
+assouplir la garde de `resume` pour accepter aussi `status == RunStatus.IN_PROGRESS`
+sans validation en attente (reprise après crash), soit ajouter une commande dédiée
+(`devaimazing retry <run-id>` ?) qui documente explicitement ce second cas d'usage, avec
+son propre test de régression.
+
 **Décision prise (2026-07-10, hors code)** : la mise en production de devaimazing
 lui-même devra être conteneurisée Podman, cohérent avec le reste de l'infra prod (voir
 CLAUDE.md du dépôt parent). Implications concrètes non câblées à ce stade : Claude Code
