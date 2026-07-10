@@ -5,6 +5,10 @@
 devaimazing orchestre 6 agents spécialisés. Chaque agent a un périmètre strict,
 un LLM assigné, et une identité Git propre. Tous sont stateless sauf le PM.
 
+**Principe auditeur/producteur** : un modèle ne peut pas auditer la dette qu'il a
+lui-même produite. Les agents producteurs (Back, Front, Test) tournent sur Qwen 2.5 7B.
+Les agents auditeurs (Architecte, Sécu) tournent sur Sonnet, qui domine Qwen en capacité.
+
 ---
 
 ## PM - Project Manager
@@ -28,11 +32,12 @@ un LLM assigné, et une identité Git propre. Tous sont stateless sauf le PM.
 
 ## Architecte
 
-**LLM** : Claude Sonnet 4.6 (API Anthropic) — agent auditeur, doit dominer en capacité
-les agents producteurs qu'il audite (voir ARCHITECTURE.md principe 4)  
+**LLM** : Claude Sonnet 4.6 (API Anthropic)  
 **Stateful** : non  
 **Identité Git** : `architect-aimazing <architect@aimazing.fr>`  
 **Périmètre** : lecture transverse, écriture dans `docs/`, `specs/run-NNN/architect-*.md`  
+**Pourquoi Sonnet** : audite le code produit par Qwen. L'auditeur doit dominer le producteur
+(voir ARCHITECTURE.md principe 4).
 
 **Rôle** :
 - Audit non-fonctionnel amont : contraintes, carte fichiers, zones d'impact (phase 2)
@@ -123,15 +128,16 @@ les agents producteurs qu'il audite (voir ARCHITECTURE.md principe 4)
 
 ## Sécu
 
-**LLM** : Claude Sonnet 4.6 (API Anthropic) — agent auditeur, doit dominer en capacité
-les agents producteurs qu'il audite (voir ARCHITECTURE.md principe 4)  
+**LLM** : Claude Sonnet 4.6 (API Anthropic) + SAST déterministe (Semgrep, Bandit)  
 **Stateful** : non  
 **Identité Git** : `security-aimazing <security@aimazing.fr>`  
 **Périmètre** : lecture transverse, écriture dans `specs/run-NNN/security-report.md`  
+**Pourquoi Sonnet** : audite le code produit par Qwen. L'auditeur doit dominer le producteur
+(voir ARCHITECTURE.md principe 4).
 
 **Rôle** :
-- SAST déterministe (Semgrep, Bandit) en premier, zéro token (phase 8)
-- Audit sécurité du code produit sur ce que le SAST ne couvre pas (phase 8)
+- Couche 1 : SAST déterministe lancé par le runtime, zéro token (phase 8)
+- Couche 2 : audit Sonnet sur ce que le SAST ne couvre pas — logique métier, cohérence globale (phase 8)
 - Production du rapport de sécurité
 
 **Skills** : `security.md`, `error-handling.md`
