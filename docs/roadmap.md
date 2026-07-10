@@ -6,8 +6,9 @@
 
 - Aucune question en attente active dans le dépôt (vérifié : pas de point « en suspens »
   réel, seulement des descriptions du mécanisme dans `docs/workflow.md`/`prompts/pm.md`).
-- `config/studio.yml` : `notifications.ntfy.topic` reste à `<PLACEHOLDER_TOPIC>`, à
-  remplacer avant que les notifications fonctionnent. Non bloquant pour le développement.
+- `config/studio.yml` : `notifications.ntfy.topic` reste à `<PLACEHOLDER_TOPIC>` (valeur
+  commitée, dépôt public) — le vrai topic vit dans `config/local.yml` (gitignoré, voir
+  Point de reprise ci-dessous, résolu le 2026-07-10).
 - Stubs runtime (~933 lignes) : `config.py`, `graph.py`, `state.py`, `metrics.py`,
   `tools/*.py` sont avancés (docstrings substantielles, typage, structure claire).
 - **Étape 1 terminée** : les 7 fichiers `runtime/studio/nodes/*.py` (pm, architect,
@@ -249,18 +250,28 @@
 ## Point de reprise
 
 Le runtime devaimazing est fonctionnellement complet (`state.py` → `config.py` →
-`tools/*.py` → `graph.py` → `nodes/*.py` (7/7) → `metrics.py` → `cli.py`, 136 tests
+`tools/*.py` → `graph.py` → `nodes/*.py` (7/7) → `metrics.py` → `cli.py`, 157 tests
 verts) et une cible réelle existe (`demo-todo-app`, testée en local — backend, frontend,
-config). Prochaine session : étape 5 (premier run de bout en bout), sauf décision
-contraire. Avant ce premier run, plusieurs points restent à trancher explicitement
-(listés au fil du journal ci-dessus) et ne doivent pas être comblés par une valeur par
-défaut « raisonnable » sans validation humaine (principe de l'ADR 0008) : flags de
-permissions Claude Code CLI (`--dangerously-skip-permissions` ou équivalent, sans quoi
-les agents producteurs/audit bloqueront sur une invite en exécution non interactive),
-câblage de `MetricsCollector.record_task` dans les nodes producteurs (aujourd'hui aucun
-node ne l'appelle, `metrics`/`get_run_summary` restent vides pour un run réel), le
-placeholder ntfy, et `agents.max_iterations` (limite de 3 renvois non appliquée par les
-nodes producteurs).
+config).
+
+**Les 4 points en attente avant un run réel sont résolus (2026-07-10)** :
+1. **Permissions Claude Code CLI** : vérifié empiriquement (invocations réelles) qu'aucun
+   flag n'est nécessaire — Read/Glob/Grep passent sans invite en mode `-p`, Write est
+   refusé proprement (pas de hang). `run_claude_code` détecte maintenant explicitement
+   `permission_denials`.
+2. **Câblage des métriques** : `studio.metrics.record_agent_result` appelé par les 7
+   nodes à chaque tentative.
+3. **`agents.max_iterations`** : appliqué en tête des 4 nodes producteurs/audit
+   (`studio.routing.max_iterations_exceeded`) — bascule en `RunStatus.FAILED` sans appel
+   LLM au-delà de la limite.
+4. **Placeholder ntfy** : le repo `githubbibe/devaimazing` étant **public**, la vraie
+   valeur ne pouvait pas être committée dans `config/studio.yml` (sécurité du topic ntfy.sh
+   = secret, sinon lisible par n'importe qui indéfiniment via l'historique git). Ajout
+   d'un mécanisme d'override local : `config/local.yml`, gitignoré, fusionné en dernier
+   par `StudioConfig` par-dessus `studio.yml`/le projet. Le vrai topic (64 caractères
+   hex, fourni par l'utilisateur) vit dans ce fichier local, jamais commité.
+
+Prochaine session : étape 5 (premier run de bout en bout), sauf décision contraire.
 
 **Décision prise (2026-07-10, hors code)** : la mise en production de devaimazing
 lui-même devra être conteneurisée Podman, cohérent avec le reste de l'infra prod (voir

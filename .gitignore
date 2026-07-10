@@ -85,3 +85,8 @@ coverage.xml
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Override de config locale (secrets type topic ntfy — voir
+# runtime/studio/config.py, StudioConfig charge ce fichier s'il existe,
+# jamais commité, dépôt public)
+config/local.yml

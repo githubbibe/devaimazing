@@ -34,8 +34,9 @@ class StudioConfig:
     """
     Configuration complète du studio pour un run donné.
 
-    Charge studio.yml puis le fichier projet et fusionne les deux.
-    Le fichier projet peut écraser n'importe quelle valeur de studio.yml.
+    Charge studio.yml, le fichier projet, puis local.yml s'il existe, et
+    fusionne les trois dans cet ordre (chaque niveau peut écraser
+    n'importe quelle valeur du précédent).
     """
 
     def __init__(self, project_name: str, config_dir: Optional[Path] = None):
@@ -46,7 +47,7 @@ class StudioConfig:
 
         Raises:
             FileNotFoundError: Si studio.yml ou le fichier projet est introuvable.
-            ValueError: Si le fichier projet est invalide.
+            ValueError: Si le fichier projet ou local.yml est invalide.
         """
         self._project_name = project_name
         self._config_dir = (
@@ -72,7 +73,22 @@ class StudioConfig:
         if not isinstance(project_config, dict):
             raise ValueError(f"Configuration projet invalide (mapping attendu) : {project_yml_path}")
 
-        self._raw = _deep_merge(global_config, project_config)
+        merged = _deep_merge(global_config, project_config)
+
+        # local.yml : override local optionnel, gitignoré, jamais commité.
+        # Pour les valeurs qui ne doivent jamais apparaître dans l'historique
+        # git d'un dépôt public (ex. notifications.ntfy.topic — sa sécurité
+        # repose entièrement sur le fait qu'il reste secret, voir
+        # docs/roadmap.md). Absent par défaut, ne casse rien si non créé.
+        local_yml_path = self._config_dir / "local.yml"
+        if local_yml_path.is_file():
+            with local_yml_path.open("r", encoding="utf-8") as f:
+                local_config = yaml.safe_load(f) or {}
+            if not isinstance(local_config, dict):
+                raise ValueError(f"Configuration locale invalide (mapping attendu) : {local_yml_path}")
+            merged = _deep_merge(merged, local_config)
+
+        self._raw = merged
 
     @property
     def repo_path(self) -> Path:

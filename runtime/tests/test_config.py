@@ -100,6 +100,39 @@ def test_config_test_command_from_project(config_dir: Path):
     assert config.test_command == "pytest {target_dir} -q"
 
 
+def test_config_local_yml_overrides_studio_and_project(config_dir: Path):
+    """local.yml (optionnel, gitignoré) écrase studio.yml et le projet."""
+    _write_project(config_dir, "demo", {
+        "repo_path": "~/code/demo",
+        "notifications": {"ntfy": {"topic": "<PLACEHOLDER_TOPIC>"}},
+    })
+    _write_yaml(config_dir / "local.yml", {
+        "notifications": {"ntfy": {"topic": "un-vrai-secret"}},
+    })
+
+    config = StudioConfig(project_name="demo", config_dir=config_dir)
+
+    assert config.get("notifications")["ntfy"]["topic"] == "un-vrai-secret"
+
+
+def test_config_missing_local_yml_is_not_an_error(config_dir: Path):
+    """local.yml est optionnel : son absence ne casse rien."""
+    _write_project(config_dir, "demo", {"repo_path": "~/code/demo"})
+
+    config = StudioConfig(project_name="demo", config_dir=config_dir)
+
+    assert config.repo_path == Path("~/code/demo").expanduser()
+
+
+def test_config_invalid_local_yml_raises_value_error(config_dir: Path):
+    """local.yml doit être un mapping, comme studio.yml et le projet."""
+    _write_project(config_dir, "demo", {"repo_path": "~/code/demo"})
+    (config_dir / "local.yml").write_text("- juste une liste\n- pas un mapping\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        StudioConfig(project_name="demo", config_dir=config_dir)
+
+
 def test_config_from_env_requires_project(monkeypatch: pytest.MonkeyPatch):
     """Vérifie que from_env lève ValueError si DEVAIMAZING_PROJECT est absent."""
     monkeypatch.delenv("DEVAIMAZING_PROJECT", raising=False)
