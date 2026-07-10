@@ -346,7 +346,31 @@ avant qu'il aille au bout :
    apparaît côté Claude Code CLI. Même limite qu'au point 4 : pas de test de régression
    automatisé possible, seule la vérification empirique fait foi.
 
-Run relancé après ces cinq corrections — en cours, résultat pas encore connu.
+Run relancé après ces cinq corrections — **échec identique** (refus Bash), malgré le
+fix généralisé du point 5. Diagnostic complémentaire (2026-07-10) : reproduction directe
+du prompt exact envoyé par `architect.py::_call_architect` (system prompt + skills
+injectés + user prompt de la phase 2, mêmes fichiers réels que le run) via `claude -p`
+en dehors du runtime, répétée plusieurs fois. Sur 3 appels exploitables, **aucun n'a
+déclenché de refus d'outil** — brief produit proprement à chaque fois avec le prompt du
+point 5. Conclusion : le fix fonctionne dans la majorité des cas ; l'échec Bash constaté
+juste après le commit `95bbb45` est très probablement de la **variance d'échantillonnage
+du modèle** (Sonnet choisit parfois un raccourci shell malgré l'instruction, de façon non
+reproductible à prompt identique) plutôt qu'un défaut de prompt résiduel. Cette
+diagnostic a épuisé le quota de session Claude Code CLI du compte (`429`, « session
+limit · resets 12:20am Europe/Paris ») — aucune nouvelle tentative de run possible avant
+ce reset, indépendamment du code.
+
+**Implication pour la suite** : si l'échec Bash se reproduit après le reset malgré un
+prompt déjà correct dans la majorité des cas, la vraie question n'est plus le libellé du
+prompt (déjà au maximum de généralité raisonnable) mais le traitement de
+`permission_denials` dans `run_claude_code` (`tools/claude_code.py:109-116`) — actuellement
+**tout** refus est fatal, même si le modèle a fini par produire un `result` exploitable
+malgré le refus (non vérifié faute d'avoir capturé un cas réel de refus avant la limite
+de session). Piste à évaluer avec l'utilisateur avant de coder : ne faire échouer le run
+que si `result` est vide/invalide après un refus, pas systématiquement dès qu'un refus a
+eu lieu — traiter le refus comme un signal à logger, pas comme un échec en soi, tant que
+l'agent a fini par respecter le contrat de sortie. Décision à valider avant implémentation
+(changement de comportement de sécurité, pas un simple fix de prompt).
 
 **Backlog identifié en marge (2026-07-10, pas bloquant, pour plus tard)** :
 `devaimazing resume` (`cli.py::resume`) ne sait reprendre qu'un run explicitement en
