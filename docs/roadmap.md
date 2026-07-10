@@ -191,6 +191,26 @@
   contenu `.strip()`, pas un bug du node). **120/120 au total sur `runtime/tests/` —
   `nodes/*.py` (7/7) et `tools/*.py` complets, seul `cli.py` reste pour boucler le
   runtime.**
+- `cli.py` est implémenté (`run`, `resume`, `runs`, `metrics`, `projects`, `doctor`) —
+  **étape 2 entièrement terminée, runtime complet de bout en bout.** `run_id` généré par
+  horodatage (`run-YYYYMMDD-HHMMSS`, pas de compteur séquentiel partagé à maintenir).
+  Reprise vérifiée contre l'API réelle de LangGraph (`aget_state`/`aupdate_state`/
+  `ainvoke(None, ...)` — pattern confirmé par un smoke test dédié avant l'implémentation,
+  pas deviné). `resume` et `metrics` prennent `--project` en plus de `run_id` : le stub
+  d'origine ne le prévoyait pas, mais aucune des deux commandes ne peut sinon savoir
+  quel `config/projects/<nom>.yml` charger (chemin de `state.db`/`metrics.db`
+  dépendant du projet). `runs` et le format de rapport `project-map.md` se répondent en
+  miroir : `_parse_run_history_table` relit la table que `nodes/closer.py` écrit.
+  **2 bugs trouvés et corrigés par les tests, avant tout usage réel** :
+  1. `StudioConfig(project_name=project)` appelé directement (pas via `.from_env()`)
+     ignorait `DEVAIMAZING_CONFIG_DIR` — cassait à la fois l'override utilisateur et la
+     testabilité. Centralisé dans un helper `_load_config()`.
+  2. `_parse_run_history_table` incluait la ligne de séparation markdown `|---|---|...|`
+     comme s'il s'agissait d'une ligne de run — corrigé (et la ligne de placeholder vide
+     `| | | | | |` du template est filtrée par le même mécanisme).
+  16 tests ajoutés (`test_cli.py`, synchrones — `click.testing.CliRunner` + les commandes
+  appellent `asyncio.run()` en interne, incompatible avec un test `async def` sous
+  pytest-asyncio). **136/136 au total sur `runtime/tests/`.**
 - `examples/demo-todo-app/` n'a pas de code source (`src/` annoncé au README mais absent),
   et il n'existe pas de `config/projects/demo-todo-app.yml`. Aucune cible réelle pour un
   run de bout en bout pour l'instant.
@@ -198,11 +218,12 @@
 ## Prochaines étapes
 
 1. ~~Compléter les stubs des 7 `nodes/*.py` au contrat complet~~ — fait le 2026-07-10.
-2. Implémenter dans l'ordre de dépendance : ~~`state.py`~~ (rien à faire) → ~~`config.py`~~
-   → ~~`tools/filesystem.py`, `tools/git.py`, `tools/ollama.py`, `tools/claude_code.py`~~
-   → ~~`graph.py`~~ → ~~`nodes/*.py` (7/7)~~ (fait le 2026-07-10) → `cli.py`.
-3. Remplir `runtime/tests/test_config.py` (et les futurs tests) avec de vraies assertions
-   au fur et à mesure de chaque implémentation.
+2. ~~Implémenter dans l'ordre de dépendance : `state.py` → `config.py` →
+   `tools/*.py` → `graph.py` → `nodes/*.py` (7/7) → `cli.py`~~ — **fait le
+   2026-07-10, étape 2 terminée.**
+3. ~~Remplir les tests avec de vraies assertions au fur et à mesure de chaque
+   implémentation~~ — fait en continu tout au long de l'étape 2 (136 tests, tous les
+   modules du runtime couverts, aucun stub `...` restant dans `runtime/tests/`).
 4. Construire une cible minimale réelle pour `demo-todo-app` (FastAPI + React +
    `config/projects/demo-todo-app.yml`) pour avoir quelque chose à exécuter.
 5. Premier run de bout en bout — en mode dégradé (humain + Claude Code, pas devaimazing
@@ -210,10 +231,17 @@
 
 ## Point de reprise
 
-Prochaine session : `cli.py` (dernière pièce du runtime — devaimazing run/resume/runs/
-metrics/projects/doctor, câble config.py + graph.py + tous les nodes), sauf décision
-contraire. Avant un run de bout en bout réel, plusieurs points restent à trancher
-explicitement (listés au fil du journal ci-dessus) et ne doivent pas être comblés par
-une valeur par défaut « raisonnable » sans validation humaine (principe de l'ADR 0008) :
-flags de permissions Claude Code CLI, câblage de `MetricsCollector.record_task` dans
-les nodes producteurs, le placeholder ntfy, et l'état de `demo-todo-app` (étape 4).
+Le runtime devaimazing est fonctionnellement complet (`state.py` → `config.py` →
+`tools/*.py` → `graph.py` → `nodes/*.py` (7/7) → `metrics.py` → `cli.py`, 136 tests
+verts). Prochaine session : étape 4 (cible minimale `demo-todo-app`), sauf décision
+contraire — c'est le prérequis pour l'étape 5 (premier run réel), et le premier moyen
+de vérifier en pratique tous les points laissés volontairement non tranchés faute de
+cible réelle contre laquelle les tester. Avant ce premier run, plusieurs points
+restent à trancher explicitement (listés au fil du journal ci-dessus) et ne doivent pas
+être comblés par une valeur par défaut « raisonnable » sans validation humaine (principe
+de l'ADR 0008) : flags de permissions Claude Code CLI (`--dangerously-skip-permissions`
+ou équivalent, sans quoi les agents producteurs/audit bloqueront sur une invite en
+exécution non interactive), câblage de `MetricsCollector.record_task` dans les nodes
+producteurs (aujourd'hui aucun node ne l'appelle, `metrics`/`get_run_summary` restent
+vides pour un run réel), le placeholder ntfy, et `agents.max_iterations` (limite de 3
+renvois non appliquée par les nodes producteurs).
