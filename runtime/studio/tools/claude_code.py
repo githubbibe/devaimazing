@@ -37,8 +37,9 @@ async def run_claude_code(
 
     Raises:
         TimeoutError: Si le sous-process dépasse timeout_seconds.
-        RuntimeError: Si Claude Code retourne un code d'erreur non nul, ou si
-            la sortie JSON contient un champ "is_error" à true.
+        RuntimeError: Si Claude Code retourne un code d'erreur non nul, si la
+            sortie JSON contient un champ "is_error" à true, ou si
+            "permission_denials" est non vide (voir Notes).
         ValueError: Si la sortie JSON est invalide.
 
     Example:
@@ -50,12 +51,22 @@ async def run_claude_code(
         >>> print(result["content"])
 
     Notes:
-        N'ajoute aucun flag de permissions (--dangerously-skip-permissions,
-        --allowedTools) — décision de sécurité volontairement laissée hors de
-        ce wrapper. Un agent dont la fiche implique des accès fichiers pourra
-        déclencher une invite de permission bloquante en exécution non
-        interactive ; ce point reste à trancher explicitement avant un run
-        de bout en bout (voir docs/roadmap.md).
+        Aucun flag de permissions (--dangerously-skip-permissions,
+        --allowedTools) n'est ajouté — vérifié empiriquement (2026-07-10,
+        invocations réelles) que ce n'est pas nécessaire pour l'usage actuel
+        des agents devaimazing : en mode -p non interactif, les outils en
+        lecture seule (Read, Glob, Grep) sont exécutés sans invite, alors
+        qu'un outil de mutation (Write, Edit, Bash) est refusé proprement
+        (is_error reste false, le process se termine normalement, aucun
+        hang) plutôt que de bloquer sur une invite. Cohérent avec le design
+        des agents qui appellent ce wrapper (architect, security, pm) :
+        ils lisent le repo cible via les outils de Claude Code, mais toute
+        écriture de fichier passe par tools.filesystem.write_card côté
+        devaimazing, jamais par un outil Write de Claude Code lui-même. Si
+        un futur agent a besoin d'écrire directement via Claude Code, ce
+        point sera à retrancher explicitement (ajouter --allowedTools plutôt
+        que --dangerously-skip-permissions, qui n'est de toute façon
+        recommandé que pour un sandbox sans accès réseau).
     """
     process = await asyncio.create_subprocess_exec(
         "claude", "-p", "--model", model, "--output-format", output_format,
@@ -93,6 +104,15 @@ async def run_claude_code(
     if payload.get("is_error"):
         raise RuntimeError(
             f"Claude Code CLI a retourné une erreur : {payload.get('result') or payload}"
+        )
+
+    denials = payload.get("permission_denials") or []
+    if denials:
+        denied_tools = ", ".join(sorted({d.get("tool_name", "?") for d in denials}))
+        raise RuntimeError(
+            f"Claude Code CLI s'est vu refuser l'accès à un outil ({denied_tools}) — "
+            f"le design actuel des agents devaimazing ne doit jamais avoir besoin "
+            f"d'écrire via Claude Code (voir Notes de run_claude_code)."
         )
 
     return {

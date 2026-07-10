@@ -95,6 +95,38 @@ async def test_run_claude_code_is_error_in_json_raises_runtime_error(
         await run_claude_code(prompt="x", model="claude-opus-4-8", cwd=tmp_path)
 
 
+async def test_run_claude_code_permission_denial_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    fake_process = _FakeProcess(
+        stdout=_success_payload(permission_denials=[
+            {"tool_name": "Write", "tool_use_id": "t1", "tool_input": {}}
+        ]),
+        stderr=b"", returncode=0,
+    )
+    monkeypatch.setattr(
+        claude_code_tool.asyncio, "create_subprocess_exec", _fake_subprocess_exec(fake_process)
+    )
+
+    with pytest.raises(RuntimeError):
+        await run_claude_code(prompt="x", model="claude-opus-4-8", cwd=tmp_path)
+
+
+async def test_run_claude_code_empty_permission_denials_does_not_raise(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    fake_process = _FakeProcess(
+        stdout=_success_payload(permission_denials=[]), stderr=b"", returncode=0,
+    )
+    monkeypatch.setattr(
+        claude_code_tool.asyncio, "create_subprocess_exec", _fake_subprocess_exec(fake_process)
+    )
+
+    result = await run_claude_code(prompt="x", model="claude-opus-4-8", cwd=tmp_path)
+
+    assert result["content"] == "contenu généré"
+
+
 async def test_run_claude_code_invalid_json_raises_value_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
