@@ -20,6 +20,7 @@ from studio.routing import agent_iteration_count, max_iterations_exceeded
 from studio.state import AgentResult, Phase, RunStatus, StudioState
 from studio.tools.filesystem import (
     append_feedback,
+    extract_file_paths,
     inject_skills,
     parse_agent_file_blocks,
     read_card,
@@ -188,8 +189,10 @@ async def run(state: StudioState) -> StudioState:
 
     iteration = agent_iteration_count(state, role) + 1
 
+    expected_paths = extract_file_paths(card_content)
+    fallback_path = expected_paths[0] if len(expected_paths) == 1 else None
     try:
-        files = parse_agent_file_blocks(result["content"])
+        files = parse_agent_file_blocks(result["content"], fallback_path=fallback_path)
     except ValueError:
         await append_feedback(card_path, agent_source=role, feedback=result["content"])
         agent_result = AgentResult(

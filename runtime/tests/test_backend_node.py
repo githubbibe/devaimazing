@@ -255,6 +255,53 @@ async def test_backend_no_file_blocks_appends_feedback_and_waits_for_human(monke
     assert updates["agent_results"][0].status == "feedback_sent"
 
 
+async def test_backend_accepts_plain_fenced_block_when_single_file_expected(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    Repli parse_agent_file_blocks : un modèle producteur qui balise sa sortie
+    en ``` markdown standard (au lieu de <<<DEVAIMAZING_FILE>>>) n'est pas
+    traité en échec si la fiche ne référence qu'un seul fichier — voir
+    docs/roadmap.md (run réel 2026-07-11).
+    """
+    written = {}
+
+    async def fake_read_card(path):
+        return "Modifier `backend/main.py` pour ajouter le handler."
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(
+            "Voici le fichier réécrit :\n\n```python\nfrom fastapi import FastAPI\napp = FastAPI()\n```\n"
+        )
+
+    async def fake_write_card(path, content):
+        written[str(path)] = content
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(backend_node, "commit_as_agent", fake_commit_as_agent)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+    )
+
+    updates = await backend_node.run(state)
+
+    result: AgentResult = updates["agent_results"][0]
+    assert result.status == "success"
+    assert result.output_files == ["backend/main.py"]
+    assert any(p.endswith("backend/main.py") for p in written)
+    assert "from fastapi import FastAPI" in list(written.values())[0]
+
+
 async def test_backend_max_iterations_exceeded_fails_without_calling_ollama(
     monkeypatch: pytest.MonkeyPatch,
 ):

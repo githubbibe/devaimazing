@@ -8,6 +8,7 @@ Injection des skills dans les prompts.
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 FEEDBACK_HEADING = "## Feedback"
 EMPTY_FEEDBACK_MARKER = "_Aucun feedback pour l'instant._"
@@ -24,10 +25,34 @@ _FILE_BLOCK_PATTERN = re.compile(
 
 # Détection de chemins de fichiers référencés dans une fiche agent (ex :
 # section "Fichiers à modifier"). Chemin entre backticks avec extension de
-# fichier reconnue — voir read_referenced_files.
+# fichier reconnue — voir read_referenced_files, extract_file_paths.
 _REFERENCED_FILE_PATTERN = re.compile(
     r'`([\w./-]+\.(?:py|ts|tsx|js|jsx|json|ya?ml|md|css|html|sql))`'
 )
+
+# Repli de parse_agent_file_blocks quand l'agent produit un unique bloc de
+# code balisé ``` (markdown standard) au lieu du contrat <<<DEVAIMAZING_FILE.
+_FENCED_CODE_PATTERN = re.compile(r'```(?:\w+)?\n(.*?)\n```', re.DOTALL)
+
+
+def extract_file_paths(text: str) -> list[str]:
+    """
+    Liste les chemins de fichiers référencés dans un texte (fiche agent).
+
+    Args:
+        text: Texte dans lequel chercher des chemins de fichiers.
+
+    Returns:
+        Chemins relatifs uniques, triés, détectés entre backticks avec une
+        extension de fichier reconnue (ex : `backend/main.py`) — qu'ils
+        existent déjà sur disque ou non (contrairement à
+        read_referenced_files, qui ne garde que les fichiers existants).
+
+    Example:
+        >>> extract_file_paths("Modifier `backend/main.py`.")
+        ['backend/main.py']
+    """
+    return sorted(set(_REFERENCED_FILE_PATTERN.findall(text)))
 
 
 async def read_card(card_path: Path) -> str:
@@ -141,7 +166,7 @@ async def read_referenced_files(repo_path: Path, text: str) -> str:
         ...     Path("/home/user/code/demo"), "Modifier `backend/main.py`."
         ... )
     """
-    paths = sorted(set(_REFERENCED_FILE_PATTERN.findall(text)))
+    paths = extract_file_paths(text)
     parts = []
     for relative_path in paths:
         full_path = repo_path / relative_path
@@ -182,7 +207,7 @@ async def inject_skills(base_prompt: str, skill_names: list[str], skills_dir: Pa
     return "".join(parts)
 
 
-def parse_agent_file_blocks(text: str) -> dict[str, str]:
+def parse_agent_file_blocks(text: str, fallback_path: Optional[str] = None) -> dict[str, str]:
     """
     Extrait les blocs de fichiers du contrat de sortie des agents
     producteurs de code (voir prompts/backend.md, prompts/frontend.md,
@@ -196,6 +221,10 @@ def parse_agent_file_blocks(text: str) -> dict[str, str]:
     Args:
         text: Sortie brute générée par l'agent (champ "content" du retour
             de tools.ollama.run_ollama).
+        fallback_path: Si fourni et qu'aucun bloc <<<DEVAIMAZING_FILE>>>
+            n'est trouvé, mais que `text` contient un unique bloc de code
+            balisé ``` (markdown standard), ce bloc est associé à
+            fallback_path plutôt que de lever ValueError (voir Notes).
 
     Returns:
         Mapping chemin relatif -> contenu du fichier, dans l'ordre
@@ -203,7 +232,21 @@ def parse_agent_file_blocks(text: str) -> dict[str, str]:
         chemin, le dernier l'emporte.
 
     Raises:
-        ValueError: Si `text` ne contient aucun bloc de fichier reconnu.
+        ValueError: Si `text` ne contient aucun bloc de fichier reconnu, et
+            que le repli (fallback_path) ne s'applique pas non plus (absent,
+            ou `text` contient zéro ou plusieurs blocs ``` — ambigu, pas de
+            devinette dans ce cas).
+
+    Notes:
+        Repli ajouté suite à un run réel (2026-07-11, voir docs/roadmap.md) :
+        un modèle producteur local (Qwen, contexte limité, imitatif) peut
+        produire un contenu de fichier correct mais balisé en ``` markdown
+        standard au lieu du contrat <<<DEVAIMAZING_FILE>>>, de façon
+        répétée malgré un prompt explicite — observé sur 3/3 tentatives d'un
+        run réel. Le repli ne s'applique que si l'appelant sait déjà, par un
+        autre moyen (ex : un seul chemin mentionné dans la fiche source),
+        quel fichier unique est attendu — jamais de devinette si plusieurs
+        blocs ``` ou plusieurs chemins candidats.
 
     Example:
         >>> parse_agent_file_blocks(
@@ -214,9 +257,15 @@ def parse_agent_file_blocks(text: str) -> dict[str, str]:
         {'backend/a.py': 'print(1)'}
     """
     matches = _FILE_BLOCK_PATTERN.findall(text)
-    if not matches:
-        raise ValueError(
-            "Aucun bloc de fichier reconnu dans la sortie de l'agent "
-            '(format attendu : <<<DEVAIMAZING_FILE path="...">>> ... <<<DEVAIMAZING_END>>>)'
-        )
-    return {path: content for path, content in matches}
+    if matches:
+        return {path: content for path, content in matches}
+
+    if fallback_path is not None:
+        fenced_blocks = _FENCED_CODE_PATTERN.findall(text)
+        if len(fenced_blocks) == 1:
+            return {fallback_path: fenced_blocks[0].strip()}
+
+    raise ValueError(
+        "Aucun bloc de fichier reconnu dans la sortie de l'agent "
+        '(format attendu : <<<DEVAIMAZING_FILE path="...">>> ... <<<DEVAIMAZING_END>>>)'
+    )

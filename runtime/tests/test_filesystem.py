@@ -8,6 +8,7 @@ import pytest
 
 from studio.tools.filesystem import (
     append_feedback,
+    extract_file_paths,
     inject_skills,
     parse_agent_file_blocks,
     read_card,
@@ -210,3 +211,55 @@ def test_parse_agent_file_blocks_last_duplicate_wins():
     files = parse_agent_file_blocks(text)
 
     assert files == {"backend/a.py": "v2"}
+
+
+def test_parse_agent_file_blocks_fallback_single_fenced_block():
+    text = (
+        "Voici le fichier réécrit :\n\n"
+        "```python\n"
+        "from fastapi import FastAPI\n"
+        "app = FastAPI()\n"
+        "```\n"
+    )
+
+    files = parse_agent_file_blocks(text, fallback_path="backend/main.py")
+
+    assert files == {"backend/main.py": "from fastapi import FastAPI\napp = FastAPI()"}
+
+
+def test_parse_agent_file_blocks_fallback_not_used_when_devaimazing_block_present():
+    text = (
+        '<<<DEVAIMAZING_FILE path="backend/a.py">>>\n'
+        'v1\n'
+        '<<<DEVAIMAZING_END>>>'
+    )
+
+    files = parse_agent_file_blocks(text, fallback_path="backend/other.py")
+
+    assert files == {"backend/a.py": "v1"}
+
+
+def test_parse_agent_file_blocks_fallback_ambiguous_multiple_fenced_blocks_raises():
+    text = "```python\nun\n```\n\net aussi\n\n```python\ndeux\n```\n"
+
+    with pytest.raises(ValueError):
+        parse_agent_file_blocks(text, fallback_path="backend/main.py")
+
+
+def test_parse_agent_file_blocks_no_fallback_path_still_raises():
+    text = "```python\nsolo\n```\n"
+
+    with pytest.raises(ValueError):
+        parse_agent_file_blocks(text, fallback_path=None)
+
+
+def test_extract_file_paths_returns_sorted_unique_paths():
+    text = "Modifier `backend/main.py` et `backend/a.py`. Voir aussi `backend/main.py`."
+
+    paths = extract_file_paths(text)
+
+    assert paths == ["backend/a.py", "backend/main.py"]
+
+
+def test_extract_file_paths_empty_when_no_match():
+    assert extract_file_paths("Rien à voir ici.") == []

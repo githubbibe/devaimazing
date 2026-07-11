@@ -485,6 +485,30 @@ Déroulé exact, conforme au design deux-passes documenté dans `pm.py::_run_fic
    tentative (`max_iterations=3`), pour ne pas réinjecter le mauvais pattern dans le
    contexte de la prochaine tentative. Le compteur d'itérations n'est pas affecté (basé
    sur `state.agent_results`, pas sur le contenu du fichier).
+   **Le prompt renforcé n'a pas suffi** : la 3e tentative a échoué exactement de la même
+   façon (contenu correct, mêmes balises ` ``` ` markdown). 3/3 échecs identiques malgré
+   deux niveaux de renforcement de prompt → conclusion : limite de pilotabilité du
+   modèle local (Qwen 2.5 7B) sur ce point précis, pas un problème de formulation.
+   `run-20260710-234844` confirmé `FAILED` (`back`, max_iterations).
+
+10. **Fallback parser pour le délimiteur de fichier** (fix de code, décidé avec
+    l'utilisateur suite au point 9 plutôt que de continuer à espérer un meilleur
+    prompt) : `tools/filesystem.py::parse_agent_file_blocks` accepte maintenant un
+    paramètre optionnel `fallback_path` — si aucun bloc `<<<DEVAIMAZING_FILE>>>`
+    n'est trouvé mais que la sortie contient un **unique** bloc de code balisé ` ``` `
+    markdown standard, ce bloc est associé à `fallback_path` plutôt que de lever
+    `ValueError`. Le repli ne s'applique que si l'appelant (le node) peut déterminer
+    sans ambiguïté le chemin attendu — nouvelle fonction `extract_file_paths(text)`
+    (chemins entre backticks avec extension reconnue, réutilisée par
+    `read_referenced_files` en interne) appliquée au contenu de la fiche : si elle ne
+    référence qu'un seul chemin de fichier, il devient `fallback_path` ; sinon (zéro ou
+    plusieurs chemins candidats), pas de repli, comportement inchangé. Câblé dans
+    `backend.py`, `frontend.py`, `test.py`. Aucune devinette en cas d'ambiguïté (0 ou
+    plusieurs blocs ` ``` `, ou plusieurs chemins candidats dans la fiche) — le
+    comportement strict d'origine (échec net, `feedback_sent`) reste la valeur par
+    défaut dans tous les cas ambigus. 8 tests de régression ajoutés (6 sur
+    `filesystem.py`, 1 sur `backend.py` couvrant le cas représentatif des 3 nodes),
+    vérifiés rouges sans le fix avant de committer.
 
 **Backlog identifié en marge (2026-07-10, pas bloquant, pour plus tard)** :
 `devaimazing resume` (`cli.py::resume`) ne sait reprendre qu'un run explicitement en
