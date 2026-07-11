@@ -463,6 +463,29 @@ Déroulé exact, conforme au design deux-passes documenté dans `pm.py::_run_fic
    runtime_error` remplacé par deux tests distincts (avec contenu → pas d'exception ;
    sans contenu → exception), vérifiés rouge/vert avant de committer.
 
+9. **Nouveau run (`run-20260710-234844`) après le fix des points 7/8 : Back produit un
+   contenu correct mais mal délimité** (bug de prompt) : conséquence positive du fix du
+   point 7 — le stub `backend/main.py` généré par Back est désormais correct (bons
+   imports `FastAPI`/`get_connection`/`TodoCreate`, handlers existants préservés,
+   nouvel endpoint conforme à la fiche). Mais 2 tentatives consécutives (itérations 1
+   et 2) ont échoué à produire le délimiteur `<<<DEVAIMAZING_FILE...>>>` attendu,
+   utilisant à la place de simples balises ` ``` ` markdown — `parse_agent_file_blocks`
+   ne reconnaît rien, statut `feedback_sent` à chaque fois. Root cause identifiée par
+   inspection directe de la fiche : la section "Spécification complète du fichier
+   final" (générée par le PM) affiche elle-même le code cible entre balises ` ``` `
+   classiques — Qwen (7B, imitatif) reproduit très probablement ce format qu'il vient
+   de lire dans son propre prompt plutôt que le contrat `<<<DEVAIMAZING_FILE>>>` du
+   system prompt. Fix : renforcement explicite de `prompts/backend.md`,
+   `prompts/frontend.md`, `prompts/test.md` — avertissement direct sur ce risque
+   d'imitation, juste après la définition du format attendu. **Pas de test de
+   régression automatisé possible** (comportement de modèle face à un prompt).
+   Intervention manuelle complémentaire : la section `## Feedback` de `back.md`
+   contenait déjà 2 tentatives ratées, chacune avec ses propres balises ` ``` ``` —
+   nettoyée (remise à `_Aucun feedback pour l'instant._`) avant la 3e et dernière
+   tentative (`max_iterations=3`), pour ne pas réinjecter le mauvais pattern dans le
+   contexte de la prochaine tentative. Le compteur d'itérations n'est pas affecté (basé
+   sur `state.agent_results`, pas sur le contenu du fichier).
+
 **Backlog identifié en marge (2026-07-10, pas bloquant, pour plus tard)** :
 `devaimazing resume` (`cli.py::resume`) ne sait reprendre qu'un run explicitement en
 attente d'une validation humaine (`awaiting_human_validation=True` dans le state

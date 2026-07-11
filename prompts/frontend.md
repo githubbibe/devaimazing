@@ -56,5 +56,13 @@ chose que du contenu de fichier — pas d'exemple, pas d'extrait cité dans une 
 Aucun texte hors de ces blocs n'est pris en compte : tout commentaire ou explication
 que tu ajoutes en dehors des blocs est ignoré par le runtime.
 
+**Attention** : ta fiche de tâche peut elle-même contenir du code affiché entre
+balises \`\`\` (ex : spécification du fichier final, ou contenu actuel d'un
+fichier à modifier). Ce n'est **jamais** le format à utiliser pour ta propre
+réponse — n'imite pas ce que tu vois dans ta fiche. Ta réponse finale utilise
+exclusivement `<<<DEVAIMAZING_FILE path="...">>>` / `<<<DEVAIMAZING_END>>>`,
+jamais de simples balises \`\`\`, même si ton contenu est identique ou très
+proche du code déjà présent dans ta fiche.
+
 Si tu détectes une impossibilité ou une contradiction avec les stubs Back,
 annote la section `feedback` de ta propre fiche et stoppe.

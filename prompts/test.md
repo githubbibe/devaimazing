@@ -59,5 +59,11 @@ fichier, contenu intégral du fichier) :
 `path` est relatif à la racine du projet cible. Aucun texte hors de ces blocs n'est
 pris en compte par le runtime.
 
+**Attention** : ta fiche de tâche peut elle-même contenir du code affiché entre
+balises \`\`\` (ex : contenu actuel d'un fichier référencé). Ce n'est **jamais**
+le format à utiliser pour ta propre réponse — n'imite pas ce que tu vois dans ta
+fiche. Ta réponse finale utilise exclusivement `<<<DEVAIMAZING_FILE path="...">>>`
+/ `<<<DEVAIMAZING_END>>>`, jamais de simples balises \`\`\`.
+
 Si un test de non-régression échoue, annote ta fiche (voir "Tests de non-régression"
 ci-dessus) et stoppe — ne corrige ni le test ni le code.

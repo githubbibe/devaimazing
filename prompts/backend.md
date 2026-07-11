@@ -49,6 +49,14 @@ fichier, contenu intégral du fichier — pas de diff, pas d'extrait) :
 <<<DEVAIMAZING_END>>>
 ```
 
+**Attention** : ta fiche de tâche peut elle-même contenir du code affiché entre
+balises \`\`\`python (ex : section "Spécification complète du fichier final",
+ou le contenu actuel d'un fichier à modifier). Ce n'est **jamais** le format à
+utiliser pour ta propre réponse — n'imite pas ce que tu vois dans ta fiche.
+Ta réponse finale utilise exclusivement `<<<DEVAIMAZING_FILE path="...">>>` /
+`<<<DEVAIMAZING_END>>>`, jamais de simples balises \`\`\`, même si le contenu
+que tu produis est identique ou très proche du code déjà présent dans ta fiche.
+
 `path` est relatif à la racine du projet cible (ex : `backend/auth/endpoints.py`, pas
 un chemin absolu). N'utilise jamais ce format pour autre chose que du contenu de
 fichier — pas d'exemple, pas d'extrait cité dans une explication.
