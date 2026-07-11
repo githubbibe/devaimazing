@@ -510,6 +510,65 @@ Déroulé exact, conforme au design deux-passes documenté dans `pm.py::_run_fic
     `filesystem.py`, 1 sur `backend.py` couvrant le cas représentatif des 3 nodes),
     vérifiés rouges sans le fix avant de committer.
 
+11. **Nouveau run (`run-20260711-010821`), même fiche racine que le run précédent
+    réussi : le PM choisit une séquence différente et non conforme à sa propre
+    doc** (variance de modèle, pas un bug de code) : `card-root.md` quasi identique
+    au run précédent (`run-20260710-234844`, réussi jusqu'à cette phase). Le run
+    précédent avait produit la séquence `back, back-tu, test, secu` (4 fiches
+    distinctes, une par responsabilité) ; celui-ci a produit `back` seul — une
+    unique fiche demandant à Back de gérer `backend/main.py` **et**
+    `tests/unit/backend/test_main.py` **et** un nouveau fichier d'intégration en un
+    seul appel. `prompts/pm.md` documente pourtant explicitement « Feature backend
+    only : back → back-tu → test → secu » pour ce type de run. Conséquence : Qwen
+    (7B), surchargé, n'a traité qu'un fragment du premier fichier (le handler seul,
+    pas le fichier complet) et n'a pas touché aux 2 autres — `feedback_sent`. Le
+    fallback du point 10 ne s'applique pas ici à raison (3 chemins candidats dans
+    la fiche → ambigu, pas de devinette). `state.agent_cards` étant déjà figé pour
+    ce run, un simple `resume` ne corrige pas la séquence (rejoue seulement `back`
+    avec la même fiche surchargée) — nécessiterait soit une chirurgie manuelle de
+    l'état (aupdate_state, risqué, non testé), soit un nouveau run. **Décision avec
+    l'utilisateur** : ne pas patcher au cas par cas cette fois — cette variance,
+    combinée aux points 5/8 (refus d'outil) et 9 (délimiteur ignoré), révèle un
+    problème de méthode plus large : trois contrats de sortie différents
+    (`SEQUENCE:` texte libre, refus d'outil silencieusement toléré, délimiteur
+    `<<<DEVAIMAZING_FILE>>>` texte libre) reposent tous sur « demander au modèle en
+    prose et re-parser après coup », sans contrainte structurelle. Voir chantier
+    prioritaire ci-dessous plutôt qu'un fix ponctuel de plus.
+
+## Chantier prioritaire (ajouté 2026-07-11) : sortie structurée pour tous les agents
+
+Repenser le flux d'entrée/sortie des agents (PM, Architecte, Sécu via Claude Code
+CLI ; Back, Front, Test via Ollama/Qwen) pour remplacer le pattern actuel
+« instruction en prose + parsing regex après coup » par une contrainte
+structurelle sur la sortie, chaque fois que c'est possible — MCP, hooks, ou
+tool-calling natif, séparément pour les deux familles de modèles :
+
+- **Côté Claude Code CLI** (PM/Architecte/Sécu, actuellement `claude -p
+  --output-format json` en sous-process, prompt via stdin, aucun `--mcp-config`
+  ni hook configuré) : un serveur MCP custom exposant des outils à schéma
+  contraint (ex. `submit_sequence(agents: enum[...])`) pourrait remplacer la
+  ligne `SEQUENCE:` texte libre ; à vérifier si `--mcp-config` fonctionne en mode
+  `-p` non-interactif/headless, et si `--allowedTools` peut restreindre le modèle
+  à n'utiliser QUE cet outil.
+- **Côté Ollama** (Back/Front/Test, actuellement `ollama.AsyncClient.chat()`,
+  contrat de sortie par délimiteurs texte `<<<DEVAIMAZING_FILE>>>`) : à vérifier
+  si le package `ollama` supporte le function-calling (`tools=[...]`) ou un
+  `format` JSON Schema contraint, et si `qwen2.5:7b-instruct` le supporte de
+  façon fiable pour produire un ou plusieurs blocs {path, content} potentiellement
+  volumineux (centaines de lignes de code).
+
+**Recherches lancées le 2026-07-11, interrompues par épuisement du quota de
+session (429, reset 6h Europe/Paris)** — aucune des deux n'est allée au bout,
+rien à synthétiser pour l'instant :
+1. Agent `claude-code-guide` sur les capacités MCP/hooks en mode `-p`.
+2. Agent général (WebSearch) sur le function-calling/structured-output Ollama et
+   le support réel de Qwen 2.5.
+
+Point de reprise : relancer ces deux recherches après le reset, avant tout début
+d'implémentation — pas de code à écrire tant que les capacités réelles des deux
+plateformes ne sont pas vérifiées empiriquement (cohérent avec la méthode déjà
+suivie pour les autres points de ce roadmap : vérifier avant de coder).
+
 **Backlog identifié en marge (2026-07-10, pas bloquant, pour plus tard)** :
 `devaimazing resume` (`cli.py::resume`) ne sait reprendre qu'un run explicitement en
 attente d'une validation humaine (`awaiting_human_validation=True` dans le state
