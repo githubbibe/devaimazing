@@ -27,6 +27,7 @@ from studio.config import StudioConfig
 from studio.graph import build_graph
 from studio.metrics import MetricsCollector
 from studio.state import Phase, RunStatus, StudioState
+from studio.tools.git import checkout_branch
 
 console = Console()
 
@@ -120,6 +121,9 @@ async def _run_async(project: str, objective: Optional[str], dry_run: bool) -> N
     if dry_run:
         console.print(f"[yellow]Dry-run[/yellow] : objectif = {objective!r}, aucun agent exécuté.")
         return
+
+    base_branch = config.get("git", {}).get("base_branch", "develop")
+    await checkout_branch(config.repo_path, base_branch)
 
     graph = await build_graph(config)
     try:

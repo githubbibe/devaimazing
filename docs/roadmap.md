@@ -650,10 +650,44 @@ l'utilisateur — "maintenant") :
 sortie du PM (ligne `SEQUENCE:`) et de l'Architecte (`STATUT:`/`AGENT:`/
 `FEEDBACK:`), tous deux côté Claude Code CLI — chantier séparé (`--json-schema`),
 pas commencé, cohérent avec la recommandation de priorité ci-dessus.
-**Non vérifié en conditions réelles** : aucun run réel relancé contre Ollama
-depuis ce changement — à faire pour confirmer que Qwen respecte effectivement
-la contrainte de schéma en pratique (les recherches documentent le mécanisme,
-pas un taux de succès mesuré pour ce modèle/cas d'usage précis).
+
+**Vérifié en conditions réelles le 2026-07-11** (`run-20260711-101842`,
+serveur Ollama local confirmé supporter `format` via un appel `curl` direct
+à `/api/chat` avant de relancer le run) :
+- **Structured output confirmé fonctionnel en pratique** : Back a produit,
+  en un seul appel, 4 fichiers corrects (`backend/main.py`,
+  `tests/integration/backend/__init__.py`,
+  `tests/integration/backend/test_complete_flow.py`,
+  `tests/unit/backend/test_main.py`) — alors que la même fiche (PM regroupant
+  à nouveau tout dans un seul agent "back", cf. point 11) avait fait échouer
+  l'ancien contrat par délimiteurs (1 seul fichier partiel produit, 2 autres
+  ignorés). Le refus d'outil Bash côté PM (variance déjà documentée au point
+  5/8) s'est aussi reproduit, mais n'a plus fait échouer le run grâce au fix
+  du point 12 (non fatal si contenu exploitable) — juste un warning loggé.
+
+12. **`architect-brief.md` introuvable en phase 5** (bug de code réel, trouvé
+    pendant cette vérification) : le repo était resté sur la branche d'un run
+    précédent (`studio/test-todo-49de4`) au moment de lancer ce nouveau run.
+    Les commits de phase 1/2 (`card-root.md` non commité en fait — seul
+    `architect-brief.md` l'est, via `commit_as_agent` en phase 2) ont atterri
+    sur cette branche stale, puisque `create_run_branch` (qui bascule sur
+    `base_branch`) n'est appelée qu'en **fin** de phase 3 — rien ne garantit
+    que le repo est sur `develop` avant. Quand la phase 3 a ensuite basculé
+    sur `develop` pour créer la nouvelle branche du run, `architect-brief.md`
+    (tracké, commité sur l'ancienne branche, absent de `develop`) a été
+    supprimé du working tree par le `checkout` — `architect.py::
+    _run_audit_stubs` a levé `FileNotFoundError` en le cherchant.
+    Root cause : rien dans `devaimazing run` ne garantit que le repo cible
+    est sur `base_branch` avant que la phase 1 démarre — seule la phase 3
+    (fin) s'en préoccupe, trop tard pour les commits des phases 1/2.
+    Fix : nouvelle fonction `tools/git.py::checkout_branch(repo_path, branch)`,
+    appelée dans `cli.py::_run_async` (nouveau run uniquement, jamais
+    `_resume_async` — un run repris est potentiellement déjà sur sa propre
+    branche de feature, y forcer un checkout serait destructeur) juste avant
+    `build_graph`, donc avant toute activation de phase 1. 3 tests de
+    régression (`test_cli.py`), vérifiés rouges sans le fix avant de
+    committer. **`run-20260711-101842` reste cassé** (le fix ne rétroagit
+    pas) — récupération manuelle à faire séparément.
 
 **Backlog identifié en marge (2026-07-10, pas bloquant, pour plus tard)** :
 `devaimazing resume` (`cli.py::resume`) ne sait reprendre qu'un run explicitement en

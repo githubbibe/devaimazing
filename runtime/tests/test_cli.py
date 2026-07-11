@@ -44,6 +44,11 @@ def _env(tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch):
     _write_yaml(config_dir / "projects" / "demo.yml", {"repo_path": str(repo)})
     monkeypatch.setenv("DEVAIMAZING_CONFIG_DIR", str(config_dir))
     monkeypatch.delenv("DEVAIMAZING_PROJECT", raising=False)
+
+    async def fake_checkout_branch(repo_path, branch):
+        pass
+
+    monkeypatch.setattr(cli_module, "checkout_branch", fake_checkout_branch)
     return config_dir
 
 
@@ -66,6 +71,52 @@ def _fake_checkpointer(closed: list) -> SimpleNamespace:
 
 
 # --- run ---
+
+def test_run_checks_out_base_branch_before_building_graph(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    # Régression : les phases 1/2 commitent directement sur la branche
+    # courante (create_run_branch, qui bascule sur base_branch, n'est
+    # appelée qu'en fin de phase 3). Sans ce checkout explicite au tout
+    # début du run, un repo laissé sur la branche d'un run précédent fait
+    # atterrir ces commits ailleurs que sur base_branch — perdus dès que
+    # create_run_branch rebascule dessus pour créer la nouvelle branche.
+    # Trouvé en run réel (2026-07-11) : architect-brief.md introuvable en
+    # phase 5, voir docs/roadmap.md.
+    calls = []
+
+    async def fake_checkout_branch(repo_path, branch):
+        calls.append((repo_path, branch))
+
+    async def fake_ainvoke(state, config):
+        assert calls == [(repo, "develop")]  # checkout déjà fait avant build_graph
+        return {"status": RunStatus.COMPLETED}
+
+    fake_graph = SimpleNamespace(ainvoke=fake_ainvoke, checkpointer=_fake_checkpointer([]))
+
+    async def fake_build_graph(config):
+        assert calls == [(repo, "develop")]  # et avant build_graph aussi
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "checkout_branch", fake_checkout_branch)
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["run", "demo", "--objective", "x"])
+
+    assert result.exit_code == 0
+    assert calls == [(repo, "develop")]
+
+
+def test_run_dry_run_does_not_checkout_branch(monkeypatch: pytest.MonkeyPatch):
+    async def fail_checkout_branch(repo_path, branch):
+        raise AssertionError("checkout_branch ne doit pas être appelé en --dry-run")
+
+    monkeypatch.setattr(cli_module, "checkout_branch", fail_checkout_branch)
+
+    result = CliRunner().invoke(main, ["run", "demo", "--objective", "x", "--dry-run"])
+
+    assert result.exit_code == 0
+
 
 def test_run_dry_run_does_not_invoke_graph(monkeypatch: pytest.MonkeyPatch):
     async def fail_build_graph(config):

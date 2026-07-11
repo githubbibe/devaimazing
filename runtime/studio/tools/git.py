@@ -91,6 +91,36 @@ def generate_branch_name(feature_name: str) -> str:
     return f"studio/{slug}-{digest}"
 
 
+async def checkout_branch(repo_path: Path, branch: str) -> None:
+    """
+    Bascule sur `branch` dans le repo projet.
+
+    Args:
+        repo_path: Chemin absolu vers le repo projet.
+        branch: Nom de la branche à checkout.
+
+    Raises:
+        RuntimeError: Si le checkout échoue (modifications locales non
+            commitées en conflit avec `branch`, branche inexistante).
+
+    Side effects:
+        Change la branche courante du repo projet.
+
+    Notes:
+        Appelé au tout début d'un nouveau run (`cli.py::_run_async`, avant
+        la phase 1), pas à la reprise (`_resume_async`) — un run repris est
+        potentiellement déjà sur sa propre branche de feature, la basculer
+        de force vers base_branch serait destructeur. Comble un gap réel
+        trouvé en run (2026-07-11, voir docs/roadmap.md) : sans ce garde-fou,
+        les commits des phases 1/2 (avant que create_run_branch ne crée la
+        branche du run, en fin de phase 3) atterrissent sur la branche
+        laissée par un run précédent si le repo n'a pas été remis sur
+        base_branch entre deux runs — perdus dès que create_run_branch
+        rebascule sur base_branch pour créer la nouvelle branche.
+    """
+    await _run_git(repo_path, "checkout", branch)
+
+
 async def create_run_branch(repo_path: Path, feature_name: str, base_branch: str = "develop") -> str:
     """
     Crée la branche du run à partir de base_branch.
