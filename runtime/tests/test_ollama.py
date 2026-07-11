@@ -41,7 +41,8 @@ def _make_fake_client_cls(scripted: list):
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def chat(self, model, messages, stream=False):
+        async def chat(self, model, messages, format=None, stream=False):
+            state.setdefault("formats", []).append(format)
             outcome = scripted[state["calls"]]
             state["calls"] += 1
             if isinstance(outcome, BaseException):
@@ -76,6 +77,28 @@ async def test_run_ollama_success(monkeypatch: pytest.MonkeyPatch):
     assert result["tokens_completion"] == 7
     assert result["duration_ms"] >= 0
     assert fake_cls.state["calls"] == 1
+
+
+async def test_run_ollama_passes_response_format_to_client(monkeypatch: pytest.MonkeyPatch):
+    fake_cls = _make_fake_client_cls([_FakeResponse('{"files": [], "blocked_reason": ""}', 1, 1)])
+    monkeypatch.setattr(ollama_tool, "AsyncClient", fake_cls)
+    schema = {"type": "object"}
+
+    await run_ollama(
+        system_prompt="sys", user_prompt="user", model="qwen2.5:7b-instruct",
+        response_format=schema,
+    )
+
+    assert fake_cls.state["formats"] == [schema]
+
+
+async def test_run_ollama_default_response_format_is_none(monkeypatch: pytest.MonkeyPatch):
+    fake_cls = _make_fake_client_cls([_FakeResponse("texte libre", 1, 1)])
+    monkeypatch.setattr(ollama_tool, "AsyncClient", fake_cls)
+
+    await run_ollama(system_prompt="sys", user_prompt="user", model="qwen2.5:7b-instruct")
+
+    assert fake_cls.state["formats"] == [None]
 
 
 async def test_run_ollama_retries_on_connection_error_then_succeeds(monkeypatch: pytest.MonkeyPatch):

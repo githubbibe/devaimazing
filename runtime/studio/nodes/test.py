@@ -20,15 +20,14 @@ from studio.routing import agent_iteration_count, max_iterations_exceeded
 from studio.state import AgentResult, Phase, RunStatus, StudioState
 from studio.tools.filesystem import (
     append_feedback,
-    extract_file_paths,
     inject_skills,
-    parse_agent_file_blocks,
+    parse_structured_file_output,
     read_card,
     read_referenced_files,
     write_card,
 )
 from studio.tools.git import commit_as_agent
-from studio.tools.ollama import run_ollama
+from studio.tools.ollama import FILE_OUTPUT_SCHEMA, run_ollama
 
 _DEVAIMAZING_ROOT = Path(__file__).resolve().parents[3]
 _PROMPT_PATH = _DEVAIMAZING_ROOT / "prompts" / "test.md"
@@ -75,9 +74,10 @@ async def run(state: StudioState) -> StudioState:
 
     Returns:
         État mis à jour :
-        - Si l'agent ne produit aucun bloc de fichier reconnu (voir
-          prompts/test.md, section Format de sortie) : feedback ajouté à sa
-          propre fiche, AgentResult.status="feedback_sent",
+        - Si l'agent signale un blocage (champ "blocked_reason" non vide
+          dans sa sortie structurée — voir tools.ollama.FILE_OUTPUT_SCHEMA),
+          ou si "files" est vide : feedback ajouté à sa propre fiche,
+          AgentResult.status="feedback_sent",
           state.status=RunStatus.WAITING_HUMAN.
         - Si config.test_command est défini (voir config/projects/<nom>.yml
           section test) et que son exécution échoue (code de sortie non
@@ -100,7 +100,10 @@ async def run(state: StudioState) -> StudioState:
             commande de test, est introuvable.
 
     Side effects:
-        - Appelle tools.ollama.run_ollama (modèle models.agents_local).
+        - Appelle tools.ollama.run_ollama (modèle models.agents_local), avec
+          response_format=tools.ollama.FILE_OUTPUT_SCHEMA (sortie contrainte
+          par grammaire — voir docs/roadmap.md, chantier "sortie structurée",
+          2026-07-11).
         - Crée des fichiers dans /tests/integration/ et /tests/e2e/ (les
           chemins exacts renvoyés par l'agent, sans validation de périmètre
           — rôle de l'Architecte en phase 9).
@@ -184,17 +187,21 @@ async def run(state: StudioState) -> StudioState:
         model=config.models["agents_local"],
         base_url=config.ollama_base_url,
         timeout_seconds=ollama_config.get("timeout_seconds", 120),
+        response_format=FILE_OUTPUT_SCHEMA,
     )
     tokens_used = result["tokens_prompt"] + result["tokens_completion"]
 
     iteration = agent_iteration_count(state, role) + 1
 
-    expected_paths = extract_file_paths(card_content)
-    fallback_path = expected_paths[0] if len(expected_paths) == 1 else None
     try:
-        files = parse_agent_file_blocks(result["content"], fallback_path=fallback_path)
+        files, blocked_reason = parse_structured_file_output(result["content"])
     except ValueError:
-        await append_feedback(card_path, agent_source=role, feedback=result["content"])
+        files, blocked_reason = {}, ""
+
+    if blocked_reason or not files:
+        await append_feedback(
+            card_path, agent_source=role, feedback=blocked_reason or result["content"]
+        )
         agent_result = AgentResult(
             agent=role,
             phase=state.current_phase,

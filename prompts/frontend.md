@@ -41,28 +41,25 @@ Les appels API backend utilisent UNIQUEMENT les endpoints documentés dans les s
 
 ## Format de sortie
 
-Chaque fichier produit ou modifié DOIT être délimité exactement ainsi (un bloc par
-fichier, contenu intégral du fichier — pas de diff, pas d'extrait) :
+Ta réponse est contrainte automatiquement à un JSON conforme à ce schéma — tu n'as
+pas besoin (et ne peux pas) répondre autrement :
 
+```json
+{
+  "files": [
+    {"path": "frontend/components/LoginForm.tsx", "content": "<contenu intégral du fichier>"}
+  ],
+  "blocked_reason": ""
+}
 ```
-<<<DEVAIMAZING_FILE path="frontend/components/LoginForm.tsx">>>
-<contenu intégral du fichier>
-<<<DEVAIMAZING_END>>>
-```
 
-`path` est relatif à la racine du projet cible. N'utilise jamais ce format pour autre
-chose que du contenu de fichier — pas d'exemple, pas d'extrait cité dans une explication.
+- `files` : un élément par fichier créé ou modifié. `path` relatif à la racine du
+  projet cible. `content` est le contenu **intégral** du fichier — pas de diff, pas
+  d'extrait, même quand tu modifies un fichier existant dont le contenu actuel
+  t'est fourni dans ta fiche.
+- `blocked_reason` : laisse une chaîne vide `""` dans le cas normal. Si tu détectes
+  une impossibilité ou une contradiction avec les stubs Back, laisse `files` vide
+  (`[]`) et explique la raison précisément dans `blocked_reason` — ne devine pas.
 
-Aucun texte hors de ces blocs n'est pris en compte : tout commentaire ou explication
-que tu ajoutes en dehors des blocs est ignoré par le runtime.
-
-**Attention** : ta fiche de tâche peut elle-même contenir du code affiché entre
-balises \`\`\` (ex : spécification du fichier final, ou contenu actuel d'un
-fichier à modifier). Ce n'est **jamais** le format à utiliser pour ta propre
-réponse — n'imite pas ce que tu vois dans ta fiche. Ta réponse finale utilise
-exclusivement `<<<DEVAIMAZING_FILE path="...">>>` / `<<<DEVAIMAZING_END>>>`,
-jamais de simples balises \`\`\`, même si ton contenu est identique ou très
-proche du code déjà présent dans ta fiche.
-
-Si tu détectes une impossibilité ou une contradiction avec les stubs Back,
-annote la section `feedback` de ta propre fiche et stoppe.
+Le format JSON lui-même est garanti par le runtime — inutile d'ajouter des balises
+` ``` ` ou tout autre habillage : `content` est déjà une chaîne de texte JSON.

@@ -5,6 +5,7 @@ Lecture et écriture des fiches .md, project-map, architect-map.
 Injection des skills dans les prompts.
 """
 
+import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -269,3 +270,59 @@ def parse_agent_file_blocks(text: str, fallback_path: Optional[str] = None) -> d
         "Aucun bloc de fichier reconnu dans la sortie de l'agent "
         '(format attendu : <<<DEVAIMAZING_FILE path="...">>> ... <<<DEVAIMAZING_END>>>)'
     )
+
+
+def parse_structured_file_output(content: str) -> tuple[dict[str, str], str]:
+    """
+    Parse la sortie structurée d'un agent producteur (Back/Front/Test) appelé
+    avec tools.ollama.FILE_OUTPUT_SCHEMA (voir docs/roadmap.md, chantier
+    "sortie structurée", 2026-07-11) — remplace parse_agent_file_blocks pour
+    ces trois agents (Ollama/Qwen), qui n'utilisent plus le contrat par
+    délimiteurs texte <<<DEVAIMAZING_FILE>>>.
+
+    Args:
+        content: Sortie JSON brute générée par l'agent (champ "content" du
+            retour de tools.ollama.run_ollama, appelé avec
+            response_format=FILE_OUTPUT_SCHEMA).
+
+    Returns:
+        (files, blocked_reason). `files` : mapping chemin relatif -> contenu
+        intégral, vide si l'agent a signalé un blocage. `blocked_reason` :
+        raison du blocage signalée par l'agent ; chaîne vide si aucun blocage
+        (cas normal).
+
+    Raises:
+        ValueError: Si `content` n'est pas un JSON valide, ou si sa structure
+            ne correspond pas au schéma attendu (champs "files"/"blocked_reason"
+            absents, ou entrée de fichier sans "path"/"content"). Le grammar-
+            constrained decoding d'Ollama garantit normalement la conformité,
+            mais ce n'est pas supposé sans vérification (voir Notes de
+            tools.ollama.run_ollama).
+
+    Example:
+        >>> parse_structured_file_output(
+        ...     '{"files": [{"path": "backend/a.py", "content": "x = 1"}], '
+        ...     '"blocked_reason": ""}'
+        ... )
+        ({'backend/a.py': 'x = 1'}, '')
+    """
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Sortie structurée invalide (JSON attendu) : {exc}") from exc
+
+    if not isinstance(data, dict) or "files" not in data or "blocked_reason" not in data:
+        raise ValueError(
+            "Sortie structurée incomplète : champs 'files' et 'blocked_reason' "
+            f"attendus (voir tools.ollama.FILE_OUTPUT_SCHEMA), reçu : {content!r}"
+        )
+
+    files: dict[str, str] = {}
+    for entry in data["files"]:
+        if not isinstance(entry, dict) or "path" not in entry or "content" not in entry:
+            raise ValueError(
+                f"Entrée de fichier incomplète (path/content attendus), reçu : {entry!r}"
+            )
+        files[entry["path"]] = entry["content"]
+
+    return files, data["blocked_reason"]

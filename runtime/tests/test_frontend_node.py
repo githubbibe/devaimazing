@@ -3,6 +3,7 @@ Tests du node Front (studio.nodes.frontend) — mêmes garanties que le node
 Back (test_backend_node.py), dépendances externes mockées.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -42,11 +43,14 @@ def _fake_ollama_result(content: str, tokens_prompt=5, tokens_completion=10, dur
     }
 
 
-FILE_BLOCK = (
-    '<<<DEVAIMAZING_FILE path="frontend/components/LoginForm.tsx">>>\n'
-    'export const LoginForm = () => null;\n'
-    '<<<DEVAIMAZING_END>>>'
-)
+def _structured_output(files: dict[str, str], blocked_reason: str = "") -> str:
+    return json.dumps({
+        "files": [{"path": path, "content": content} for path, content in files.items()],
+        "blocked_reason": blocked_reason,
+    })
+
+
+FILE_OUTPUT = _structured_output({"frontend/components/LoginForm.tsx": "export const LoginForm = () => null;"})
 
 
 async def test_frontend_stub_phase_writes_files_and_commits(monkeypatch: pytest.MonkeyPatch):
@@ -56,7 +60,7 @@ async def test_frontend_stub_phase_writes_files_and_commits(monkeypatch: pytest.
         return "fiche front"
 
     async def fake_run_ollama(**kwargs):
-        return _fake_ollama_result(FILE_BLOCK)
+        return _fake_ollama_result(FILE_OUTPUT)
 
     async def fake_write_card(path, content):
         pass
@@ -90,6 +94,40 @@ async def test_frontend_stub_phase_writes_files_and_commits(monkeypatch: pytest.
     assert updates["current_agent_index"] == 0
 
 
+async def test_frontend_calls_ollama_with_structured_output_schema(monkeypatch: pytest.MonkeyPatch):
+    captured = {}
+
+    async def fake_read_card(path):
+        return "fiche front"
+
+    async def fake_run_ollama(**kwargs):
+        captured["response_format"] = kwargs.get("response_format")
+        return _fake_ollama_result(FILE_OUTPUT)
+
+    async def fake_write_card(path, content):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(frontend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(frontend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(frontend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(frontend_node, "commit_as_agent", fake_commit_as_agent)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["front"],
+        current_agent_index=0,
+        agent_cards={"front": "specs/run-042/front.md"},
+    )
+
+    await frontend_node.run(state)
+
+    assert captured["response_format"] == frontend_node.FILE_OUTPUT_SCHEMA
+
+
 async def test_frontend_includes_existing_file_content_in_prompt(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
@@ -106,7 +144,7 @@ async def test_frontend_includes_existing_file_content_in_prompt(
 
     async def fake_run_ollama(**kwargs):
         captured["user_prompt"] = kwargs["user_prompt"]
-        return _fake_ollama_result(FILE_BLOCK)
+        return _fake_ollama_result(FILE_OUTPUT)
 
     async def fake_write_card(path, content):
         pass
@@ -145,7 +183,7 @@ async def test_frontend_tu_role_uses_test_commit_prefix(monkeypatch: pytest.Monk
         return base_prompt
 
     async def fake_run_ollama(**kwargs):
-        return _fake_ollama_result(FILE_BLOCK)
+        return _fake_ollama_result(FILE_OUTPUT)
 
     async def fake_write_card(path, content):
         pass
@@ -175,14 +213,18 @@ async def test_frontend_tu_role_uses_test_commit_prefix(monkeypatch: pytest.Monk
     assert committed["message"].startswith("test:")
 
 
-async def test_frontend_no_file_blocks_appends_feedback_and_waits_for_human(monkeypatch: pytest.MonkeyPatch):
+async def test_frontend_blocked_reason_appends_feedback_and_waits_for_human(
+    monkeypatch: pytest.MonkeyPatch,
+):
     feedback_calls = []
 
     async def fake_read_card(path):
         return "fiche front"
 
     async def fake_run_ollama(**kwargs):
-        return _fake_ollama_result("Endpoint backend manquant, je ne peux pas continuer.")
+        return _fake_ollama_result(
+            _structured_output({}, blocked_reason="Endpoint backend manquant, je ne peux pas continuer.")
+        )
 
     async def fake_append_feedback(card_path, agent_source, feedback):
         feedback_calls.append((agent_source, feedback))
@@ -202,6 +244,7 @@ async def test_frontend_no_file_blocks_appends_feedback_and_waits_for_human(monk
     updates = await frontend_node.run(state)
 
     assert feedback_calls[0][0] == "front"
+    assert feedback_calls[0][1] == "Endpoint backend manquant, je ne peux pas continuer."
     assert updates["status"] == RunStatus.WAITING_HUMAN
     assert updates["awaiting_human_validation"] is True
     assert updates["agent_results"][0].status == "feedback_sent"
@@ -240,7 +283,7 @@ async def test_frontend_records_metrics_on_success(monkeypatch: pytest.MonkeyPat
         return "fiche front"
 
     async def fake_run_ollama(**kwargs):
-        return _fake_ollama_result(FILE_BLOCK)
+        return _fake_ollama_result(FILE_OUTPUT)
 
     async def fake_write_card(path, content):
         pass

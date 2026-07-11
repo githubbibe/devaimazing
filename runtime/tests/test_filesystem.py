@@ -11,6 +11,7 @@ from studio.tools.filesystem import (
     extract_file_paths,
     inject_skills,
     parse_agent_file_blocks,
+    parse_structured_file_output,
     read_card,
     read_referenced_files,
     write_card,
@@ -263,3 +264,54 @@ def test_extract_file_paths_returns_sorted_unique_paths():
 
 def test_extract_file_paths_empty_when_no_match():
     assert extract_file_paths("Rien à voir ici.") == []
+
+
+def test_parse_structured_file_output_single_file():
+    content = (
+        '{"files": [{"path": "backend/a.py", "content": "x = 1"}], "blocked_reason": ""}'
+    )
+
+    files, blocked_reason = parse_structured_file_output(content)
+
+    assert files == {"backend/a.py": "x = 1"}
+    assert blocked_reason == ""
+
+
+def test_parse_structured_file_output_multiple_files():
+    content = (
+        '{"files": ['
+        '{"path": "backend/a.py", "content": "a"}, '
+        '{"path": "backend/b.py", "content": "b"}'
+        '], "blocked_reason": ""}'
+    )
+
+    files, blocked_reason = parse_structured_file_output(content)
+
+    assert files == {"backend/a.py": "a", "backend/b.py": "b"}
+    assert blocked_reason == ""
+
+
+def test_parse_structured_file_output_blocked():
+    content = '{"files": [], "blocked_reason": "Contradiction avec le brief."}'
+
+    files, blocked_reason = parse_structured_file_output(content)
+
+    assert files == {}
+    assert blocked_reason == "Contradiction avec le brief."
+
+
+def test_parse_structured_file_output_invalid_json_raises():
+    with pytest.raises(ValueError):
+        parse_structured_file_output("pas du json")
+
+
+def test_parse_structured_file_output_missing_fields_raises():
+    with pytest.raises(ValueError):
+        parse_structured_file_output('{"files": []}')  # blocked_reason absent
+
+
+def test_parse_structured_file_output_incomplete_file_entry_raises():
+    with pytest.raises(ValueError):
+        parse_structured_file_output(
+            '{"files": [{"path": "backend/a.py"}], "blocked_reason": ""}'
+        )  # content absent

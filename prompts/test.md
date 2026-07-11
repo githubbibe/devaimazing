@@ -47,23 +47,24 @@ Tu reçois les zones d'impact identifiées par l'Architecte en phase 2.
 
 ## Format de sortie
 
-Chaque fichier de test produit DOIT être délimité exactement ainsi (un bloc par
-fichier, contenu intégral du fichier) :
+Ta réponse est contrainte automatiquement à un JSON conforme à ce schéma — tu n'as
+pas besoin (et ne peux pas) répondre autrement :
 
+```json
+{
+  "files": [
+    {"path": "tests/integration/test_login_flow.py", "content": "<contenu intégral du fichier>"}
+  ],
+  "blocked_reason": ""
+}
 ```
-<<<DEVAIMAZING_FILE path="tests/integration/test_login_flow.py">>>
-<contenu intégral du fichier>
-<<<DEVAIMAZING_END>>>
-```
 
-`path` est relatif à la racine du projet cible. Aucun texte hors de ces blocs n'est
-pris en compte par le runtime.
+- `files` : un élément par fichier de test produit. `path` relatif à la racine du
+  projet cible. `content` est le contenu **intégral** du fichier.
+- `blocked_reason` : laisse une chaîne vide `""` dans le cas normal. Si un test de
+  non-régression échoue (voir "Tests de non-régression" ci-dessus), laisse `files`
+  vide (`[]`) et explique la raison dans `blocked_reason` — ne corrige ni le test
+  ni le code.
 
-**Attention** : ta fiche de tâche peut elle-même contenir du code affiché entre
-balises \`\`\` (ex : contenu actuel d'un fichier référencé). Ce n'est **jamais**
-le format à utiliser pour ta propre réponse — n'imite pas ce que tu vois dans ta
-fiche. Ta réponse finale utilise exclusivement `<<<DEVAIMAZING_FILE path="...">>>`
-/ `<<<DEVAIMAZING_END>>>`, jamais de simples balises \`\`\`.
-
-Si un test de non-régression échoue, annote ta fiche (voir "Tests de non-régression"
-ci-dessus) et stoppe — ne corrige ni le test ni le code.
+Le format JSON lui-même est garanti par le runtime — inutile d'ajouter des balises
+` ``` ` ou tout autre habillage.

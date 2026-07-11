@@ -6,6 +6,7 @@ mockées : ces tests vérifient le câblage et la logique du node, pas les
 tools eux-mêmes (déjà testés séparément).
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -50,12 +51,14 @@ def _fake_ollama_result(content: str, tokens_prompt=5, tokens_completion=10, dur
     }
 
 
-FILE_BLOCK = (
-    '<<<DEVAIMAZING_FILE path="backend/auth/endpoints.py">>>\n'
-    'def login():\n'
-    '    ...\n'
-    '<<<DEVAIMAZING_END>>>'
-)
+def _structured_output(files: dict[str, str], blocked_reason: str = "") -> str:
+    return json.dumps({
+        "files": [{"path": path, "content": content} for path, content in files.items()],
+        "blocked_reason": blocked_reason,
+    })
+
+
+FILE_OUTPUT = _structured_output({"backend/auth/endpoints.py": "def login():\n    ..."})
 
 
 async def test_backend_stub_phase_writes_files_and_commits(monkeypatch: pytest.MonkeyPatch):
@@ -66,7 +69,7 @@ async def test_backend_stub_phase_writes_files_and_commits(monkeypatch: pytest.M
         return "fiche back"
 
     async def fake_run_ollama(**kwargs):
-        return _fake_ollama_result(FILE_BLOCK)
+        return _fake_ollama_result(FILE_OUTPUT)
 
     async def fake_write_card(path, content):
         written[str(path)] = content
@@ -104,6 +107,40 @@ async def test_backend_stub_phase_writes_files_and_commits(monkeypatch: pytest.M
     assert "current_phase" not in updates
 
 
+async def test_backend_calls_ollama_with_structured_output_schema(monkeypatch: pytest.MonkeyPatch):
+    captured = {}
+
+    async def fake_read_card(path):
+        return "fiche back"
+
+    async def fake_run_ollama(**kwargs):
+        captured["response_format"] = kwargs.get("response_format")
+        return _fake_ollama_result(FILE_OUTPUT)
+
+    async def fake_write_card(path, content):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(backend_node, "commit_as_agent", fake_commit_as_agent)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+    )
+
+    await backend_node.run(state)
+
+    assert captured["response_format"] == backend_node.FILE_OUTPUT_SCHEMA
+
+
 async def test_backend_includes_existing_file_content_in_prompt(
     monkeypatch: pytest.MonkeyPatch, project_repo: Path
 ):
@@ -119,7 +156,7 @@ async def test_backend_includes_existing_file_content_in_prompt(
 
     async def fake_run_ollama(**kwargs):
         captured["user_prompt"] = kwargs["user_prompt"]
-        return _fake_ollama_result(FILE_BLOCK)
+        return _fake_ollama_result(FILE_OUTPUT)
 
     async def fake_write_card(path, content):
         pass
@@ -151,7 +188,7 @@ async def test_backend_last_agent_of_stubs_advances_phase(monkeypatch: pytest.Mo
         return "fiche back"
 
     async def fake_run_ollama(**kwargs):
-        return _fake_ollama_result(FILE_BLOCK)
+        return _fake_ollama_result(FILE_OUTPUT)
 
     async def fake_write_card(path, content):
         pass
@@ -190,7 +227,7 @@ async def test_backend_tu_role_uses_test_commit_prefix_and_extra_skill(monkeypat
         return base_prompt
 
     async def fake_run_ollama(**kwargs):
-        return _fake_ollama_result(FILE_BLOCK)
+        return _fake_ollama_result(FILE_OUTPUT)
 
     async def fake_write_card(path, content):
         pass
@@ -222,14 +259,18 @@ async def test_backend_tu_role_uses_test_commit_prefix_and_extra_skill(monkeypat
     assert committed["message"].startswith("test:")
 
 
-async def test_backend_no_file_blocks_appends_feedback_and_waits_for_human(monkeypatch: pytest.MonkeyPatch):
+async def test_backend_blocked_reason_appends_feedback_and_waits_for_human(
+    monkeypatch: pytest.MonkeyPatch,
+):
     feedback_calls = []
 
     async def fake_read_card(path):
         return "fiche back"
 
     async def fake_run_ollama(**kwargs):
-        return _fake_ollama_result("Contradiction détectée avec le brief architecte, je m'arrête.")
+        return _fake_ollama_result(
+            _structured_output({}, blocked_reason="Contradiction détectée avec le brief architecte.")
+        )
 
     async def fake_append_feedback(card_path, agent_source, feedback):
         feedback_calls.append((agent_source, feedback))
@@ -250,56 +291,47 @@ async def test_backend_no_file_blocks_appends_feedback_and_waits_for_human(monke
 
     assert len(feedback_calls) == 1
     assert feedback_calls[0][0] == "back"
+    assert feedback_calls[0][1] == "Contradiction détectée avec le brief architecte."
     assert updates["status"] == RunStatus.WAITING_HUMAN
     assert updates["awaiting_human_validation"] is True
     assert updates["agent_results"][0].status == "feedback_sent"
 
 
-async def test_backend_accepts_plain_fenced_block_when_single_file_expected(
+async def test_backend_malformed_json_output_appends_feedback_and_waits_for_human(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """
-    Repli parse_agent_file_blocks : un modèle producteur qui balise sa sortie
-    en ``` markdown standard (au lieu de <<<DEVAIMAZING_FILE>>>) n'est pas
-    traité en échec si la fiche ne référence qu'un seul fichier — voir
-    docs/roadmap.md (run réel 2026-07-11).
+    Filet de sécurité si le modèle/Ollama ignore la contrainte de schéma
+    (voir Notes de tools.ollama.run_ollama) — pas supposé, vérifié.
     """
-    written = {}
+    feedback_calls = []
 
     async def fake_read_card(path):
-        return "Modifier `backend/main.py` pour ajouter le handler."
+        return "fiche back"
 
     async def fake_run_ollama(**kwargs):
-        return _fake_ollama_result(
-            "Voici le fichier réécrit :\n\n```python\nfrom fastapi import FastAPI\napp = FastAPI()\n```\n"
-        )
+        return _fake_ollama_result("pas du JSON du tout")
 
-    async def fake_write_card(path, content):
-        written[str(path)] = content
-
-    async def fake_commit_as_agent(**kwargs):
-        return "abc123"
+    async def fake_append_feedback(card_path, agent_source, feedback):
+        feedback_calls.append((agent_source, feedback))
 
     monkeypatch.setattr(backend_node, "read_card", fake_read_card)
     monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
-    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
-    monkeypatch.setattr(backend_node, "commit_as_agent", fake_commit_as_agent)
+    monkeypatch.setattr(backend_node, "append_feedback", fake_append_feedback)
 
     state = StudioState(
         run_id="run-042",
         current_phase=Phase.STUBS,
-        agent_sequence=["back"],
+        agent_sequence=["back", "front"],
         current_agent_index=0,
         agent_cards={"back": "specs/run-042/back.md"},
     )
 
     updates = await backend_node.run(state)
 
-    result: AgentResult = updates["agent_results"][0]
-    assert result.status == "success"
-    assert result.output_files == ["backend/main.py"]
-    assert any(p.endswith("backend/main.py") for p in written)
-    assert "from fastapi import FastAPI" in list(written.values())[0]
+    assert len(feedback_calls) == 1
+    assert feedback_calls[0][1] == "pas du JSON du tout"
+    assert updates["agent_results"][0].status == "feedback_sent"
 
 
 async def test_backend_max_iterations_exceeded_fails_without_calling_ollama(
@@ -336,7 +368,7 @@ async def test_backend_records_metrics_on_success(monkeypatch: pytest.MonkeyPatc
         return "fiche back"
 
     async def fake_run_ollama(**kwargs):
-        return _fake_ollama_result(FILE_BLOCK)
+        return _fake_ollama_result(FILE_OUTPUT)
 
     async def fake_write_card(path, content):
         pass

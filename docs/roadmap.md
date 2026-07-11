@@ -609,10 +609,51 @@ documenté. **Claude Code CLI ensuite** (`--json-schema` pour la ligne
 — amélioration réelle mais moins garantie, à traiter comme un chantier
 séparé une fois le côté Ollama validé en pratique.
 
-**Non commencé** : décision d'implémentation à prendre avec l'utilisateur
-(ampleur du changement — réécriture du contrat de sortie de 3 nodes producteurs
-et de leurs prompts/tests, potentiellement du run_ollama wrapper lui-même pour
-exposer le paramètre `format`).
+**Implémenté le 2026-07-11** (côté Ollama uniquement, décision explicite de
+l'utilisateur — "maintenant") :
+
+- `tools/ollama.py` : nouveau paramètre `response_format` sur `run_ollama`,
+  passé à `client.chat(..., format=response_format)`. Nouvelle constante
+  `FILE_OUTPUT_SCHEMA` (`{"files": [{"path", "content"}], "blocked_reason"}`).
+  Vérifié contre la signature réelle du client installé (`ollama==0.6.2`,
+  `format: Literal['', 'json'] | dict[str, Any] | None` — largement au-dessus
+  du minimum ≥0.5 requis pour le JSON Schema arbitraire).
+- `tools/filesystem.py` : nouveau `parse_structured_file_output(content)` —
+  parse le JSON, retourne `(files, blocked_reason)` ; lève `ValueError` si le
+  JSON est invalide ou incomplet (garde-fou, la contrainte de schéma n'est pas
+  supposée à 100 %, cohérent avec le verdict des deux recherches).
+- `nodes/backend.py`, `frontend.py`, `test.py` : appellent `run_ollama` avec
+  `response_format=FILE_OUTPUT_SCHEMA`, parsent via
+  `parse_structured_file_output`. `blocked_reason` non vide (ou `files` vide)
+  remplace l'ancien "aucun bloc reconnu" comme déclencheur `feedback_sent` —
+  échappatoire structurée au lieu de texte libre à parser. Le mécanisme de
+  repli `fallback_path`/`extract_file_paths` du point 10 (délimiteur ` ``` `
+  toléré si un seul fichier attendu) est retiré de ces trois nodes : devenu
+  inutile, la sortie structurée élimine la classe de bug par construction —
+  `parse_agent_file_blocks` et son paramètre `fallback_path` restent dans
+  `filesystem.py` (toujours utilisés par `pm.py`/`architect.py`, côté Claude
+  Code CLI, hors périmètre de ce chantier).
+- `prompts/backend.md`, `frontend.md`, `test.md` : section "Format de sortie"
+  réécrite — contrat `{"files": [...], "blocked_reason": ""}`, plus de
+  délimiteur `<<<DEVAIMAZING_FILE>>>` à décrire ni de mise en garde contre
+  l'imitation des balises ` ``` ` (devenue sans objet).
+- Tests : 4 nouveaux dans `test_ollama.py`/`test_filesystem.py`
+  (`response_format` transmis, `parse_structured_file_output` succès/erreurs) ;
+  les 3 fichiers de tests de nodes réécrits intégralement (fixtures JSON au
+  lieu des blocs `<<<DEVAIMAZING_FILE>>>`, nouveaux tests `blocked_reason`,
+  `malformed_json`, `calls_ollama_with_structured_output_schema` ; suppression
+  du test de repli désormais obsolète côté `backend.py`). 185 tests verts au
+  total (was 174). Vérifié rouge sans le fix sur les trois fichiers modifiés
+  (`ollama.py`, `filesystem.py`) avant de committer.
+
+**Non fait dans ce commit, volontairement hors périmètre** : le contrat de
+sortie du PM (ligne `SEQUENCE:`) et de l'Architecte (`STATUT:`/`AGENT:`/
+`FEEDBACK:`), tous deux côté Claude Code CLI — chantier séparé (`--json-schema`),
+pas commencé, cohérent avec la recommandation de priorité ci-dessus.
+**Non vérifié en conditions réelles** : aucun run réel relancé contre Ollama
+depuis ce changement — à faire pour confirmer que Qwen respecte effectivement
+la contrainte de schéma en pratique (les recherches documentent le mécanisme,
+pas un taux de succès mesuré pour ce modèle/cas d'usage précis).
 
 **Backlog identifié en marge (2026-07-10, pas bloquant, pour plus tard)** :
 `devaimazing resume` (`cli.py::resume`) ne sait reprendre qu'un run explicitement en

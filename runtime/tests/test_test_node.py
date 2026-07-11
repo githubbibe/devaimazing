@@ -5,6 +5,7 @@ sauf la commande de test elle-même qui utilise de vrais sous-process
 réel de _run_test_command.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -46,12 +47,14 @@ def _fake_ollama_result(content: str) -> dict:
     return {"content": content, "tokens_prompt": 5, "tokens_completion": 10, "duration_ms": 100}
 
 
-FILE_BLOCK = (
-    '<<<DEVAIMAZING_FILE path="tests/integration/test_login_flow.py">>>\n'
-    'def test_login():\n'
-    '    assert True\n'
-    '<<<DEVAIMAZING_END>>>'
-)
+def _structured_output(files: dict[str, str], blocked_reason: str = "") -> str:
+    return json.dumps({
+        "files": [{"path": path, "content": content} for path, content in files.items()],
+        "blocked_reason": blocked_reason,
+    })
+
+
+FILE_OUTPUT = _structured_output({"tests/integration/test_login_flow.py": "def test_login():\n    assert True"})
 
 
 def _base_state(repo: Path) -> StudioState:
@@ -73,7 +76,7 @@ async def test_test_node_no_command_configured_writes_and_advances(
         return "fiche test"
 
     async def fake_run_ollama(**kwargs):
-        return _fake_ollama_result(FILE_BLOCK)
+        return _fake_ollama_result(FILE_OUTPUT)
 
     async def fake_write_card(path, content):
         pass
@@ -94,6 +97,35 @@ async def test_test_node_no_command_configured_writes_and_advances(
     assert updates["current_agent_index"] == 0
 
 
+async def test_test_node_calls_ollama_with_structured_output_schema(
+    tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _configure_env(tmp_path, repo, monkeypatch, test_command=None)
+    captured = {}
+
+    async def fake_read_card(path):
+        return "fiche test"
+
+    async def fake_run_ollama(**kwargs):
+        captured["response_format"] = kwargs.get("response_format")
+        return _fake_ollama_result(FILE_OUTPUT)
+
+    async def fake_write_card(path, content):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(test_node, "read_card", fake_read_card)
+    monkeypatch.setattr(test_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(test_node, "write_card", fake_write_card)
+    monkeypatch.setattr(test_node, "commit_as_agent", fake_commit_as_agent)
+
+    await test_node.run(_base_state(repo))
+
+    assert captured["response_format"] == test_node.FILE_OUTPUT_SCHEMA
+
+
 async def test_test_node_includes_existing_file_content_in_prompt(
     tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -110,7 +142,7 @@ async def test_test_node_includes_existing_file_content_in_prompt(
 
     async def fake_run_ollama(**kwargs):
         captured["user_prompt"] = kwargs["user_prompt"]
-        return _fake_ollama_result(FILE_BLOCK)
+        return _fake_ollama_result(FILE_OUTPUT)
 
     async def fake_write_card(path, content):
         pass
@@ -138,7 +170,7 @@ async def test_test_node_command_passes_advances_to_securite(
         return "fiche test"
 
     async def fake_run_ollama(**kwargs):
-        return _fake_ollama_result(FILE_BLOCK)
+        return _fake_ollama_result(FILE_OUTPUT)
 
     async def fake_write_card(path, content):
         pass
@@ -171,7 +203,7 @@ async def test_test_node_command_fails_appends_feedback_and_waits_for_human(
         return "fiche test"
 
     async def fake_run_ollama(**kwargs):
-        return _fake_ollama_result(FILE_BLOCK)
+        return _fake_ollama_result(FILE_OUTPUT)
 
     async def fake_write_card(path, content):
         pass
@@ -197,7 +229,7 @@ async def test_test_node_command_fails_appends_feedback_and_waits_for_human(
     assert "current_phase" not in updates
 
 
-async def test_test_node_no_file_blocks_appends_feedback(
+async def test_test_node_blocked_reason_appends_feedback(
     tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
     _configure_env(tmp_path, repo, monkeypatch, test_command=None)
@@ -208,7 +240,9 @@ async def test_test_node_no_file_blocks_appends_feedback(
         return "fiche test"
 
     async def fake_run_ollama(**kwargs):
-        return _fake_ollama_result("Impossible de tester sans les endpoints backend.")
+        return _fake_ollama_result(
+            _structured_output({}, blocked_reason="Impossible de tester sans les endpoints backend.")
+        )
 
     async def fake_append_feedback(card_path, agent_source, feedback):
         feedback_calls.append((agent_source, feedback))
@@ -222,6 +256,7 @@ async def test_test_node_no_file_blocks_appends_feedback(
     assert updates["agent_results"][0].status == "feedback_sent"
     assert updates["status"] == RunStatus.WAITING_HUMAN
     assert feedback_calls[0][0] == "test"
+    assert feedback_calls[0][1] == "Impossible de tester sans les endpoints backend."
 
 
 async def test_test_node_max_iterations_exceeded_fails_without_calling_ollama(
@@ -257,7 +292,7 @@ async def test_test_node_records_metrics_on_success(
         return "fiche test"
 
     async def fake_run_ollama(**kwargs):
-        return _fake_ollama_result(FILE_BLOCK)
+        return _fake_ollama_result(FILE_OUTPUT)
 
     async def fake_write_card(path, content):
         pass

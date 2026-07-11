@@ -31,15 +31,14 @@ from studio.routing import (
 from studio.state import AgentResult, Phase, RunStatus, StudioState
 from studio.tools.filesystem import (
     append_feedback,
-    extract_file_paths,
     inject_skills,
-    parse_agent_file_blocks,
+    parse_structured_file_output,
     read_card,
     read_referenced_files,
     write_card,
 )
 from studio.tools.git import commit_as_agent
-from studio.tools.ollama import run_ollama
+from studio.tools.ollama import FILE_OUTPUT_SCHEMA, run_ollama
 
 _DEVAIMAZING_ROOT = Path(__file__).resolve().parents[3]
 _PROMPT_PATH = _DEVAIMAZING_ROOT / "prompts" / "backend.md"
@@ -68,12 +67,13 @@ async def run(state: StudioState) -> StudioState:
         passe à Phase.AUDIT_STUBS (fin de Phase.STUBS) ou Phase.TESTS (fin
         de Phase.IMPLEMENTATION) et l'index repart à 0.
 
-        Si l'agent ne produit aucun bloc de fichier reconnu (voir
-        prompts/backend.md, section Format de sortie — cas où l'agent
-        détecte une impossibilité et explique plutôt que de coder) : le
-        texte généré est ajouté à la section Feedback de sa propre fiche,
-        l'AgentResult a status="feedback_sent", et
-        state.status=RunStatus.WAITING_HUMAN /
+        Si l'agent signale un blocage (champ "blocked_reason" non vide dans
+        sa sortie structurée — voir tools.ollama.FILE_OUTPUT_SCHEMA, cas où
+        l'agent détecte une impossibilité plutôt que de coder), ou si
+        "files" est vide : le blocked_reason (ou le texte brut si la sortie
+        est malformée malgré la contrainte de schéma) est ajouté à la
+        section Feedback de sa propre fiche, l'AgentResult a
+        status="feedback_sent", et state.status=RunStatus.WAITING_HUMAN /
         state.awaiting_human_validation=True (un blocage auto-détecté
         remonte à l'humain, pas de progression silencieuse).
 
@@ -92,7 +92,11 @@ async def run(state: StudioState) -> StudioState:
         FileNotFoundError: Si la fiche de l'agent est introuvable.
 
     Side effects:
-        - Appelle tools.ollama.run_ollama (modèle models.agents_local).
+        - Appelle tools.ollama.run_ollama (modèle models.agents_local), avec
+          response_format=tools.ollama.FILE_OUTPUT_SCHEMA (sortie contrainte
+          par grammaire — voir docs/roadmap.md, chantier "sortie structurée",
+          2026-07-11 ; remplace l'ancien contrat par délimiteurs texte
+          <<<DEVAIMAZING_FILE>>>).
         - Avant l'appel, lit sur disque le contenu actuel de tout fichier
           référencé (chemin entre backticks) dans la fiche qui existe déjà
           dans le repo (tools.filesystem.read_referenced_files) et l'inclut
@@ -178,16 +182,20 @@ async def run(state: StudioState) -> StudioState:
         model=config.models["agents_local"],
         base_url=config.ollama_base_url,
         timeout_seconds=ollama_config.get("timeout_seconds", 120),
+        response_format=FILE_OUTPUT_SCHEMA,
     )
 
     iteration = agent_iteration_count(state, role) + 1
 
-    expected_paths = extract_file_paths(card_content)
-    fallback_path = expected_paths[0] if len(expected_paths) == 1 else None
     try:
-        files = parse_agent_file_blocks(result["content"], fallback_path=fallback_path)
+        files, blocked_reason = parse_structured_file_output(result["content"])
     except ValueError:
-        await append_feedback(card_path, agent_source=role, feedback=result["content"])
+        files, blocked_reason = {}, ""
+
+    if blocked_reason or not files:
+        await append_feedback(
+            card_path, agent_source=role, feedback=blocked_reason or result["content"]
+        )
         agent_result = AgentResult(
             agent=role,
             phase=state.current_phase,
