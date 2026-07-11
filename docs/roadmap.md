@@ -557,17 +557,62 @@ tool-calling natif, séparément pour les deux familles de modèles :
   façon fiable pour produire un ou plusieurs blocs {path, content} potentiellement
   volumineux (centaines de lignes de code).
 
-**Recherches lancées le 2026-07-11, interrompues par épuisement du quota de
-session (429, reset 6h Europe/Paris)** — aucune des deux n'est allée au bout,
-rien à synthétiser pour l'instant :
-1. Agent `claude-code-guide` sur les capacités MCP/hooks en mode `-p`.
-2. Agent général (WebSearch) sur le function-calling/structured-output Ollama et
-   le support réel de Qwen 2.5.
+**Recherches terminées le 2026-07-11** (relancées après le premier épuisement de
+quota à 6h, complétées vers 11h) :
 
-Point de reprise : relancer ces deux recherches après le reset, avant tout début
-d'implémentation — pas de code à écrire tant que les capacités réelles des deux
-plateformes ne sont pas vérifiées empiriquement (cohérent avec la méthode déjà
-suivie pour les autres points de ce roadmap : vérifier avant de coder).
+**Côté Claude Code CLI** (agent `claude-code-guide`, sources officielles
+`code.claude.com/docs`) :
+- `--mcp-config` fonctionne en mode `-p` non-interactif. Mais `--allowedTools` ne
+  peut pas bloquer les outils natifs (Read/Write/Bash restent accessibles même en
+  ne listant que des outils MCP), et surtout **rien ne force le modèle à appeler
+  un outil MCP plutôt que de répondre en texte libre** — un outil MCP à schéma
+  enum ne garantit donc pas le respect de l'enum.
+- Les hooks `PreToolUse` fonctionnent en `-p` (pas les `PermissionRequest` hooks),
+  mais ne peuvent que bloquer/modifier un appel d'outil, pas forcer le modèle à en
+  déclencher un.
+- **`--json-schema` existe et est directement utilisable** :
+  `claude -p ... --output-format json --json-schema '{...}'` ajoute un champ
+  `structured_output` conforme au schéma — sans garantie à 100%, mais plus fort
+  qu'un simple regex sur texte libre.
+- Verdict de l'agent : aucune solution ne contraint à 100% côté Claude Code CLI ;
+  la voie recommandée est `--json-schema` + validation post-hoc qui rejette et
+  rejoue si non conforme (proche de ce que fait déjà le runtime avec ses
+  `RuntimeError`, mais sur une sortie mieux structurée en amont).
+
+**Côté Ollama/Qwen** (agent général, sources officielles `docs.ollama.com` +
+issue GitHub `ollama/ollama#7051`) :
+- Le package `ollama` supporte le **function-calling** (`tools=[...]`, depuis
+  juillet 2024) ET un paramètre **`format`** distinct pour du **structured output
+  contraint par JSON Schema** (depuis Ollama ≥0.5, décembre 2024) — grammar-
+  constrained decoding, sortie **syntaxiquement garantie conforme au schéma**.
+- Piège documenté (`ollama/ollama#7051`, non résolu) : `qwen2.5:7b-instruct`
+  hallucine des champs avec le **function-calling** sur des schémas à champs
+  optionnels imbriqués complexes — spécifique au tool-calling, pas au `format`.
+- Recommandation de l'agent : utiliser `format` (pas `tools`) avec un schéma
+  **simple, sans champs optionnels imbriqués** — ex.
+  `{"files": [{"path": str, "content": str}]}` — directement applicable au
+  contrat actuel `<<<DEVAIMAZING_FILE>>>`. Élimine structurellement la classe de
+  bug observée aujourd'hui (balises ``` markdown au lieu du délimiteur) : il n'y
+  a plus de format libre à respecter, la sortie est syntaxiquement valide par
+  construction.
+- Limite connue : le masquage de tokens invalides (grammar-constrained decoding)
+  n'est pas parallélisé GPU — plus le schéma/la sortie est complexe/longue, plus
+  la génération peut ralentir. Pas de mesure chiffrée disponible comparant
+  fiabilité structured-output vs délimiteurs texte pour un 7B local.
+
+**Recommandation de priorité** : **Ollama d'abord** (`format` structured output
+pour Back/Front/Test) — mécanisme à plus haute confiance (contrainte
+syntaxique réelle, pas juste indicative) et corrige directement le bug du
+point 9/11 constaté aujourd'hui, avec un schéma simple qui évite le piège
+documenté. **Claude Code CLI ensuite** (`--json-schema` pour la ligne
+`SEQUENCE:` du PM et le format `STATUT:`/`AGENT:`/`FEEDBACK:` de l'Architecte)
+— amélioration réelle mais moins garantie, à traiter comme un chantier
+séparé une fois le côté Ollama validé en pratique.
+
+**Non commencé** : décision d'implémentation à prendre avec l'utilisateur
+(ampleur du changement — réécriture du contrat de sortie de 3 nodes producteurs
+et de leurs prompts/tests, potentiellement du run_ollama wrapper lui-même pour
+exposer le paramètre `format`).
 
 **Backlog identifié en marge (2026-07-10, pas bloquant, pour plus tard)** :
 `devaimazing resume` (`cli.py::resume`) ne sait reprendre qu'un run explicitement en
