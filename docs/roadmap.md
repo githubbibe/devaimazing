@@ -4,8 +4,9 @@
 
 ## Priorité immédiate (ajouté 2026-07-14, avant tout le reste)
 
-Deux chantiers proposés par l'utilisateur, pas encore commencés — à traiter avant
-de reprendre le reste du backlog ci-dessous.
+**Décision utilisateur (2026-07-14)** : les deux chantiers ci-dessous sont
+**reportés à une session dédiée** — pas de code à écrire maintenant. Conservés ici
+avec le contexte complet pour reprise ultérieure sans perte d'information.
 
 ### 1. Fiches PM en sortie structurée (Claude Code CLI, chantier 2 du plan
    "sortie structurée" — voir section dédiée plus bas pour le contexte complet)
@@ -52,15 +53,21 @@ Formalise ce qui a été bricolé à la main tout au long de la session du 2026-
 (scripts `python3 -` ad hoc pour inspecter l'état, rejouer un node, `~/resume_run.py`)
 en une commande CLI de premier niveau.
 
-**Question de design non tranchée** (à trancher avant de coder) : cette commande
-mute-t-elle l'état du checkpoint (elle remplacerait alors un appel de node dans le
-graphe LangGraph, donc devrait faire `aupdate_state` derrière — la rapprochant
-structurellement de `devaimazing resume`, mais ciblée sur un seul node plutôt que
-le graphe entier), ou reste-t-elle un outil de test isolé (exécute l'agent en
-lecture/écriture sur le repo cible réel, mais sans toucher à `state.db`, purement
-pour tester/déboguer un agent hors du contexte d'un run) ? Les deux usages sont
-légitimes mais ont des implications différentes sur l'implémentation — à clarifier
-avec l'utilisateur avant d'écrire du code.
+**Décision utilisateur (2026-07-14)** : outil de test isolé, ne mute pas le
+checkpoint. Exécute l'agent en lecture/écriture sur le repo cible réel (lit la
+fiche, appelle le node), mais ne touche jamais à `state.db` — purement pour
+tester/déboguer un agent hors du contexte d'un run. Techniquement, ça ne demande
+aucun outillage LangGraph particulier : chaque node est déjà une fonction
+`async def run(state) -> dict` autonome, découplée du graphe par design
+(ADR 0001, agents stateless) — exactement le pattern déjà utilisé par tous les
+tests (`await backend_node.run(state)` avec un `StudioState` construit à la main).
+La commande n'a donc qu'à construire ce `StudioState` minimal à partir de la
+fiche et appeler le node directement, sans passer par `build_graph`/`ainvoke`.
+
+Conséquence de cette décision : cet outil **ne résout pas** le point du backlog
+« `devaimazing resume` ne gère pas la reprise après crash » (ci-dessous) — un
+outil de test isolé, par définition, ne touche pas au checkpoint. Ce backlog reste
+un chantier séparé si on veut le traiter (voir détail de ses deux options plus bas).
 
 ## État au 2026-07-10
 
@@ -758,18 +765,40 @@ Constaté en pratique après le bug 4 : `run-20260710-185636` s'est arrêté en
 volontaire) — `resume` refuse ce cas avec « n'est pas en attente de validation », alors
 que LangGraph sait très bien rejouer le nœud interrompu via `graph.ainvoke(None,
 config=thread_config)` sur le même `thread_id` (vérifié manuellement, hors CLI, pour
-reprendre ce run précis sans repasser par le dialogue PM de la phase 1). À faire : soit
-assouplir la garde de `resume` pour accepter aussi `status == RunStatus.IN_PROGRESS`
-sans validation en attente (reprise après crash), soit ajouter une commande dédiée
-(`devaimazing retry <run-id>` ?) qui documente explicitement ce second cas d'usage, avec
-son propre test de régression.
+reprendre ce run précis sans repasser par le dialogue PM de la phase 1).
 
-**Décision prise (2026-07-10, hors code)** : la mise en production de devaimazing
-lui-même devra être conteneurisée Podman, cohérent avec le reste de l'infra prod (voir
-CLAUDE.md du dépôt parent). Implications concrètes non câblées à ce stade : Claude Code
-CLI (actuellement subprocess supposant `claude` installé sur l'hôte), accès réseau à
-Ollama (actuellement `localhost:11434` en dur par défaut, alors qu'un conteneur devra
-joindre `dataimazing-ramiris`/son remplaçant via `dataimazing-network`), montage du repo
-projet cible en volume, persistance de `state.db`/`metrics.db`. Pas de travail engagé
-là-dessus — pertinent seulement une fois qu'il y a un run réel à déployer, pas avant
-l'étape 5.
+**Détail des deux options (2026-07-14, demandé par l'utilisateur)** :
+
+- **Option A — assouplir `resume`** pour accepter aussi `status == RunStatus.IN_PROGRESS`
+  sans validation en attente. Un seul command à retenir, mais confond deux
+  situations sémantiquement différentes : reprise après validation humaine
+  délibérée (état stable, connu, explicitement approuvé) vs reprise après crash
+  (état potentiellement incohérent — écriture de fichier interrompue en plein
+  milieu, appel Ollama/Claude Code coupé net). Traiter les deux pareil fait
+  disparaître un signal de sécurité : plus aucune visibilité qu'un crash a eu lieu
+  avant de rejouer.
+- **Option B — commande dédiée `devaimazing retry <run-id>`**. Distingue
+  explicitement les deux cas ; pourrait afficher un diagnostic avant de rejouer
+  (quel node a planté, quand, présence d'un état partiel suspect). Formalise
+  exactement le geste répété manuellement tout au long de la session du
+  2026-07-11 (`~/resume_run.py`, appelé à chaque crash de node) — déjà validé
+  empiriquement comme fonctionnel, juste pas industrialisé. Coût : une commande
+  de plus à maintenir.
+- Ne pas confondre avec `run-agent` (chantier 2 ci-dessus) : ce dernier est un
+  outil de test isolé qui ne touche jamais au checkpoint (décision du
+  2026-07-14) — il ne résout donc pas ce point, qui reste un chantier séparé si
+  traité.
+- **Pas de décision prise le 2026-07-14** — l'utilisateur a demandé le détail
+  des deux options sans trancher entre elles. Recommandation de Claude (pas une
+  décision) : option B, cohérente avec l'usage réel observé pendant la session.
+
+**Décision prise (2026-07-10, hors code) — reportée en fin de projet (2026-07-14)** :
+la mise en production de devaimazing lui-même devra être conteneurisée Podman,
+cohérent avec le reste de l'infra prod (voir CLAUDE.md du dépôt parent).
+Implications concrètes non câblées à ce stade : Claude Code CLI (actuellement
+sous-process supposant `claude` installé sur l'hôte), accès réseau à Ollama
+(actuellement `localhost:11434` en dur par défaut, alors qu'un conteneur devra
+joindre `dataimazing-ramiris`/son remplaçant via `dataimazing-network`), montage du
+repo projet cible en volume, persistance de `state.db`/`metrics.db`. **Décision
+explicite de l'utilisateur (2026-07-14) : traiter ce point en toute fin de projet**,
+pas avant — aucun travail à engager dessus tant que le reste n'est pas stabilisé.
