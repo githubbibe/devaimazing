@@ -1,6 +1,66 @@
 # Feuille de route - Implémentation du runtime devaimazing
 
-**Dernière mise à jour** : 2026-07-10
+**Dernière mise à jour** : 2026-07-14
+
+## Priorité immédiate (ajouté 2026-07-14, avant tout le reste)
+
+Deux chantiers proposés par l'utilisateur, pas encore commencés — à traiter avant
+de reprendre le reste du backlog ci-dessous.
+
+### 1. Fiches PM en sortie structurée (Claude Code CLI, chantier 2 du plan
+   "sortie structurée" — voir section dédiée plus bas pour le contexte complet)
+
+Étendre le chantier déjà livré côté Ollama (Back/Front/Test, voir plus bas) au PM
+côté Claude Code CLI. Idée de départ de l'utilisateur : bloc YAML/JSON machine-only
+en tête de fiche (`files_to_create`, `files_to_modify`, `files_forbidden`,
+`existing_files_to_read`, `dependencies`), parsé via `yaml.safe_load` + schéma
+Pydantic, le reste de la fiche restant en prose Markdown libre pour le LLM
+producteur (Objectif, Contraintes, Critères).
+
+**Raffinement retenu en discussion** : utiliser `--json-schema` de Claude Code CLI
+(déjà vérifié disponible en mode `-p`, voir recherche 2026-07-11 plus bas) plutôt
+qu'un bloc YAML embarqué dans le texte. `--json-schema` fournit un champ
+`structured_output` **séparé** du texte prose (`result`) — le PM garde sa fiche
+en markdown libre, le runtime lit `structured_output.files_to_create` etc.
+directement, sans avoir à extraire quoi que ce soit du texte ni à dépendre du bon
+placement d'un bloc par le modèle.
+
+**Objectif explicite de l'utilisateur** : valider au moment où le PM **écrit** la
+fiche, pas au moment où Back/Front/Test la **lit**. Aujourd'hui,
+`read_referenced_files` renvoie silencieusement une chaîne vide si rien ne
+correspond — le bug se découvre 2-3 étapes plus loin (Qwen hallucine le fichier)
+au lieu d'être bloqué immédiatement avec un message clair, au même titre que le
+fix du point 6 (validation `## Feedback` déplacée en écriture plutôt qu'en lecture).
+
+**Fichiers concernés** (pas 3, plutôt 5-6 — chacun un changement localisé) :
+- `templates/card-agent.md.template`
+- `prompts/pm.md` (contrat de sortie, ajout du schéma structuré)
+- `tools/filesystem.py` (nouveau parseur pour `structured_output`, remplace ou
+  complète `extract_file_paths`/`read_referenced_files` pour la liste de fichiers)
+- `nodes/pm.py::_run_fiches` (validation immédiate du schéma à l'écriture)
+- `nodes/backend.py`, `frontend.py`, `test.py` (lisent `existing_files_to_read`
+  structuré au lieu de scanner tout le texte de la fiche par regex)
+
+### 2. Commande CLI par agent (`devaimazing run-agent <projet> <agent> <fiche>` ou
+   équivalent — nom exact à trancher)
+
+Idée de l'utilisateur : chaque étape/agent lançable individuellement via sa propre
+commande, qui lit la fiche correspondante (et la valide contre le schéma du
+chantier 1 ?), puis exécute cet agent seul — sans repasser par le graphe complet.
+
+Formalise ce qui a été bricolé à la main tout au long de la session du 2026-07-11
+(scripts `python3 -` ad hoc pour inspecter l'état, rejouer un node, `~/resume_run.py`)
+en une commande CLI de premier niveau.
+
+**Question de design non tranchée** (à trancher avant de coder) : cette commande
+mute-t-elle l'état du checkpoint (elle remplacerait alors un appel de node dans le
+graphe LangGraph, donc devrait faire `aupdate_state` derrière — la rapprochant
+structurellement de `devaimazing resume`, mais ciblée sur un seul node plutôt que
+le graphe entier), ou reste-t-elle un outil de test isolé (exécute l'agent en
+lecture/écriture sur le repo cible réel, mais sans toucher à `state.db`, purement
+pour tester/déboguer un agent hors du contexte d'un run) ? Les deux usages sont
+légitimes mais ont des implications différentes sur l'implémentation — à clarifier
+avec l'utilisateur avant d'écrire du code.
 
 ## État au 2026-07-10
 
