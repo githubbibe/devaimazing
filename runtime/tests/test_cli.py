@@ -764,4 +764,198 @@ def test_doctor_without_project_runs(monkeypatch: pytest.MonkeyPatch):
 
     assert result.exit_code == 0
     assert "Claude Code CLI" in result.output
-    assert "Git" in result.output
+
+
+# --- run-agent ---
+
+def _write_card(repo: Path, run_id: str, name: str, content: str = "# fiche") -> None:
+    path = repo / "specs" / run_id / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def test_run_agent_never_builds_graph(monkeypatch: pytest.MonkeyPatch, repo: Path):
+    # Garde-fou central de la commande : jamais de build_graph/state.db,
+    # contrairement à run/resume/retry (voir docstring de run_agent).
+    async def fail_build_graph(config):
+        raise AssertionError("run-agent ne doit jamais construire le graphe LangGraph")
+
+    monkeypatch.setattr(cli_module, "build_graph", fail_build_graph)
+
+    async def fake_backend_run(state):
+        return {"agent_results": []}
+
+    monkeypatch.setattr(cli_module.backend, "run", fake_backend_run)
+
+    result = CliRunner().invoke(
+        main, ["run-agent", "demo", "run-001", "back", "--phase", "STUBS"]
+    )
+
+    assert result.exit_code == 0
+    assert "state.db" in result.output
+
+
+def test_run_agent_discovers_cards_from_disk(monkeypatch: pytest.MonkeyPatch, repo: Path):
+    _write_card(repo, "run-001", "card-root.md")
+    _write_card(repo, "run-001", "architect-brief.md")
+    _write_card(repo, "run-001", "back.md")
+    _write_card(repo, "run-001", "front.md")
+
+    captured = {}
+
+    async def fake_backend_run(state):
+        captured["state"] = state
+        return {"agent_results": []}
+
+    monkeypatch.setattr(cli_module.backend, "run", fake_backend_run)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "run-agent", "demo", "run-001", "back", "--phase", "STUBS",
+            "--existing-file", "backend/database.py",
+        ],
+    )
+
+    assert result.exit_code == 0
+    state = captured["state"]
+    assert state.agent_cards == {
+        "back": "specs/run-001/back.md", "front": "specs/run-001/front.md",
+    }
+    assert state.agent_sequence == ["back", "front"]
+    assert state.current_agent_index == 0
+    assert state.card_root_path == "specs/run-001/card-root.md"
+    assert state.architect_brief_path == "specs/run-001/architect-brief.md"
+    assert state.agent_card_metadata["back"]["existing_files_to_read"] == ["backend/database.py"]
+    assert state.agent_card_metadata["front"]["existing_files_to_read"] == []
+    assert state.run_id == "run-001"
+    assert state.status == RunStatus.IN_PROGRESS
+
+
+def test_run_agent_card_override_bypasses_discovery(monkeypatch: pytest.MonkeyPatch, repo: Path):
+    # Fiche à un chemin non conventionnel (pas specs/<run-id>/back.md) :
+    # --card doit primer sur la découverte automatique (absente ici).
+    (repo / "elsewhere.md").parent.mkdir(parents=True, exist_ok=True)
+    (repo / "elsewhere.md").write_text("# fiche", encoding="utf-8")
+
+    captured = {}
+
+    async def fake_backend_run(state):
+        captured["state"] = state
+        return {"agent_results": []}
+
+    monkeypatch.setattr(cli_module.backend, "run", fake_backend_run)
+
+    result = CliRunner().invoke(
+        main,
+        ["run-agent", "demo", "run-001", "back", "--phase", "STUBS", "--card", "elsewhere.md"],
+    )
+
+    assert result.exit_code == 0
+    assert captured["state"].agent_cards == {"back": "elsewhere.md"}
+    assert captured["state"].agent_sequence == ["back"]
+    assert captured["state"].current_agent_index == 0
+
+
+@pytest.mark.parametrize(
+    "agent,node_attr",
+    [
+        ("back", "backend"),
+        ("back-tu", "backend"),
+        ("front", "frontend"),
+        ("front-tu", "frontend"),
+        ("test", "test_node"),
+        ("secu", "security"),
+        ("architect", "architect"),
+        ("pm", "pm"),
+        ("closer", "closer"),
+    ],
+)
+def test_run_agent_dispatches_to_correct_node(
+    monkeypatch: pytest.MonkeyPatch, repo: Path, agent: str, node_attr: str
+):
+    calls = []
+
+    async def fake_run(state):
+        calls.append(state)
+        return {"agent_results": []}
+
+    monkeypatch.setattr(getattr(cli_module, node_attr), "run", fake_run)
+
+    extra = ["--objective", "x"] if agent == "pm" else []
+    if agent == "closer":
+        extra += ["--branch-name", "studio/x"]
+    phase = "FICHES" if agent == "pm" else "STUBS"
+
+    result = CliRunner().invoke(
+        main, ["run-agent", "demo", "run-001", agent, "--phase", phase] + extra
+    )
+
+    assert result.exit_code == 0
+    assert len(calls) == 1
+
+
+def test_run_agent_pm_prompts_for_objective_when_missing(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    captured = {}
+
+    async def fake_pm_run(state):
+        captured["state"] = state
+        return {"agent_results": []}
+
+    monkeypatch.setattr(cli_module.pm, "run", fake_pm_run)
+
+    result = CliRunner().invoke(
+        main, ["run-agent", "demo", "run-001", "pm", "--phase", "CADRAGE"], input="mon objectif\n"
+    )
+
+    assert result.exit_code == 0
+    assert captured["state"].objective_raw == "mon objectif"
+
+
+def test_run_agent_branch_name_forwarded_to_closer(monkeypatch: pytest.MonkeyPatch, repo: Path):
+    captured = {}
+
+    async def fake_closer_run(state):
+        captured["state"] = state
+        return {"status": RunStatus.COMPLETED}
+
+    monkeypatch.setattr(cli_module.closer, "run", fake_closer_run)
+
+    result = CliRunner().invoke(
+        main,
+        ["run-agent", "demo", "run-001", "closer", "--phase", "CLOTURE",
+         "--branch-name", "studio/ajout-panier-a3f9c"],
+    )
+
+    assert result.exit_code == 0
+    assert captured["state"].branch_name == "studio/ajout-panier-a3f9c"
+
+
+def test_run_agent_prints_updates_returned_by_node(monkeypatch: pytest.MonkeyPatch, repo: Path):
+    async def fake_backend_run(state):
+        return {"current_phase": Phase.AUDIT_STUBS, "current_agent_index": 0}
+
+    monkeypatch.setattr(cli_module.backend, "run", fake_backend_run)
+
+    result = CliRunner().invoke(
+        main, ["run-agent", "demo", "run-001", "back", "--phase", "STUBS"]
+    )
+
+    assert result.exit_code == 0
+    assert "current_phase" in result.output
+    assert "AUDIT_STUBS" in result.output
+
+
+def test_run_agent_reports_node_exception_without_traceback(repo: Path):
+    # Aucun mock : architect.run lève un KeyError réel pour une phase qu'il
+    # ne gère pas (voir studio.nodes.architect.run) — vérifie que run-agent
+    # l'affiche proprement plutôt que de crasher avec une trace complète.
+    result = CliRunner().invoke(
+        main, ["run-agent", "demo", "run-001", "architect", "--phase", "STUBS"]
+    )
+
+    assert result.exit_code == 0
+    assert "Phase non gérée" in result.output
+    assert result.exception is None

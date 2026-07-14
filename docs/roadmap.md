@@ -1,6 +1,6 @@
 # Feuille de route - Implémentation du runtime devaimazing
 
-**Dernière mise à jour** : 2026-07-14 (ajout `devaimazing retry`)
+**Dernière mise à jour** : 2026-07-14 (ajout `devaimazing run-agent`)
 
 ## Priorité immédiate (ajouté 2026-07-14, avant tout le reste)
 
@@ -78,6 +78,64 @@ Conséquence de cette décision : cet outil **ne résout pas** le point du backl
 « `devaimazing resume` ne gère pas la reprise après crash » (ci-dessous) — un
 outil de test isolé, par définition, ne touche pas au checkpoint. Ce backlog reste
 un chantier séparé si on veut le traiter (voir détail de ses deux options plus bas).
+
+**Livré (2026-07-14).** `devaimazing run-agent <projet> <run-id> <agent> --phase <PHASE>`
+(`cli.py::run_agent`/`_run_agent_async`) : construit un `StudioState` minimal et
+appelle directement `<node>.run(state)` (aucun `build_graph`/`ainvoke`/
+checkpointer — `state.db` n'est ni lu ni écrit, conforme à la décision ci-dessus).
+`<agent>` accepte les mêmes noms que `state.agent_sequence` (`back`, `back-tu`,
+`front`, `front-tu`, `test`, `secu`) plus `pm`, `architect` et `closer` (routage
+via `studio.routing.AGENT_TO_NODE`, complété pour `closer` qui n'y figure pas —
+absent de `agent_sequence` par construction, mappé à part).
+
+**Reconstruction du `StudioState` par découverte sur disque**, pas par lecture du
+checkpoint (qui n'existe pas forcément, ou qu'on choisit justement d'ignorer) :
+- `state.agent_cards` : scan de `specs/<specs_dir>/<run-id>/<role>.md` pour
+  chacun des 6 rôles connus (convention déjà utilisée par `pm.py::_run_fiches`,
+  aucune nouvelle convention introduite). Complétable/remplaçable par `--card`
+  pour une fiche à un chemin non conventionnel.
+- `state.agent_sequence`/`current_agent_index` : dérivés des fiches trouvées sur
+  disque (ordre canonique back/back-tu/front/front-tu/test/secu), avec l'agent
+  ciblé ajouté s'il n'y figure pas encore — suffisant pour que
+  `state.agent_sequence[state.current_agent_index]` (lu par backend.py/
+  frontend.py/test.py/security.py) résolve vers le bon rôle, et pour que
+  l'audit de stubs de l'Architecte (qui filtre `agent_sequence` par
+  `PHASE_AGENT_ROLES`) retrouve les fiches Back/Front réellement présentes.
+- `state.card_root_path`/`architect_brief_path` : déduits de
+  `specs/<run-id>/{card-root,architect-brief}.md` s'ils existent, sinon
+  overridables via `--card-root`/`--architect-brief`.
+- `--phase` est **obligatoire, jamais déduit** : c'est le seul champ qui
+  détermine la branche de comportement d'un node (ex. Back en Phase.STUBS vs
+  Phase.IMPLEMENTATION) sans qu'aucun signal sur disque ne permette de la
+  reconstituer de façon fiable.
+
+**Limite documentée, assumée plutôt que contournée** :
+`state.agent_card_metadata[role]["existing_files_to_read"]` (contexte fichiers
+existants pour Back/Front/Test, voir chantier "Fiches PM en sortie structurée"
+ci-dessus) provient du `structured_output` du PM en phase 3 et **n'est persisté
+nulle part sur disque** en dehors du checkpoint — non reconstructible par scan
+de fichiers. Exposé en CLI via `--existing-file` (répétable), vide par défaut
+(dégradé silencieux si omis : l'agent perd juste ce contexte, ne plante pas).
+Même logique pour `state.branch_name` (agent `closer`, pas déductible sans
+checkpoint) : exposé via `--branch-name`.
+
+**Erreurs du node affichées proprement, pas de traceback** : `RuntimeError`,
+`KeyError`, `FileNotFoundError`, `TimeoutError`, `ValueError`, `TypeError`
+levées par `<node>.run` sont interceptées et affichées en rouge — cohérent avec
+l'usage prévu (diagnostiquer un agent en isolation, pas untooling interne).
+Le dict `updates` retourné par le node (jamais un `StudioState` complet malgré
+la docstring des nodes — tous retournent un dict partiel, vérifié en pratique)
+est affiché tel quel, clé par clé — dump brut plutôt qu'un résumé formaté,
+volontairement : cet outil formalise exactement le geste ad hoc de
+`~/resume_run.py` (inspection directe de l'état), pas une UX finie.
+
+16 tests ajoutés (`test_cli.py`, section « run-agent ») : jamais d'appel à
+`build_graph` (garde-fou explicite), découverte des fiches sur disque,
+`--card`/`--card-root`/`--architect-brief`/`--existing-file`/`--branch-name`,
+dispatch vers le bon node pour les 9 valeurs d'agent, prompt interactif de
+l'objectif pour `pm` si `--objective` omis, affichage du dict `updates`, erreur
+de node (KeyError réel, phase non gérée par l'Architecte) affichée sans
+traceback. **223/223 au total sur `runtime/tests/`** (était 207).
 
 ## État au 2026-07-10
 

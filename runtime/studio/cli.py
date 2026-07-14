@@ -5,6 +5,8 @@ Usage:
     devaimazing run <project>           Démarre un run
     devaimazing resume <run-id>         Reprend après checkpoint humain
     devaimazing retry <run-id>          Rejoue un run interrompu en cours de nœud (crash)
+    devaimazing run-agent <project> <run-id> <agent>
+                                         Exécute un seul agent hors run complet (test isolé)
     devaimazing runs <project>          Liste les runs d'un projet
     devaimazing metrics <run-id>        Affiche les métriques d'un run
     devaimazing projects                Liste les projets configurés
@@ -27,6 +29,8 @@ from rich.table import Table
 from studio.config import StudioConfig
 from studio.graph import build_graph
 from studio.metrics import MetricsCollector
+from studio.nodes import architect, backend, closer, frontend, pm, security, test as test_node
+from studio.routing import AGENT_TO_NODE
 from studio.state import Phase, RunStatus, StudioState
 from studio.tools.git import checkout_branch
 
@@ -256,6 +260,186 @@ async def _retry_async(run_id: str, project: str) -> None:
     finally:
         # Voir le commentaire équivalent dans _run_async.
         await graph.checkpointer.conn.close()
+
+
+_NODE_MODULES = {
+    "pm": pm,
+    "architect": architect,
+    "backend": backend,
+    "frontend": frontend,
+    "test": test_node,
+    "security": security,
+    "closer": closer,
+}
+
+# Rôles indexés via state.agent_sequence (voir studio.routing.AGENT_TO_NODE) —
+# exclut pm/architect, dont le node ne lit jamais son propre rôle depuis
+# agent_sequence (voir leurs docstrings respectives).
+_PRODUCER_ROLES = [role for role in AGENT_TO_NODE if role not in ("pm", "architect")]
+
+_RUN_AGENT_CHOICES = sorted(set(AGENT_TO_NODE) | {"closer"})
+
+
+def _node_for_agent(agent: str):
+    return _NODE_MODULES[AGENT_TO_NODE.get(agent, agent)]
+
+
+def _specs_dir(config: StudioConfig) -> str:
+    return config.get("structure", {}).get("specs_dir", "specs/")
+
+
+def _discover_agent_cards(repo_path: Path, specs_run_dir_relative: Path) -> dict[str, str]:
+    """
+    Fiches déjà présentes sur disque pour ce run (convention <role>.md dans
+    specs/<specs_dir>/<run-id>/, voir studio.nodes.pm._run_fiches) —
+    reconstitue state.agent_cards sans passer par le checkpoint LangGraph
+    (voir run_agent, qui ne touche jamais state.db).
+    """
+    cards = {}
+    for role in _PRODUCER_ROLES:
+        candidate = specs_run_dir_relative / f"{role}.md"
+        if (repo_path / candidate).is_file():
+            cards[role] = str(candidate)
+    return cards
+
+
+def _discover_optional(repo_path: Path, relative: Path) -> Optional[str]:
+    return str(relative) if (repo_path / relative).is_file() else None
+
+
+@main.command(name="run-agent")
+@click.argument("project")
+@click.argument("run_id")
+@click.argument("agent", type=click.Choice(_RUN_AGENT_CHOICES))
+@click.option(
+    "--phase", "phase_name", required=True, type=click.Choice([p.name for p in Phase]),
+    help="Phase à simuler — détermine le comportement du node, ne peut pas être déduite "
+    "automatiquement (ex. back en Phase.STUBS vs Phase.IMPLEMENTATION).",
+)
+@click.option("--objective", help="Objectif du run (agent pm, phases RECEPTION/CADRAGE)")
+@click.option(
+    "--card", "card_override",
+    help="Chemin de la fiche de AGENT (relatif au repo cible) — remplace la découverte "
+    "automatique à specs/<run-id>/<agent>.md",
+)
+@click.option(
+    "--card-root", "card_root_override",
+    help="Chemin de card-root.md (relatif au repo cible), sinon déduit de "
+    "specs/<run-id>/card-root.md s'il existe",
+)
+@click.option(
+    "--architect-brief", "architect_brief_override",
+    help="Chemin de architect-brief.md (relatif au repo cible), sinon déduit de "
+    "specs/<run-id>/architect-brief.md s'il existe",
+)
+@click.option(
+    "--existing-file", "existing_files", multiple=True,
+    help="Chemin (relatif au repo cible) d'un fichier existant à fournir en contexte à "
+    "AGENT (back/front/test uniquement) — répétable. Ne peut pas être déduit "
+    "automatiquement : cette donnée (agent_card_metadata) provient du structured_output "
+    "du PM en phase 3 et n'est pas persistée sur disque en dehors du checkpoint.",
+)
+@click.option("--branch-name", help="Nom de la branche du run (agent closer uniquement)")
+def run_agent(
+    project: str,
+    run_id: str,
+    agent: str,
+    phase_name: str,
+    objective: Optional[str],
+    card_override: Optional[str],
+    card_root_override: Optional[str],
+    architect_brief_override: Optional[str],
+    existing_files: tuple,
+    branch_name: Optional[str],
+):
+    """
+    Exécute un seul agent hors du contexte d'un run complet (test isolé).
+
+    Construit un StudioState minimal à partir des artefacts déjà présents
+    sur disque (specs/<run-id>/) et appelle le node de AGENT directement,
+    sans passer par build_graph/LangGraph — ne lit ni n'écrit jamais
+    state.db (contrairement à run/resume/retry). AGENT lit et écrit pour de
+    vrai dans le repo cible (fichiers, commits git), exactement comme lors
+    d'un run normal — voir docs/roadmap.md, chantier "Commande CLI par
+    agent" (décision du 2026-07-14).
+    """
+    asyncio.run(_run_agent_async(
+        project, run_id, agent, phase_name, objective, card_override,
+        card_root_override, architect_brief_override, existing_files, branch_name,
+    ))
+
+
+async def _run_agent_async(
+    project: str,
+    run_id: str,
+    agent: str,
+    phase_name: str,
+    objective: Optional[str],
+    card_override: Optional[str],
+    card_root_override: Optional[str],
+    architect_brief_override: Optional[str],
+    existing_files: tuple,
+    branch_name: Optional[str],
+) -> None:
+    _export_project_env(project)
+    config = _load_config(project)
+    phase = Phase[phase_name]
+
+    if agent == "pm" and phase in (Phase.RECEPTION, Phase.CADRAGE) and not objective:
+        objective = click.prompt("Objectif du run")
+
+    specs_run_dir_relative = Path(_specs_dir(config)) / run_id
+    agent_cards = _discover_agent_cards(config.repo_path, specs_run_dir_relative)
+    if card_override:
+        agent_cards[agent] = card_override
+
+    agent_sequence = [role for role in _PRODUCER_ROLES if role in agent_cards]
+    if agent in _PRODUCER_ROLES and agent not in agent_sequence:
+        agent_sequence.append(agent)
+    current_agent_index = agent_sequence.index(agent) if agent in agent_sequence else 0
+
+    agent_card_metadata = {
+        role: {"existing_files_to_read": list(existing_files) if role == agent else []}
+        for role in set(agent_cards) | {agent}
+    }
+
+    card_root_path = card_root_override or _discover_optional(
+        config.repo_path, specs_run_dir_relative / "card-root.md"
+    )
+    architect_brief_path = architect_brief_override or _discover_optional(
+        config.repo_path, specs_run_dir_relative / "architect-brief.md"
+    )
+
+    state = StudioState(
+        run_id=run_id,
+        project_name=project,
+        objective_raw=objective or "",
+        current_phase=phase,
+        status=RunStatus.IN_PROGRESS,
+        agent_sequence=agent_sequence,
+        current_agent_index=current_agent_index,
+        card_root_path=card_root_path,
+        architect_brief_path=architect_brief_path,
+        agent_cards=agent_cards,
+        agent_card_metadata=agent_card_metadata,
+        branch_name=branch_name,
+    )
+
+    console.print(
+        f"[bold]run-agent[/bold] — projet {project}, run {run_id}, agent {agent!r}, "
+        f"phase {phase.name} (state.db non touché)"
+    )
+
+    node = _node_for_agent(agent)
+    try:
+        updates = await node.run(state)
+    except (RuntimeError, KeyError, FileNotFoundError, TimeoutError, ValueError, TypeError) as exc:
+        console.print(f"[red]{type(exc).__name__} : {exc}[/red]")
+        return
+
+    console.print(f"[green]Résultat — agent {agent!r} :[/green]")
+    for key, value in updates.items():
+        console.print(f"  {key} = {value!r}")
 
 
 def _parse_run_history_table(content: str) -> list[list[str]]:
