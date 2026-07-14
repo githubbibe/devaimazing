@@ -61,6 +61,15 @@ def _structured_output(files: dict[str, str], blocked_reason: str = "") -> str:
 FILE_OUTPUT = _structured_output({"backend/auth/endpoints.py": "def login():\n    ..."})
 
 
+def _card_metadata(**overrides) -> dict:
+    metadata = {
+        "files_to_create": [], "files_to_modify": [], "files_forbidden": [],
+        "existing_files_to_read": [], "dependencies": [],
+    }
+    metadata.update(overrides)
+    return metadata
+
+
 async def test_backend_stub_phase_writes_files_and_commits(monkeypatch: pytest.MonkeyPatch):
     written = {}
     committed = {}
@@ -89,6 +98,7 @@ async def test_backend_stub_phase_writes_files_and_commits(monkeypatch: pytest.M
         agent_sequence=["back", "front"],
         current_agent_index=0,
         agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
     )
 
     updates = await backend_node.run(state)
@@ -134,6 +144,7 @@ async def test_backend_calls_ollama_with_structured_output_schema(monkeypatch: p
         agent_sequence=["back"],
         current_agent_index=0,
         agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
     )
 
     await backend_node.run(state)
@@ -175,6 +186,9 @@ async def test_backend_includes_existing_file_content_in_prompt(
         agent_sequence=["back", "front"],
         current_agent_index=0,
         agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={
+            "back": _card_metadata(existing_files_to_read=["backend/main.py"]),
+        },
     )
 
     await backend_node.run(state)
@@ -208,6 +222,7 @@ async def test_backend_last_agent_of_stubs_advances_phase(monkeypatch: pytest.Mo
         agent_sequence=["front", "back"],
         current_agent_index=1,
         agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
     )
 
     updates = await backend_node.run(state)
@@ -250,6 +265,7 @@ async def test_backend_tu_role_uses_test_commit_prefix_and_extra_skill(monkeypat
         agent_sequence=["back-tu"],
         current_agent_index=0,
         agent_cards={"back-tu": "specs/run-042/back-tu.md"},
+        agent_card_metadata={"back-tu": _card_metadata()},
     )
 
     await backend_node.run(state)
@@ -285,6 +301,7 @@ async def test_backend_blocked_reason_appends_feedback_and_waits_for_human(
         agent_sequence=["back", "front"],
         current_agent_index=0,
         agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
     )
 
     updates = await backend_node.run(state)
@@ -325,6 +342,7 @@ async def test_backend_malformed_json_output_appends_feedback_and_waits_for_huma
         agent_sequence=["back", "front"],
         current_agent_index=0,
         agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
     )
 
     updates = await backend_node.run(state)
@@ -387,6 +405,7 @@ async def test_backend_records_metrics_on_success(monkeypatch: pytest.MonkeyPatc
         agent_sequence=["back", "front"],
         current_agent_index=0,
         agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
     )
 
     await backend_node.run(state)

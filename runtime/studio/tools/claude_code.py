@@ -20,6 +20,7 @@ async def run_claude_code(
     cwd: Path,
     timeout_seconds: int = 300,
     output_format: str = "json",
+    response_schema: Optional[dict] = None,
 ) -> dict:
     """
     Lance Claude Code CLI en sous-process.
@@ -34,9 +35,18 @@ async def run_claude_code(
         output_format: Format de sortie (json recommandé pour parsing — les
             autres valeurs ("text", "stream-json") ne sont pas parsables par
             cette fonction et déclenchent un ValueError).
+        response_schema: JSON Schema optionnel, transmis via `--json-schema`
+            (vérifié disponible en mode -p non interactif, voir
+            docs/roadmap.md, chantier "sortie structurée" 2026-07-11). Ajoute
+            un canal structuré parallèle au texte prose de `content` — ne
+            remplace pas le contrat de sortie textuel existant. `None` (par
+            défaut) : pas de flag ajouté, comportement inchangé.
 
     Returns:
-        Dictionnaire avec les champs : content, usage (tokens), duration_ms.
+        Dictionnaire avec les champs : content, usage (tokens), duration_ms,
+        structured_output (dict conforme à response_schema si fourni et
+        renvoyé par le CLI, sinon None — la conformité au schéma n'est pas
+        garantie à 100%, voir Notes).
 
     Raises:
         TimeoutError: Si le sous-process dépasse timeout_seconds.
@@ -83,8 +93,12 @@ async def run_claude_code(
         warning) même quand il n'est pas fatal, pour garder un signal si un
         prompt donné dérive vers ce comportement de façon récurrente.
     """
+    command = ["claude", "-p", "--model", model, "--output-format", output_format]
+    if response_schema is not None:
+        command += ["--json-schema", json.dumps(response_schema)]
+
     process = await asyncio.create_subprocess_exec(
-        "claude", "-p", "--model", model, "--output-format", output_format,
+        *command,
         cwd=str(cwd),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
@@ -143,4 +157,5 @@ async def run_claude_code(
         "content": content,
         "usage": payload.get("usage", {}),
         "duration_ms": payload.get("duration_ms", 0),
+        "structured_output": payload.get("structured_output"),
     }

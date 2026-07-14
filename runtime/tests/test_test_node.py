@@ -57,13 +57,25 @@ def _structured_output(files: dict[str, str], blocked_reason: str = "") -> str:
 FILE_OUTPUT = _structured_output({"tests/integration/test_login_flow.py": "def test_login():\n    assert True"})
 
 
-def _base_state(repo: Path) -> StudioState:
+def _card_metadata(**overrides) -> dict:
+    metadata = {
+        "files_to_create": [], "files_to_modify": [], "files_forbidden": [],
+        "existing_files_to_read": [], "dependencies": [],
+    }
+    metadata.update(overrides)
+    return metadata
+
+
+def _base_state(repo: Path, existing_files_to_read: list[str] | None = None) -> StudioState:
     return StudioState(
         run_id="run-042",
         current_phase=Phase.TESTS,
         agent_sequence=["test"],
         current_agent_index=0,
         agent_cards={"test": "specs/run-042/test.md"},
+        agent_card_metadata={
+            "test": _card_metadata(existing_files_to_read=existing_files_to_read or []),
+        },
     )
 
 
@@ -155,7 +167,7 @@ async def test_test_node_includes_existing_file_content_in_prompt(
     monkeypatch.setattr(test_node, "write_card", fake_write_card)
     monkeypatch.setattr(test_node, "commit_as_agent", fake_commit_as_agent)
 
-    await test_node.run(_base_state(repo))
+    await test_node.run(_base_state(repo, existing_files_to_read=["backend/main.py"]))
 
     assert "def complete_todo(todo_id: int):" in captured["user_prompt"]
     assert "Écrire un test d'intégration" in captured["user_prompt"]

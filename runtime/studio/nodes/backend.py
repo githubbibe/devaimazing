@@ -34,7 +34,7 @@ from studio.tools.filesystem import (
     inject_skills,
     parse_structured_file_output,
     read_card,
-    read_referenced_files,
+    read_files,
     write_card,
 )
 from studio.tools.git import commit_as_agent
@@ -97,12 +97,14 @@ async def run(state: StudioState) -> StudioState:
           par grammaire — voir docs/roadmap.md, chantier "sortie structurée",
           2026-07-11 ; remplace l'ancien contrat par délimiteurs texte
           <<<DEVAIMAZING_FILE>>>).
-        - Avant l'appel, lit sur disque le contenu actuel de tout fichier
-          référencé (chemin entre backticks) dans la fiche qui existe déjà
-          dans le repo (tools.filesystem.read_referenced_files) et l'inclut
-          dans le prompt utilisateur — sans ça, l'agent (contexte limité)
-          reconstruit un fichier "à modifier" de mémoire au lieu de l'éditer,
-          gap réel trouvé en run (2026-07-11, voir docs/roadmap.md).
+        - Avant l'appel, lit sur disque le contenu des fichiers listés dans
+          state.agent_card_metadata[role]["existing_files_to_read"]
+          (tools.filesystem.read_files, chemins structurés validés par le PM
+          à l'écriture de la fiche — voir docs/roadmap.md, chantier "Fiches
+          PM en sortie structurée", 2026-07-14) et l'inclut dans le prompt
+          utilisateur — sans ça, l'agent (contexte limité) reconstruit un
+          fichier "à modifier" de mémoire au lieu de l'éditer, gap réel
+          trouvé en run (2026-07-11, voir docs/roadmap.md).
         - Crée/modifie des fichiers dans /backend/ (périmètre déclaré,
           voir docs/agents.md — jamais hors périmètre : le node écrit
           exactement les chemins renvoyés par l'agent, sans validation de
@@ -160,7 +162,9 @@ async def run(state: StudioState) -> StudioState:
 
     card_path = config.repo_path / state.agent_cards[role]
     card_content = await read_card(card_path)
-    existing_files_context = await read_referenced_files(config.repo_path, card_content)
+    existing_files_context = await read_files(
+        config.repo_path, state.agent_card_metadata[role]["existing_files_to_read"]
+    )
     user_prompt = (
         f"{existing_files_context}\n\n---\n\n{card_content}" if existing_files_context else card_content
     )

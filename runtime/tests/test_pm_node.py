@@ -41,8 +41,22 @@ def _env(tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("DEVAIMAZING_CONFIG_DIR", str(config_dir))
 
 
-def _fake_claude_result(content: str) -> dict:
-    return {"content": content, "usage": {"input_tokens": 10, "output_tokens": 20}, "duration_ms": 500}
+def _fake_claude_result(content: str, structured_output: dict | None = None) -> dict:
+    return {
+        "content": content,
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+        "duration_ms": 500,
+        "structured_output": structured_output,
+    }
+
+
+def _card_metadata(**overrides) -> dict:
+    metadata = {
+        "files_to_create": [], "files_to_modify": [], "files_forbidden": [],
+        "existing_files_to_read": [], "dependencies": [],
+    }
+    metadata.update(overrides)
+    return metadata
 
 
 VALID_FICHE = (
@@ -137,7 +151,6 @@ async def test_reception_phase_also_runs_cadrage_dialogue(monkeypatch: pytest.Mo
 # --- Phase FICHES ---
 
 FICHES_RESPONSE = (
-    "SEQUENCE: back, front\n\n"
     '<<<DEVAIMAZING_FILE path="specs/run-042/back.md">>>\n'
     'fiche back\n\n## Feedback\n\n_Aucun feedback pour l\'instant._\n'
     '<<<DEVAIMAZING_END>>>\n'
@@ -145,6 +158,14 @@ FICHES_RESPONSE = (
     'fiche front\n\n## Feedback\n\n_Aucun feedback pour l\'instant._\n'
     '<<<DEVAIMAZING_END>>>'
 )
+
+FICHES_STRUCTURED_OUTPUT = {
+    "sequence": ["back", "front"],
+    "cards": [
+        {"agent": "back", **_card_metadata()},
+        {"agent": "front", **_card_metadata()},
+    ],
+}
 
 
 def _write_card_root(repo: Path):
@@ -160,7 +181,7 @@ async def test_fiches_first_pass_no_checkpoint_creates_branch(
     _write_card_root(repo)
 
     async def fake_run_claude_code(**kwargs):
-        return _fake_claude_result(FICHES_RESPONSE)
+        return _fake_claude_result(FICHES_RESPONSE, structured_output=FICHES_STRUCTURED_OUTPUT)
 
     async def fake_create_run_branch(repo_path, feature_name, base_branch="develop"):
         assert feature_name == "ajout-panier"
@@ -189,6 +210,9 @@ async def test_fiches_first_pass_no_checkpoint_creates_branch(
     assert updates["agent_cards"] == {
         "back": "specs/run-042/back.md", "front": "specs/run-042/front.md",
     }
+    assert updates["agent_card_metadata"] == {
+        "back": _card_metadata(), "front": _card_metadata(),
+    }
     assert "fiche back" in (repo / "specs" / "run-042" / "back.md").read_text(encoding="utf-8")
     assert committed["agent"] == "pm"
 
@@ -211,7 +235,7 @@ async def test_fiches_first_pass_with_checkpoint_stops_before_branch(
     monkeypatch.setenv("DEVAIMAZING_CONFIG_DIR", str(config_dir))
 
     async def fake_run_claude_code(**kwargs):
-        return _fake_claude_result(FICHES_RESPONSE)
+        return _fake_claude_result(FICHES_RESPONSE, structured_output=FICHES_STRUCTURED_OUTPUT)
 
     async def fail_create_run_branch(*args, **kwargs):
         raise AssertionError("create_run_branch ne doit pas être appelé avant validation")
@@ -260,11 +284,13 @@ async def test_fiches_resume_pass_skips_generation(monkeypatch: pytest.MonkeyPat
     assert updates["current_phase"] == Phase.STUBS
 
 
-async def test_fiches_missing_sequence_raises_runtime_error(monkeypatch: pytest.MonkeyPatch, repo: Path):
+async def test_fiches_missing_structured_output_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
     _write_card_root(repo)
 
     async def fake_run_claude_code(**kwargs):
-        return _fake_claude_result("Pas de format reconnu ici.")
+        return _fake_claude_result("Pas de format reconnu ici.")  # structured_output=None
 
     monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
 
@@ -276,6 +302,33 @@ async def test_fiches_missing_sequence_raises_runtime_error(monkeypatch: pytest.
         await pm_node.run(state)
 
 
+async def test_fiches_agent_missing_from_structured_output_cards_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    _write_card_root(repo)
+
+    async def fake_run_claude_code(**kwargs):
+        return _fake_claude_result(
+            FICHES_RESPONSE,
+            structured_output={
+                "sequence": ["back", "front"],
+                "cards": [{"agent": "back", **_card_metadata()}],  # "front" manquant
+            },
+        )
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+
+    state = StudioState(
+        run_id="run-042", current_phase=Phase.FICHES, card_root_path="specs/run-042/card-root.md",
+        architect_brief_path="specs/run-042/architect-brief.md",
+    )
+    with pytest.raises(RuntimeError):
+        await pm_node.run(state)
+
+    assert not (repo / "specs" / "run-042" / "back.md").is_file()
+    assert not (repo / "specs" / "run-042" / "front.md").is_file()
+
+
 async def test_fiches_missing_agent_file_block_raises_runtime_error(
     monkeypatch: pytest.MonkeyPatch, repo: Path
 ):
@@ -283,11 +336,11 @@ async def test_fiches_missing_agent_file_block_raises_runtime_error(
 
     async def fake_run_claude_code(**kwargs):
         return _fake_claude_result(
-            'SEQUENCE: back, front\n\n'
             '<<<DEVAIMAZING_FILE path="specs/run-042/back.md">>>\n'
             'fiche back\n'
-            '<<<DEVAIMAZING_END>>>'
-        )  # fiche "front" manquante
+            '<<<DEVAIMAZING_END>>>',  # fiche "front" manquante
+            structured_output=FICHES_STRUCTURED_OUTPUT,
+        )
 
     monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
 
@@ -306,14 +359,14 @@ async def test_fiches_missing_feedback_section_raises_runtime_error(
 
     async def fake_run_claude_code(**kwargs):
         return _fake_claude_result(
-            'SEQUENCE: back, front\n\n'
             '<<<DEVAIMAZING_FILE path="specs/run-042/back.md">>>\n'
             'fiche back sans section feedback\n'
             '<<<DEVAIMAZING_END>>>\n'
             '<<<DEVAIMAZING_FILE path="specs/run-042/front.md">>>\n'
             'fiche front\n\n## Feedback\n\n_Aucun feedback pour l\'instant._\n'
-            '<<<DEVAIMAZING_END>>>'
-        )  # fiche "back" sans section '## Feedback'
+            '<<<DEVAIMAZING_END>>>',  # fiche "back" sans section '## Feedback'
+            structured_output=FICHES_STRUCTURED_OUTPUT,
+        )
 
     monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
 
@@ -326,6 +379,81 @@ async def test_fiches_missing_feedback_section_raises_runtime_error(
 
     assert not (repo / "specs" / "run-042" / "back.md").is_file()
     assert not (repo / "specs" / "run-042" / "front.md").is_file()
+
+
+async def test_fiches_existing_file_to_read_missing_on_disk_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    _write_card_root(repo)
+
+    async def fake_run_claude_code(**kwargs):
+        return _fake_claude_result(
+            FICHES_RESPONSE,
+            structured_output={
+                "sequence": ["back", "front"],
+                "cards": [
+                    {
+                        "agent": "back",
+                        **_card_metadata(existing_files_to_read=["backend/absent.py"]),
+                    },
+                    {"agent": "front", **_card_metadata()},
+                ],
+            },
+        )
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+
+    state = StudioState(
+        run_id="run-042", current_phase=Phase.FICHES, card_root_path="specs/run-042/card-root.md",
+        architect_brief_path="specs/run-042/architect-brief.md",
+    )
+    with pytest.raises(RuntimeError):
+        await pm_node.run(state)
+
+    assert not (repo / "specs" / "run-042" / "back.md").is_file()
+    assert not (repo / "specs" / "run-042" / "front.md").is_file()
+
+
+async def test_fiches_existing_file_to_read_present_on_disk_succeeds(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    _write_card_root(repo)
+    (repo / "backend").mkdir()
+    (repo / "backend" / "main.py").write_text("app = 1", encoding="utf-8")
+
+    async def fake_run_claude_code(**kwargs):
+        return _fake_claude_result(
+            FICHES_RESPONSE,
+            structured_output={
+                "sequence": ["back", "front"],
+                "cards": [
+                    {
+                        "agent": "back",
+                        **_card_metadata(existing_files_to_read=["backend/main.py"]),
+                    },
+                    {"agent": "front", **_card_metadata()},
+                ],
+            },
+        )
+
+    async def fake_create_run_branch(repo_path, feature_name, base_branch="develop"):
+        return "studio/ajout-panier-a3f9c"
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    monkeypatch.setattr(pm_node, "create_run_branch", fake_create_run_branch)
+    monkeypatch.setattr(pm_node, "commit_as_agent", fake_commit_as_agent)
+
+    state = StudioState(
+        run_id="run-042", current_phase=Phase.FICHES, card_root_path="specs/run-042/card-root.md",
+        architect_brief_path="specs/run-042/architect-brief.md",
+    )
+    updates = await pm_node.run(state)
+
+    assert updates["agent_card_metadata"]["back"]["existing_files_to_read"] == ["backend/main.py"]
+    assert (repo / "specs" / "run-042" / "back.md").is_file()
 
 
 async def test_fiches_missing_feature_name_raises_runtime_error(repo: Path):

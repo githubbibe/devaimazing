@@ -35,8 +35,10 @@ class _FakeProcess:
         return self.returncode
 
 
-def _fake_subprocess_exec(fake_process: _FakeProcess):
+def _fake_subprocess_exec(fake_process: _FakeProcess, captured_args: list | None = None):
     async def _create(*args, **kwargs):
+        if captured_args is not None:
+            captured_args.extend(args)
         return fake_process
 
     return _create
@@ -66,6 +68,46 @@ async def test_run_claude_code_success(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert result["content"] == "contenu généré"
     assert result["usage"] == {"input_tokens": 10, "output_tokens": 71}
     assert result["duration_ms"] == 1995
+    assert result["structured_output"] is None
+
+
+async def test_run_claude_code_without_response_schema_omits_json_schema_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    fake_process = _FakeProcess(stdout=_success_payload(), stderr=b"", returncode=0)
+    captured_args: list = []
+    monkeypatch.setattr(
+        claude_code_tool.asyncio, "create_subprocess_exec",
+        _fake_subprocess_exec(fake_process, captured_args),
+    )
+
+    await run_claude_code(prompt="x", model="claude-opus-4-8", cwd=tmp_path)
+
+    assert "--json-schema" not in captured_args
+
+
+async def test_run_claude_code_with_response_schema_adds_json_schema_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    fake_process = _FakeProcess(
+        stdout=_success_payload(structured_output={"sequence": ["back"]}),
+        stderr=b"", returncode=0,
+    )
+    captured_args: list = []
+    monkeypatch.setattr(
+        claude_code_tool.asyncio, "create_subprocess_exec",
+        _fake_subprocess_exec(fake_process, captured_args),
+    )
+    schema = {"type": "object", "properties": {"sequence": {"type": "array"}}}
+
+    result = await run_claude_code(
+        prompt="x", model="claude-opus-4-8", cwd=tmp_path, response_schema=schema,
+    )
+
+    assert "--json-schema" in captured_args
+    flag_index = captured_args.index("--json-schema")
+    assert json.loads(captured_args[flag_index + 1]) == schema
+    assert result["structured_output"] == {"sequence": ["back"]}
 
 
 async def test_run_claude_code_nonzero_exit_raises_runtime_error(

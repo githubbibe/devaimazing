@@ -8,12 +8,12 @@ import pytest
 
 from studio.tools.filesystem import (
     append_feedback,
-    extract_file_paths,
     inject_skills,
     parse_agent_file_blocks,
+    parse_pm_structured_output,
     parse_structured_file_output,
     read_card,
-    read_referenced_files,
+    read_files,
     write_card,
 )
 
@@ -101,39 +101,32 @@ async def test_append_feedback_missing_section_raises(tmp_path: Path):
         await append_feedback(card_path, agent_source="front", feedback="x")
 
 
-async def test_read_referenced_files_includes_existing_file_content(tmp_path: Path):
+async def test_read_files_includes_existing_file_content(tmp_path: Path):
     repo = tmp_path / "project"
     (repo / "backend").mkdir(parents=True)
     (repo / "backend" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
 
-    text = "Modifier `backend/main.py` pour ajouter un handler. Ne pas créer `backend/new.py`."
-
-    context = await read_referenced_files(repo, text)
+    context = await read_files(repo, ["backend/main.py"])
 
     assert "backend/main.py" in context
     assert "from fastapi import FastAPI" in context
-    assert "backend/new.py" not in context  # référencé mais absent du disque
 
 
-async def test_read_referenced_files_returns_empty_when_nothing_exists(tmp_path: Path):
+async def test_read_files_returns_empty_for_empty_list(tmp_path: Path):
     repo = tmp_path / "project"
     repo.mkdir()
 
-    context = await read_referenced_files(repo, "Créer `backend/new.py`.")
+    context = await read_files(repo, [])
 
     assert context == ""
 
 
-async def test_read_referenced_files_dedupes_repeated_paths(tmp_path: Path):
+async def test_read_files_missing_path_raises_file_not_found_error(tmp_path: Path):
     repo = tmp_path / "project"
-    (repo / "backend").mkdir(parents=True)
-    (repo / "backend" / "main.py").write_text("contenu", encoding="utf-8")
+    repo.mkdir()
 
-    text = "Modifier `backend/main.py`. Voir aussi `backend/main.py` ligne 10."
-
-    context = await read_referenced_files(repo, text)
-
-    assert context.count("Contenu actuel de `backend/main.py`") == 1
+    with pytest.raises(FileNotFoundError):
+        await read_files(repo, ["backend/absent.py"])
 
 
 async def test_inject_skills_appends_skill_content(tmp_path: Path):
@@ -254,16 +247,59 @@ def test_parse_agent_file_blocks_no_fallback_path_still_raises():
         parse_agent_file_blocks(text, fallback_path=None)
 
 
-def test_extract_file_paths_returns_sorted_unique_paths():
-    text = "Modifier `backend/main.py` et `backend/a.py`. Voir aussi `backend/main.py`."
+def _card_metadata(**overrides) -> dict:
+    metadata = {
+        "files_to_create": [], "files_to_modify": [], "files_forbidden": [],
+        "existing_files_to_read": [], "dependencies": [],
+    }
+    metadata.update(overrides)
+    return metadata
 
-    paths = extract_file_paths(text)
 
-    assert paths == ["backend/a.py", "backend/main.py"]
+def test_parse_pm_structured_output_valid():
+    structured_output = {
+        "sequence": ["back", "test"],
+        "cards": [
+            {"agent": "back", **_card_metadata(existing_files_to_read=["backend/main.py"])},
+            {"agent": "test", **_card_metadata()},
+        ],
+    }
+
+    sequence, cards = parse_pm_structured_output(structured_output)
+
+    assert sequence == ["back", "test"]
+    assert cards["back"]["existing_files_to_read"] == ["backend/main.py"]
+    assert cards["test"] == _card_metadata()
 
 
-def test_extract_file_paths_empty_when_no_match():
-    assert extract_file_paths("Rien à voir ici.") == []
+def test_parse_pm_structured_output_none_raises():
+    with pytest.raises(ValueError):
+        parse_pm_structured_output(None)
+
+
+def test_parse_pm_structured_output_empty_sequence_raises():
+    with pytest.raises(ValueError):
+        parse_pm_structured_output({"sequence": [], "cards": []})
+
+
+def test_parse_pm_structured_output_agent_missing_from_cards_raises():
+    structured_output = {
+        "sequence": ["back", "test"],
+        "cards": [{"agent": "back", **_card_metadata()}],  # "test" manquant
+    }
+
+    with pytest.raises(ValueError):
+        parse_pm_structured_output(structured_output)
+
+
+def test_parse_pm_structured_output_wrong_field_type_raises():
+    structured_output = {
+        "sequence": ["back"],
+        "cards": [{"agent": "back", **_card_metadata(existing_files_to_read="backend/main.py")}],
+    }
+
+    with pytest.raises(ValueError):
+        parse_pm_structured_output(structured_output)
 
 
 def test_parse_structured_file_output_single_file():

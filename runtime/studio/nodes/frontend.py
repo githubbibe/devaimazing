@@ -34,7 +34,7 @@ from studio.tools.filesystem import (
     inject_skills,
     parse_structured_file_output,
     read_card,
-    read_referenced_files,
+    read_files,
     write_card,
 )
 from studio.tools.git import commit_as_agent
@@ -151,7 +151,9 @@ async def run(state: StudioState) -> StudioState:
 
     card_path = config.repo_path / state.agent_cards[role]
     card_content = await read_card(card_path)
-    existing_files_context = await read_referenced_files(config.repo_path, card_content)
+    existing_files_context = await read_files(
+        config.repo_path, state.agent_card_metadata[role]["existing_files_to_read"]
+    )
     user_prompt = (
         f"{existing_files_context}\n\n---\n\n{card_content}" if existing_files_context else card_content
     )

@@ -77,6 +77,14 @@ class StudioState:
     architect_brief_path: Optional[str] = None
     agent_cards: dict[str, str] = field(default_factory=dict)  # agent -> chemin fiche
 
+    # Métadonnées structurées par agent, extraites du structured_output du PM en
+    # phase 3 (--json-schema, voir tools.filesystem.parse_pm_structured_output).
+    # Clés par agent : files_to_create, files_to_modify, files_forbidden,
+    # existing_files_to_read, dependencies (toutes list[str]). Remplace le scan
+    # regex du texte prose de la fiche (ancien read_referenced_files) pour les
+    # nodes producteurs (backend.py, frontend.py, test.py).
+    agent_card_metadata: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+
     # Branche Git du run, créée par le PM en phase 3 (studio.tools.git.create_run_branch).
     # Nécessaire à la phase 10 (closer) pour le merge — pas recalculable après coup, le
     # nom de branche contient un hash basé sur le timestamp de création (voir ADR 0007).

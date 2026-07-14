@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from studio.routing import AGENT_TO_NODE
+
 FEEDBACK_HEADING = "## Feedback"
 EMPTY_FEEDBACK_MARKER = "_Aucun feedback pour l'instant._"
 
@@ -24,36 +26,51 @@ _FILE_BLOCK_PATTERN = re.compile(
     re.DOTALL,
 )
 
-# Détection de chemins de fichiers référencés dans une fiche agent (ex :
-# section "Fichiers à modifier"). Chemin entre backticks avec extension de
-# fichier reconnue — voir read_referenced_files, extract_file_paths.
-_REFERENCED_FILE_PATTERN = re.compile(
-    r'`([\w./-]+\.(?:py|ts|tsx|js|jsx|json|ya?ml|md|css|html|sql))`'
-)
-
 # Repli de parse_agent_file_blocks quand l'agent produit un unique bloc de
 # code balisé ``` (markdown standard) au lieu du contrat <<<DEVAIMAZING_FILE.
 _FENCED_CODE_PATTERN = re.compile(r'```(?:\w+)?\n(.*?)\n```', re.DOTALL)
 
+# Agents pouvant apparaître dans state.agent_sequence / structured_output du PM
+# (tous les agents de AGENT_TO_NODE sauf pm/architect, qui n'y figurent jamais —
+# voir studio.routing).
+_PM_SEQUENCE_AGENTS = sorted(set(AGENT_TO_NODE) - {"pm", "architect"})
 
-def extract_file_paths(text: str) -> list[str]:
-    """
-    Liste les chemins de fichiers référencés dans un texte (fiche agent).
+# Champs machine-only requis par fiche, remplis par le PM en phase 3 via
+# structured_output (--json-schema) — voir PM_FICHES_SCHEMA,
+# parse_pm_structured_output.
+_CARD_METADATA_FIELDS = (
+    "files_to_create", "files_to_modify", "files_forbidden",
+    "existing_files_to_read", "dependencies",
+)
 
-    Args:
-        text: Texte dans lequel chercher des chemins de fichiers.
-
-    Returns:
-        Chemins relatifs uniques, triés, détectés entre backticks avec une
-        extension de fichier reconnue (ex : `backend/main.py`) — qu'ils
-        existent déjà sur disque ou non (contrairement à
-        read_referenced_files, qui ne garde que les fichiers existants).
-
-    Example:
-        >>> extract_file_paths("Modifier `backend/main.py`.")
-        ['backend/main.py']
-    """
-    return sorted(set(_REFERENCED_FILE_PATTERN.findall(text)))
+# Schéma JSON transmis à tools.claude_code.run_claude_code(response_schema=...)
+# pour l'appel du PM en phase 3 (voir docs/roadmap.md, chantier "Fiches PM en
+# sortie structurée", 2026-07-14). Canal structuré parallèle au contrat prose
+# existant (blocs <<<DEVAIMAZING_FILE>>>) : ne décrit que la séquence d'agents
+# et, par agent, les listes de fichiers — jamais le contenu de la fiche
+# elle-même (resté en Markdown libre côté prose).
+PM_FICHES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "sequence": {
+            "type": "array",
+            "items": {"type": "string", "enum": _PM_SEQUENCE_AGENTS},
+        },
+        "cards": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "agent": {"type": "string", "enum": _PM_SEQUENCE_AGENTS},
+                    **{field: {"type": "array", "items": {"type": "string"}}
+                       for field in _CARD_METADATA_FIELDS},
+                },
+                "required": ["agent", *_CARD_METADATA_FIELDS],
+            },
+        },
+    },
+    "required": ["sequence", "cards"],
+}
 
 
 async def read_card(card_path: Path) -> str:
@@ -131,50 +148,147 @@ async def append_feedback(card_path: Path, agent_source: str, feedback: str) -> 
     card_path.write_text(new_content, encoding="utf-8")
 
 
-async def read_referenced_files(repo_path: Path, text: str) -> str:
+async def read_files(repo_path: Path, paths: list[str]) -> str:
     """
-    Lit le contenu des fichiers existants référencés dans un texte (fiche agent).
+    Lit le contenu de fichiers existants du repo cible, chemins donnés
+    explicitement (typiquement state.agent_card_metadata[role]
+    ["existing_files_to_read"], voir parse_pm_structured_output).
 
     Args:
         repo_path: Racine du repo projet cible.
-        text: Texte dans lequel chercher des chemins de fichiers (typiquement
-            le contenu d'une fiche agent, section "Fichiers à modifier").
+        paths: Chemins relatifs à lire, dans l'ordre où ils doivent apparaître
+            dans le contexte retourné.
 
     Returns:
-        Contenu concaténé des fichiers référencés qui existent réellement sur
-        disque, chacun précédé d'un titre indiquant son chemin exact. Chaîne
-        vide si aucun chemin référencé n'existe sur disque (ex : run qui ne
-        fait que créer des fichiers, rien à modifier).
+        Contenu concaténé des fichiers, chacun précédé d'un titre indiquant
+        son chemin exact. Chaîne vide si `paths` est vide (cas normal : run
+        qui ne fait que créer des fichiers, rien à lire au préalable).
+
+    Raises:
+        FileNotFoundError: Si un chemin de `paths` n'existe pas sur disque —
+            remplace l'ancien comportement de read_referenced_files (skip
+            silencieux). Un chemin listé par le PM en phase 3 est garanti
+            exister au moment de l'écriture de la fiche (validation dans
+            nodes.pm._run_fiches), donc une absence ici signale une
+            incohérence réelle plutôt qu'un cas normal à ignorer.
 
     Notes:
-        Détection par regex sur les chemins entre backticks avec une
-        extension de fichier reconnue (ex : `backend/main.py`) — pas un
-        parsing strict d'une section markdown dédiée, le format exact des
-        fiches variant selon l'agent producteur (voir prompts/pm.md). Un
-        chemin référencé qui n'existe pas sur disque est simplement ignoré
-        (cas normal : fichier à créer, mentionné dans le même paragraphe
-        qu'un fichier à modifier).
-
-        Existe pour combler un gap réel trouvé en run (2026-07-11, voir
-        docs/roadmap.md) : sans le contenu actuel du fichier à modifier, un
-        agent producteur (Qwen, contexte limité) reconstruit le fichier de
-        mémoire au lieu de l'éditer chirurgicalement — imports et handlers
-        existants perdus ou remplacés par du code générique non conforme au
-        projet.
+        Remplace read_referenced_files (scan regex du texte prose de la
+        fiche, supprimé) — voir docs/roadmap.md, chantier "Fiches PM en
+        sortie structurée" (2026-07-14). Corrige le bug qui motivait ce
+        chantier : un chemin référencé inexistant n'est plus ignoré
+        silencieusement (l'agent producteur, Qwen, contexte limité,
+        hallucinait alors le contenu du fichier) — il est désormais
+        impossible d'atteindre ce cas, la validation ayant eu lieu à
+        l'écriture de la fiche par le PM, pas ici à la lecture.
 
     Example:
-        >>> content = await read_referenced_files(
-        ...     Path("/home/user/code/demo"), "Modifier `backend/main.py`."
+        >>> content = await read_files(
+        ...     Path("/home/user/code/demo"), ["backend/main.py"]
         ... )
     """
-    paths = extract_file_paths(text)
     parts = []
     for relative_path in paths:
-        full_path = repo_path / relative_path
-        if full_path.is_file():
-            content = await read_card(full_path)
-            parts.append(f"### Contenu actuel de `{relative_path}`\n\n```\n{content}\n```")
+        content = await read_card(repo_path / relative_path)
+        parts.append(f"### Contenu actuel de `{relative_path}`\n\n```\n{content}\n```")
     return "\n\n".join(parts)
+
+
+def parse_pm_structured_output(
+    structured_output: Optional[dict],
+) -> tuple[list[str], dict[str, dict[str, list[str]]]]:
+    """
+    Valide et extrait le structured_output du PM en phase 3 (voir
+    PM_FICHES_SCHEMA, tools.claude_code.run_claude_code(response_schema=...)).
+
+    Args:
+        structured_output: Champ "structured_output" du retour de
+            run_claude_code — None si l'appel n'a pas fourni response_schema,
+            ou si le CLI n'a pas produit ce champ malgré le schéma demandé
+            (pas garanti à 100%, voir docs/roadmap.md).
+
+    Returns:
+        (sequence, cards_metadata). `sequence` : liste ordonnée des agents,
+        telle que produite par le PM. `cards_metadata` : mapping agent ->
+        {"files_to_create", "files_to_modify", "files_forbidden",
+        "existing_files_to_read", "dependencies"} (chacune une list[str]),
+        une entrée par agent de `sequence`.
+
+    Raises:
+        ValueError: Si structured_output est None, n'est pas un dict, si
+            "sequence"/"cards" sont absents ou mal typés, si un agent de
+            `sequence` n'a pas d'entrée correspondante dans `cards`, ou si un
+            des 5 champs machine-only d'une entrée cards n'est pas une
+            list[str]. Message actionnable référençant prompts/pm.md — cette
+            fonction est appelée avant toute écriture de fiche sur disque
+            (nodes.pm._run_fiches), conformément à l'objectif de valider à
+            l'écriture plutôt qu'à la lecture (voir docs/roadmap.md).
+
+    Example:
+        >>> sequence, cards = parse_pm_structured_output({
+        ...     "sequence": ["back"],
+        ...     "cards": [{
+        ...         "agent": "back", "files_to_create": ["backend/main.py"],
+        ...         "files_to_modify": [], "files_forbidden": [],
+        ...         "existing_files_to_read": [], "dependencies": [],
+        ...     }],
+        ... })
+        >>> sequence
+        ['back']
+    """
+    if not isinstance(structured_output, dict):
+        raise ValueError(
+            "structured_output absent ou invalide dans la réponse du PM (phase 3) — "
+            "attendu un objet JSON conforme à PM_FICHES_SCHEMA (voir prompts/pm.md, "
+            "section Format de sortie — phase 3)"
+        )
+
+    sequence = structured_output.get("sequence")
+    cards = structured_output.get("cards")
+    if not isinstance(sequence, list) or not sequence or not all(
+        isinstance(agent, str) for agent in sequence
+    ):
+        raise ValueError(
+            "structured_output.sequence absent, vide ou mal typé dans la réponse du PM "
+            "(phase 3) — attendu une liste non vide de noms d'agent (voir prompts/pm.md, "
+            "section Format de sortie — phase 3)"
+        )
+    if not isinstance(cards, list):
+        raise ValueError(
+            "structured_output.cards absent ou mal typé dans la réponse du PM (phase 3) — "
+            "attendu une liste d'objets {agent, files_to_create, ...} (voir prompts/pm.md, "
+            "section Format de sortie — phase 3)"
+        )
+
+    cards_by_agent: dict[str, dict[str, list[str]]] = {}
+    for card in cards:
+        if not isinstance(card, dict) or "agent" not in card:
+            raise ValueError(
+                f"Entrée structured_output.cards incomplète (champ 'agent' attendu), "
+                f"reçu : {card!r} (voir prompts/pm.md, section Format de sortie — phase 3)"
+            )
+        agent = card["agent"]
+        metadata: dict[str, list[str]] = {}
+        for field_name in _CARD_METADATA_FIELDS:
+            values = card.get(field_name)
+            if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
+                raise ValueError(
+                    f"structured_output.cards[{agent!r}].{field_name} mal typé (liste de "
+                    f"chaînes attendue), reçu : {values!r} (voir prompts/pm.md, section "
+                    "Format de sortie — phase 3)"
+                )
+            metadata[field_name] = values
+        cards_by_agent[agent] = metadata
+
+    for agent in sequence:
+        if agent not in cards_by_agent:
+            raise ValueError(
+                f"Agent {agent!r} présent dans structured_output.sequence mais sans entrée "
+                "correspondante dans structured_output.cards (voir prompts/pm.md, section "
+                "Format de sortie — phase 3)"
+            )
+
+    return sequence, cards_by_agent
 
 
 async def inject_skills(base_prompt: str, skill_names: list[str], skills_dir: Path) -> str:

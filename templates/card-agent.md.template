@@ -15,6 +15,9 @@
 
 ## Périmètre fichiers
 
+<!-- Lecture humaine uniquement : le runtime lit ces listes depuis le canal structuré
+     du PM (state.agent_card_metadata), pas depuis ce texte. Garder cohérent. -->
+
 **Fichiers à créer :**
 ```
 {{PROJECT_ROOT}}/
@@ -66,6 +69,7 @@
 ## Dépendances
 
 <!-- Ce dont cet agent a besoin pour travailler -->
+<!-- Lecture humaine uniquement, comme "Périmètre fichiers" ci-dessus. -->
 
 - Output de l'agent précédent : {{PREVIOUS_AGENT}} - {{PREVIOUS_CARD_ID}}
 - Fichiers existants en lecture : ...

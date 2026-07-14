@@ -53,6 +53,15 @@ def _structured_output(files: dict[str, str], blocked_reason: str = "") -> str:
 FILE_OUTPUT = _structured_output({"frontend/components/LoginForm.tsx": "export const LoginForm = () => null;"})
 
 
+def _card_metadata(**overrides) -> dict:
+    metadata = {
+        "files_to_create": [], "files_to_modify": [], "files_forbidden": [],
+        "existing_files_to_read": [], "dependencies": [],
+    }
+    metadata.update(overrides)
+    return metadata
+
+
 async def test_frontend_stub_phase_writes_files_and_commits(monkeypatch: pytest.MonkeyPatch):
     committed = {}
 
@@ -80,6 +89,7 @@ async def test_frontend_stub_phase_writes_files_and_commits(monkeypatch: pytest.
         agent_sequence=["back", "front"],
         current_agent_index=1,
         agent_cards={"front": "specs/run-042/front.md"},
+        agent_card_metadata={"front": _card_metadata()},
     )
 
     updates = await frontend_node.run(state)
@@ -121,6 +131,7 @@ async def test_frontend_calls_ollama_with_structured_output_schema(monkeypatch: 
         agent_sequence=["front"],
         current_agent_index=0,
         agent_cards={"front": "specs/run-042/front.md"},
+        agent_card_metadata={"front": _card_metadata()},
     )
 
     await frontend_node.run(state)
@@ -163,6 +174,11 @@ async def test_frontend_includes_existing_file_content_in_prompt(
         agent_sequence=["front"],
         current_agent_index=0,
         agent_cards={"front": "specs/run-042/front.md"},
+        agent_card_metadata={
+            "front": _card_metadata(
+                existing_files_to_read=["frontend/components/LoginForm.tsx"]
+            ),
+        },
     )
 
     await frontend_node.run(state)
@@ -204,6 +220,7 @@ async def test_frontend_tu_role_uses_test_commit_prefix(monkeypatch: pytest.Monk
         agent_sequence=["front-tu"],
         current_agent_index=0,
         agent_cards={"front-tu": "specs/run-042/front-tu.md"},
+        agent_card_metadata={"front-tu": _card_metadata()},
     )
 
     await frontend_node.run(state)
@@ -239,6 +256,7 @@ async def test_frontend_blocked_reason_appends_feedback_and_waits_for_human(
         agent_sequence=["back", "front"],
         current_agent_index=1,
         agent_cards={"front": "specs/run-042/front.md"},
+        agent_card_metadata={"front": _card_metadata()},
     )
 
     updates = await frontend_node.run(state)
@@ -302,6 +320,7 @@ async def test_frontend_records_metrics_on_success(monkeypatch: pytest.MonkeyPat
         agent_sequence=["back", "front"],
         current_agent_index=1,
         agent_cards={"front": "specs/run-042/front.md"},
+        agent_card_metadata={"front": _card_metadata()},
     )
 
     await frontend_node.run(state)

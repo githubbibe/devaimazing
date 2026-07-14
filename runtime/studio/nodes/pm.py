@@ -27,7 +27,9 @@ from studio.state import AgentResult, Phase, RunStatus, StudioState
 from studio.tools.claude_code import run_claude_code
 from studio.tools.filesystem import (
     FEEDBACK_HEADING,
+    PM_FICHES_SCHEMA,
     parse_agent_file_blocks,
+    parse_pm_structured_output,
     read_card,
     write_card,
 )
@@ -39,7 +41,6 @@ _PROMPT_PATH = _DEVAIMAZING_ROOT / "prompts" / "pm.md"
 _QUESTION_PATTERN = re.compile(r"QUESTION:\s*(.+)", re.DOTALL)
 _FICHE_VALIDEE_PATTERN = re.compile(r"FICHE_VALIDEE:\s*\n(.*)", re.DOTALL)
 _FEATURE_NAME_PATTERN = re.compile(r"\*\*Nom de la feature\*\*\s*:\s*(.+)")
-_SEQUENCE_PATTERN = re.compile(r"SEQUENCE:\s*(.+)")
 
 _AFFIRMATIVE_REPLIES = {"oui", "o", "yes", "y"}
 
@@ -191,16 +192,16 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
         cwd=config.repo_path,
         timeout_seconds=claude_code_config.get("timeout_seconds", 300),
         output_format=claude_code_config.get("output_format", "json"),
+        response_schema=PM_FICHES_SCHEMA,
     )
     content = result["content"]
 
-    sequence_match = _SEQUENCE_PATTERN.search(content)
-    if not sequence_match:
-        raise RuntimeError(
-            "Réponse du PM (phase 3) sans ligne SEQUENCE reconnue (voir "
-            "prompts/pm.md, section Format de sortie — phase 3)"
+    try:
+        agent_sequence, agent_card_metadata = parse_pm_structured_output(
+            result.get("structured_output")
         )
-    agent_sequence = [a.strip() for a in sequence_match.group(1).split(",") if a.strip()]
+    except ValueError as exc:
+        raise RuntimeError(f"Réponse du PM (phase 3) invalide : {exc}") from exc
 
     files = parse_agent_file_blocks(content)
     agent_cards = {}
@@ -222,6 +223,17 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
                 "prompts/pm.md, section Format de sortie — phase 3)"
             )
 
+    for agent, metadata in agent_card_metadata.items():
+        for relative_path in metadata["existing_files_to_read"]:
+            if not (config.repo_path / relative_path).is_file():
+                raise RuntimeError(
+                    f"Fiche produite pour l'agent {agent!r} référence, dans "
+                    f"existing_files_to_read, {relative_path!r} qui n'existe pas dans le repo "
+                    f"cible ({config.repo_path}) — corriger la fiche (fichier inexistant à "
+                    "retirer, ou à déplacer vers files_to_create s'il doit être créé) avant "
+                    "toute écriture (voir prompts/pm.md, section Format de sortie — phase 3)"
+                )
+
     for relative_path, file_content in files.items():
         await write_card(config.repo_path / relative_path, file_content)
 
@@ -241,6 +253,7 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
         "agent_results": state.agent_results + [agent_result],
         "agent_cards": agent_cards,
         "agent_sequence": agent_sequence,
+        "agent_card_metadata": agent_card_metadata,
         "total_tokens_sonnet": (
             state.total_tokens_sonnet + usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
         ),
@@ -283,10 +296,13 @@ async def run(state: StudioState) -> StudioState:
 
     Raises:
         RuntimeError: Si l'appel à Claude Code CLI échoue (voir
-            tools/claude_code.py::run_claude_code), si la réponse de phase 3
-            ne contient pas de ligne SEQUENCE reconnue ou de fiche pour un
-            agent de la séquence, ou si card-root.md n'a pas de champ
-            **Nom de la feature**.
+            tools/claude_code.py::run_claude_code), si le structured_output de
+            phase 3 est absent/invalide (voir
+            tools/filesystem.py::parse_pm_structured_output), si un chemin de
+            existing_files_to_read référencé n'existe pas dans le repo cible,
+            si une fiche est manquante ou sans section Feedback pour un agent
+            de la séquence, ou si card-root.md n'a pas de champ **Nom de la
+            feature**.
         TimeoutError: Si l'appel dépasse claude_code.timeout_seconds
             (config/studio.yml).
         FileNotFoundError: Si card-root.md ou architect-brief.md est

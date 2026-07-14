@@ -4,43 +4,53 @@
 
 ## Priorité immédiate (ajouté 2026-07-14, avant tout le reste)
 
-**Décision utilisateur (2026-07-14)** : les deux chantiers ci-dessous sont
-**reportés à une session dédiée** — pas de code à écrire maintenant. Conservés ici
-avec le contexte complet pour reprise ultérieure sans perte d'information.
+**Décision utilisateur (2026-07-14)** : les deux chantiers ci-dessous étaient
+**reportés à une session dédiée**. Le chantier 1 a été traité dans cette session
+dédiée (voir "Livré" ci-dessous) ; le chantier 2 reste reporté.
 
 ### 1. Fiches PM en sortie structurée (Claude Code CLI, chantier 2 du plan
    "sortie structurée" — voir section dédiée plus bas pour le contexte complet)
 
-Étendre le chantier déjà livré côté Ollama (Back/Front/Test, voir plus bas) au PM
-côté Claude Code CLI. Idée de départ de l'utilisateur : bloc YAML/JSON machine-only
-en tête de fiche (`files_to_create`, `files_to_modify`, `files_forbidden`,
-`existing_files_to_read`, `dependencies`), parsé via `yaml.safe_load` + schéma
-Pydantic, le reste de la fiche restant en prose Markdown libre pour le LLM
-producteur (Objectif, Contraintes, Critères).
+**Livré (2026-07-14).** Étend le chantier déjà livré côté Ollama (Back/Front/Test,
+voir plus bas) au PM côté Claude Code CLI : `run_claude_code` gagne un paramètre
+`response_schema`, transmis via `--json-schema` (déjà vérifié disponible en mode
+`-p`, recherche 2026-07-11) ; le champ `structured_output` renvoyé par le CLI est
+validé (`tools/filesystem.py::parse_pm_structured_output`, `PM_FICHES_SCHEMA`) et
+remplace le parsing regex de l'ancienne ligne `SEQUENCE:`. Le contrat prose (blocs
+`<<<DEVAIMAZING_FILE>>>`, contenu Markdown libre) est inchangé — le canal structuré
+transporte uniquement `sequence` et, par agent, `files_to_create` / `files_to_modify`
+/ `files_forbidden` / `existing_files_to_read` / `dependencies`.
 
-**Raffinement retenu en discussion** : utiliser `--json-schema` de Claude Code CLI
-(déjà vérifié disponible en mode `-p`, voir recherche 2026-07-11 plus bas) plutôt
-qu'un bloc YAML embarqué dans le texte. `--json-schema` fournit un champ
-`structured_output` **séparé** du texte prose (`result`) — le PM garde sa fiche
-en markdown libre, le runtime lit `structured_output.files_to_create` etc.
-directement, sans avoir à extraire quoi que ce soit du texte ni à dépendre du bon
-placement d'un bloc par le modèle.
+**Objectif explicite de l'utilisateur atteint** : validation au moment où le PM
+**écrit** la fiche, pas au moment où Back/Front/Test la **lit**. `nodes/pm.py::
+_run_fiches` vérifie désormais que chaque chemin de `existing_files_to_read`
+existe réellement dans le repo cible **avant** toute écriture sur disque — échec
+net (`RuntimeError`) si un chemin est manquant, message actionnable référençant
+la fiche et l'agent concernés. `tools/filesystem.py::read_referenced_files` (scan
+regex du texte prose, skip silencieux d'un chemin absent — la source du bug)
+est supprimée, remplacée par `read_files(repo_path, paths)` : chemins explicites
+issus de `state.agent_card_metadata[role]["existing_files_to_read"]`, plus de
+scan de texte côté Back/Front/Test.
 
-**Objectif explicite de l'utilisateur** : valider au moment où le PM **écrit** la
-fiche, pas au moment où Back/Front/Test la **lit**. Aujourd'hui,
-`read_referenced_files` renvoie silencieusement une chaîne vide si rien ne
-correspond — le bug se découvre 2-3 étapes plus loin (Qwen hallucine le fichier)
-au lieu d'être bloqué immédiatement avec un message clair, au même titre que le
-fix du point 6 (validation `## Feedback` déplacée en écriture plutôt qu'en lecture).
+**Décision de conception prise pendant l'implémentation** : persistance du côté
+structuré via un nouveau champ `StudioState.agent_card_metadata: dict[str,
+dict[str, list[str]]]` (même précédent que `branch_name`, ADR 0007), plutôt qu'un
+bloc YAML front-matter injecté dans chaque fichier `.md` — évite une couche de
+parsing markdown redondante avec l'état déjà persisté par le checkpointer SQLite
+(ADR 0003). `files_to_create` / `files_to_modify` / `files_forbidden` /
+`dependencies` sont capturés et persistés mais **pas encore appliqués en
+contrôle** (vérifier que Back/Front ne touchent que leur périmètre déclaré) —
+seul `existing_files_to_read` est activement consommé ; une vérification de
+périmètre serait un chantier séparé.
 
-**Fichiers concernés** (pas 3, plutôt 5-6 — chacun un changement localisé) :
-- `templates/card-agent.md.template`
-- `prompts/pm.md` (contrat de sortie, ajout du schéma structuré)
-- `tools/filesystem.py` (nouveau parseur pour `structured_output`, remplace ou
-  complète `extract_file_paths`/`read_referenced_files` pour la liste de fichiers)
-- `nodes/pm.py::_run_fiches` (validation immédiate du schéma à l'écriture)
-- `nodes/backend.py`, `frontend.py`, `test.py` (lisent `existing_files_to_read`
-  structuré au lieu de scanner tout le texte de la fiche par regex)
+Fichiers touchés : `runtime/studio/tools/claude_code.py`, `state.py`,
+`tools/filesystem.py`, `nodes/pm.py`, `nodes/backend.py`, `frontend.py`, `test.py`,
+`prompts/pm.md`, `templates/card-agent.md.template`. 10 tests ajoutés/modifiés dans
+`test_claude_code.py`, 8 dans `test_filesystem.py` (dont suppression des tests de
+`extract_file_paths`/`read_referenced_files`), 6 dans `test_pm_node.py` (dont 2
+nouveaux garde-fous vérifiés rouges sans le fix avant commit), mise à jour des
+fixtures de `test_backend_node.py`/`test_frontend_node.py`/`test_test_node.py`.
+**195/195 au total sur `runtime/tests/`** (était 185).
 
 ### 2. Commande CLI par agent (`devaimazing run-agent <projet> <agent> <fiche>` ou
    équivalent — nom exact à trancher)
@@ -716,7 +726,10 @@ l'utilisateur — "maintenant") :
 **Non fait dans ce commit, volontairement hors périmètre** : le contrat de
 sortie du PM (ligne `SEQUENCE:`) et de l'Architecte (`STATUT:`/`AGENT:`/
 `FEEDBACK:`), tous deux côté Claude Code CLI — chantier séparé (`--json-schema`),
-pas commencé, cohérent avec la recommandation de priorité ci-dessus.
+pas commencé, cohérent avec la recommandation de priorité ci-dessus. **Mise à
+jour (2026-07-14)** : le côté PM est fait (voir "Priorité immédiate" en tête de
+document, chantier 1, livré) ; le côté Architecte (`STATUT:`/`AGENT:`/`FEEDBACK:`)
+reste non traité.
 
 **Vérifié en conditions réelles le 2026-07-11** (`run-20260711-101842`,
 serveur Ollama local confirmé supporter `format` via un appel `curl` direct
