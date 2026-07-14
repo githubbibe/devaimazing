@@ -1,7 +1,67 @@
 # Feuille de route - Implémentation du runtime devaimazing
 
-**Dernière mise à jour** : 2026-07-14 (backlog : warning LangGraph msgpack non
-enregistré sur `studio.state.{Phase,RunStatus,AgentResult}`)
+**Dernière mise à jour** : 2026-07-15 (PM phase Fiches : dégradation gracieuse
+au lieu d'un échec net sur sortie mal formée)
+
+## PM phase Fiches (2026-07-15) : dégradation gracieuse au lieu d'un échec net
+
+**Contexte/incident** : premier run réel de bout en bout sur un nouveau projet
+cible (`todo-list`, `run-20260714-205712`) — `nodes/pm.py::_run_fiches`
+(phase 3) a crashé 4 fois d'affilée (1 `resume` + 3 `retry`), toujours au même
+endroit : `parse_agent_file_blocks(content)` lève `ValueError` (« aucun bloc de
+fichier reconnu »), non rattrapée, remontant jusqu'au CLI (traceback complet,
+run bloqué en `IN_PROGRESS`, nécessitant `devaimazing retry` à chaque fois).
+Le canal structuré (`--json-schema`, `parse_pm_structured_output`) réussissait
+systématiquement — seul le canal prose (blocs `<<<DEVAIMAZING_FILE>>>`) était
+affecté, après une tentative d'outil Bash refusée par Claude Code CLI (même
+classe de variance d'échantillonnage que le point 5 du 2026-07-10, cette fois
+sur PM plutôt que sur l'Architecte). 4 échecs identiques d'affilée ont écarté
+l'hypothèse d'un coup de malchance isolé pour ce prompt précis.
+
+**Décision utilisateur** : plutôt qu'un contrôleur anti-hallucination séparé
+(pattern « Beretta » de web.aimazing.fr — validateur programmatique, 2 retries,
+repli statique — évoqué en référence via `Dataimazing_code/.claude/
+architecture-runtime.md`), constat que **le pattern de dégradation gracieuse
+existe déjà dans devaimazing** pour Back/Front/Test (`nodes/backend.py::run` :
+sortie mal formée → `status="feedback_sent"`, `RunStatus.WAITING_HUMAN`, pas de
+crash) — seuls PM et Architecte faisaient volontairement un « échec net »
+(décision du 2026-07-10, avant cette récidive). Portée retenue : aligner PM
+(phase Fiches uniquement) sur ce pattern déjà établi, pas de nouveau mécanisme.
+
+**Livré** : `nodes/pm.py::_run_fiches` —
+- Garde-fou `max_iterations_exceeded(state, config, "pm")` en tête (avant tout
+  appel LLM), symétrique à `backend.py::run` : au-delà de `agents.max_iterations`
+  (défaut 3), pas de nouvel appel, `RunStatus.FAILED` +
+  `requires_manual_intervention=True` + `intervention_reason` + `"pm"` ajouté à
+  `failed_agents`.
+- Les 3 échecs du canal prose (`ValueError` de `parse_agent_file_blocks`,
+  `RuntimeError` fiche manquante pour un agent, `RuntimeError` sans section
+  `## Feedback`) sont désormais capturés dans un seul `try/except` : au lieu de
+  crasher, enregistre un `AgentResult(status="feedback_sent", feedback=<message
+  d'erreur + contenu brut de l'agent>)` — le champ `feedback` de `AgentResult`
+  existait déjà mais n'était jamais rempli côté PM — puis retourne
+  `RunStatus.WAITING_HUMAN`/`awaiting_human_validation=True`, **sans** écrire
+  aucune fiche sur disque ni faire progresser `agent_cards`/`agent_sequence`
+  (donc `state.agent_cards` reste vide : au prochain `devaimazing resume`,
+  `_run_fiches` retente l'appel LLM depuis le début, itération incrémentée).
+- **Hors scope explicite** : la `RuntimeError` du canal structuré
+  (`parse_pm_structured_output`) et celle sur `existing_files_to_read`
+  inexistant restent fatales — aucune occurrence observée à ce jour pour ces
+  deux cas, pas de raison de les toucher pour l'instant.
+- `cli.py::_print_run_outcome` : si `WAITING_HUMAN` et
+  `agent_results[-1].feedback` non vide, l'affiche — sans ça, la pause reste
+  aussi silencieuse qu'un crash sur la question « pourquoi ça s'est arrêté ».
+
+6 tests ajoutés/modifiés (`test_pm_node.py` : les 2 tests existants qui
+attendaient un `RuntimeError` sur fiche manquante/section Feedback absente sont
+mis à jour pour attendre `feedback_sent`/`WAITING_HUMAN` ; nouveau test
+reproduisant l'incident réel (zéro bloc reconnu du tout) ; incrémentation de
+l'itération sur un 2ᵉ passage ; `max_iterations_exceeded` coupe l'appel LLM.
+`test_cli.py` : le `feedback` du dernier `AgentResult` est bien affiché quand
+présent. Tous vérifiés rouges sans le fix avant d'être committés.
+**252/253 sur `runtime/tests/`** (1 échec pré-existant sans rapport,
+`test_new_project_target_exists_not_git_repo_prints_error` — wrap de ligne
+rich dépendant de la largeur de `tmp_path`, non touché par ce chantier).
 
 ## `devaimazing new-project <nom>` (2026-07-14) : initialisation d'un nouveau projet cible
 

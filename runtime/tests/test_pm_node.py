@@ -10,7 +10,7 @@ import pytest
 import yaml
 
 import studio.nodes.pm as pm_node
-from studio.state import Phase, RunStatus, StudioState
+from studio.state import AgentResult, Phase, RunStatus, StudioState
 
 
 def _write_yaml(path: Path, data: dict) -> None:
@@ -329,7 +329,7 @@ async def test_fiches_agent_missing_from_structured_output_cards_raises_runtime_
     assert not (repo / "specs" / "run-042" / "front.md").is_file()
 
 
-async def test_fiches_missing_agent_file_block_raises_runtime_error(
+async def test_fiches_missing_agent_file_block_sends_feedback_and_waits(
     monkeypatch: pytest.MonkeyPatch, repo: Path
 ):
     _write_card_root(repo)
@@ -348,11 +348,22 @@ async def test_fiches_missing_agent_file_block_raises_runtime_error(
         run_id="run-042", current_phase=Phase.FICHES, card_root_path="specs/run-042/card-root.md",
         architect_brief_path="specs/run-042/architect-brief.md",
     )
-    with pytest.raises(RuntimeError):
-        await pm_node.run(state)
+    updates = await pm_node.run(state)
+
+    assert updates["status"] == RunStatus.WAITING_HUMAN
+    assert updates["awaiting_human_validation"] is True
+    assert "agent_cards" not in updates
+    assert "current_phase" not in updates
+    last_result = updates["agent_results"][-1]
+    assert last_result.agent == "pm"
+    assert last_result.status == "feedback_sent"
+    assert last_result.iteration == 1
+    assert last_result.feedback
+    assert not (repo / "specs" / "run-042" / "back.md").is_file()
+    assert not (repo / "specs" / "run-042" / "front.md").is_file()
 
 
-async def test_fiches_missing_feedback_section_raises_runtime_error(
+async def test_fiches_missing_feedback_section_sends_feedback_and_waits(
     monkeypatch: pytest.MonkeyPatch, repo: Path
 ):
     _write_card_root(repo)
@@ -374,11 +385,92 @@ async def test_fiches_missing_feedback_section_raises_runtime_error(
         run_id="run-042", current_phase=Phase.FICHES, card_root_path="specs/run-042/card-root.md",
         architect_brief_path="specs/run-042/architect-brief.md",
     )
-    with pytest.raises(RuntimeError):
-        await pm_node.run(state)
+    updates = await pm_node.run(state)
 
+    assert updates["status"] == RunStatus.WAITING_HUMAN
+    assert updates["agent_results"][-1].status == "feedback_sent"
     assert not (repo / "specs" / "run-042" / "back.md").is_file()
     assert not (repo / "specs" / "run-042" / "front.md").is_file()
+
+
+async def test_fiches_no_file_blocks_at_all_sends_feedback_and_waits(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    """Reproduit l'incident réel du 2026-07-14 (run-20260714-205712, projet
+    todo-list) : le canal structuré (JSON schema) réussit, mais le canal
+    prose ne contient aucun bloc <<<DEVAIMAZING_FILE>>> reconnu (constaté
+    en pratique après un refus d'outil Bash côté Claude Code CLI)."""
+    _write_card_root(repo)
+
+    raw_content = (
+        "Je n'ai pas pu utiliser l'outil demandé, voici une explication à la "
+        "place des fiches attendues."
+    )
+
+    async def fake_run_claude_code(**kwargs):
+        return _fake_claude_result(raw_content, structured_output=FICHES_STRUCTURED_OUTPUT)
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+
+    state = StudioState(
+        run_id="run-042", current_phase=Phase.FICHES, card_root_path="specs/run-042/card-root.md",
+        architect_brief_path="specs/run-042/architect-brief.md",
+    )
+    updates = await pm_node.run(state)
+
+    assert updates["status"] == RunStatus.WAITING_HUMAN
+    assert updates["awaiting_human_validation"] is True
+    assert "agent_cards" not in updates
+    last_result = updates["agent_results"][-1]
+    assert last_result.status == "feedback_sent"
+    assert raw_content in last_result.feedback
+
+
+async def test_fiches_second_attempt_after_feedback_increments_iteration(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    _write_card_root(repo)
+
+    async def fake_run_claude_code(**kwargs):
+        return _fake_claude_result("toujours pas de bloc reconnu", structured_output=FICHES_STRUCTURED_OUTPUT)
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+
+    state = StudioState(
+        run_id="run-042", current_phase=Phase.FICHES, card_root_path="specs/run-042/card-root.md",
+        architect_brief_path="specs/run-042/architect-brief.md",
+        agent_results=[
+            AgentResult(agent="pm", phase=Phase.FICHES, status="feedback_sent", iteration=1),
+        ],
+    )
+    updates = await pm_node.run(state)
+
+    assert updates["agent_results"][-1].iteration == 2
+
+
+async def test_fiches_max_iterations_exceeded_skips_llm_call(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    _write_card_root(repo)
+
+    async def fail_run_claude_code(**kwargs):
+        raise AssertionError("run_claude_code ne doit pas être appelé au-delà de max_iterations")
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fail_run_claude_code)
+
+    state = StudioState(
+        run_id="run-042", current_phase=Phase.FICHES, card_root_path="specs/run-042/card-root.md",
+        architect_brief_path="specs/run-042/architect-brief.md",
+        agent_results=[
+            AgentResult(agent="pm", phase=Phase.FICHES, status="feedback_sent", iteration=i)
+            for i in (1, 2, 3)
+        ],
+    )
+    updates = await pm_node.run(state)
+
+    assert updates["status"] == RunStatus.FAILED
+    assert updates["requires_manual_intervention"] is True
+    assert "pm" in updates["failed_agents"]
 
 
 async def test_fiches_existing_file_to_read_missing_on_disk_raises_runtime_error(

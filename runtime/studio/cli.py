@@ -114,6 +114,9 @@ def _print_run_outcome(run_id: str, state: dict) -> None:
             f"(phase {state.get('current_phase')}). Reprendre avec : "
             f"devaimazing resume {run_id} --project <projet>"
         )
+        agent_results = state.get("agent_results") or []
+        if agent_results and agent_results[-1].feedback:
+            console.print(f"[yellow]{agent_results[-1].feedback}[/yellow]")
     elif status == RunStatus.COMPLETED:
         console.print(f"[green]✅ Run {run_id} terminé[/green]")
     elif status == RunStatus.FAILED:

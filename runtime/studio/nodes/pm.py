@@ -22,7 +22,7 @@ from pathlib import Path
 
 from studio.config import StudioConfig
 from studio.metrics import record_agent_result
-from studio.routing import should_checkpoint
+from studio.routing import agent_iteration_count, max_iterations_exceeded, should_checkpoint
 from studio.state import AgentResult, Phase, RunStatus, StudioState
 from studio.tools.claude_code import run_claude_code
 from studio.tools.filesystem import (
@@ -169,12 +169,37 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
     2. Reprise (state.agent_cards déjà rempli, via `devaimazing resume`) :
        les fiches existent déjà sur disque, ce node se contente de créer
        la branche et de commiter.
+
+    Si la réponse du PM ne respecte pas le contrat de sortie (aucun bloc de
+    fichier reconnu, fiche manquante pour un agent, ou fiche sans section
+    Feedback) : dégradation gracieuse plutôt qu'échec net (alignée sur le
+    traitement déjà appliqué à Back/Front/Test, voir nodes/backend.py) —
+    state.status=RunStatus.WAITING_HUMAN, aucune fiche écrite, aucune
+    progression d'état, pour qu'une reprise (`devaimazing resume`) retente
+    l'appel depuis le début. Bornée par agents.max_iterations (comme les
+    autres agents producteurs) : au-delà, RunStatus.FAILED sans nouvel
+    appel LLM.
     """
     card_root_content = await read_card(config.repo_path / state.card_root_path)
     feature_name = _extract_feature_name(card_root_content)
 
     if state.agent_cards:
         return await _create_branch_and_advance(state, config, feature_name, state.agent_cards)
+
+    if max_iterations_exceeded(state, config, "pm"):
+        max_iterations = config.get("agents", {}).get("max_iterations", 3)
+        return {
+            "status": RunStatus.FAILED,
+            "requires_manual_intervention": True,
+            "intervention_reason": (
+                f"Agent 'pm' a atteint la limite de {max_iterations} itérations "
+                f"en phase {state.current_phase.name} sans succès."
+            ),
+            "failed_agents": (
+                state.failed_agents if "pm" in state.failed_agents
+                else state.failed_agents + ["pm"]
+            ),
+        }
 
     architect_brief_content = await read_card(config.repo_path / state.architect_brief_path)
 
@@ -203,25 +228,51 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
     except ValueError as exc:
         raise RuntimeError(f"Réponse du PM (phase 3) invalide : {exc}") from exc
 
-    files = parse_agent_file_blocks(content)
-    agent_cards = {}
-    for agent in agent_sequence:
-        expected_path = str(Path(_specs_dir(config)) / state.run_id / f"{agent}.md")
-        if expected_path not in files:
-            raise RuntimeError(
-                f"Fiche manquante pour l'agent {agent!r} : bloc attendu à {expected_path!r} "
-                "absent de la réponse du PM (voir prompts/pm.md, section Format de sortie — phase 3)"
-            )
-        agent_cards[agent] = expected_path
+    iteration = agent_iteration_count(state, "pm") + 1
 
-    for agent, expected_path in agent_cards.items():
-        if FEEDBACK_HEADING not in files[expected_path]:
-            raise RuntimeError(
-                f"Fiche produite pour l'agent {agent!r} ({expected_path!r}) sans section "
-                f"'{FEEDBACK_HEADING}' — contrat requis par templates/card-agent.md.template "
-                "(l'Architecte et Sécu y annotent leurs écarts via append_feedback, voir "
-                "prompts/pm.md, section Format de sortie — phase 3)"
-            )
+    try:
+        files = parse_agent_file_blocks(content)
+        agent_cards = {}
+        for agent in agent_sequence:
+            expected_path = str(Path(_specs_dir(config)) / state.run_id / f"{agent}.md")
+            if expected_path not in files:
+                raise RuntimeError(
+                    f"Fiche manquante pour l'agent {agent!r} : bloc attendu à {expected_path!r} "
+                    "absent de la réponse du PM (voir prompts/pm.md, section Format de sortie — phase 3)"
+                )
+            agent_cards[agent] = expected_path
+
+        for agent, expected_path in agent_cards.items():
+            if FEEDBACK_HEADING not in files[expected_path]:
+                raise RuntimeError(
+                    f"Fiche produite pour l'agent {agent!r} ({expected_path!r}) sans section "
+                    f"'{FEEDBACK_HEADING}' — contrat requis par templates/card-agent.md.template "
+                    "(l'Architecte et Sécu y annotent leurs écarts via append_feedback, voir "
+                    "prompts/pm.md, section Format de sortie — phase 3)"
+                )
+    except (ValueError, RuntimeError) as exc:
+        usage = result.get("usage", {})
+        agent_result = AgentResult(
+            agent="pm",
+            phase=state.current_phase,
+            status="feedback_sent",
+            feedback=f"{exc}\n\n--- Contenu brut produit par l'agent ---\n{content}",
+            iteration=iteration,
+            tokens_prompt=usage.get("input_tokens", 0),
+            tokens_completion=usage.get("output_tokens", 0),
+            duration_ms=result.get("duration_ms", 0),
+        )
+        await record_agent_result(
+            config, state, agent_result, model=config.models["pm_sonnet"], claude_code_calls=1
+        )
+        return {
+            "agent_results": state.agent_results + [agent_result],
+            "status": RunStatus.WAITING_HUMAN,
+            "awaiting_human_validation": True,
+            "total_tokens_sonnet": (
+                state.total_tokens_sonnet + usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+            ),
+        }
 
     for agent, metadata in agent_card_metadata.items():
         for relative_path in metadata["existing_files_to_read"]:
@@ -243,6 +294,7 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
         phase=state.current_phase,
         status="success",
         output_files=sorted(files.keys()),
+        iteration=iteration,
         tokens_prompt=usage.get("input_tokens", 0),
         tokens_completion=usage.get("output_tokens", 0),
         duration_ms=result.get("duration_ms", 0),

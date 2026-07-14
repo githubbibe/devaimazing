@@ -167,6 +167,33 @@ def test_run_waiting_human_prints_resume_hint(monkeypatch: pytest.MonkeyPatch):
     assert "devaimazing resume" in result.output
 
 
+def test_run_waiting_human_prints_feedback_when_present(monkeypatch: pytest.MonkeyPatch):
+    feedback_text = "Aucun bloc <<<DEVAIMAZING_FILE>>> reconnu dans la réponse du PM"
+
+    async def fake_ainvoke(state, config):
+        return {
+            "status": RunStatus.WAITING_HUMAN,
+            "current_phase": Phase.FICHES,
+            "agent_results": [
+                AgentResult(
+                    agent="pm", phase=Phase.FICHES, status="feedback_sent", feedback=feedback_text,
+                )
+            ],
+        }
+
+    fake_graph = SimpleNamespace(ainvoke=fake_ainvoke, checkpointer=_fake_checkpointer([]))
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["run", "demo", "--objective", "x"])
+
+    assert result.exit_code == 0
+    assert feedback_text in result.output
+
+
 def test_run_exports_project_env_before_invoking_graph(monkeypatch: pytest.MonkeyPatch):
     # Régression : les nodes appellent StudioConfig.from_env() en interne
     # (voir leurs docstrings), qui lit DEVAIMAZING_PROJECT depuis
