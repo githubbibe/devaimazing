@@ -959,3 +959,152 @@ def test_run_agent_reports_node_exception_without_traceback(repo: Path):
     assert result.exit_code == 0
     assert "Phase non gérée" in result.output
     assert result.exception is None
+
+
+# --- run-agent --reference-dir ---
+
+def test_run_agent_reference_dir_reports_match(
+    monkeypatch: pytest.MonkeyPatch, repo: Path, tmp_path: Path
+):
+    async def fake_backend_run(state):
+        (repo / "specs" / "run-001").mkdir(parents=True, exist_ok=True)
+        (repo / "specs" / "run-001" / "back.md").write_text("contenu identique", encoding="utf-8")
+        return {
+            "agent_results": [
+                AgentResult(
+                    agent="back", phase=Phase.STUBS, status="success",
+                    output_files=["specs/run-001/back.md"],
+                )
+            ]
+        }
+
+    monkeypatch.setattr(cli_module.backend, "run", fake_backend_run)
+
+    reference_dir = tmp_path / "reference"
+    (reference_dir / "specs" / "run-001").mkdir(parents=True)
+    (reference_dir / "specs" / "run-001" / "back.md").write_text(
+        "contenu identique", encoding="utf-8"
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "run-agent", "demo", "run-001", "back", "--phase", "STUBS",
+            "--reference-dir", str(reference_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "identique à la référence" in result.output
+
+
+def test_run_agent_reference_dir_reports_diff(
+    monkeypatch: pytest.MonkeyPatch, repo: Path, tmp_path: Path
+):
+    async def fake_backend_run(state):
+        (repo / "specs" / "run-001").mkdir(parents=True, exist_ok=True)
+        (repo / "specs" / "run-001" / "back.md").write_text("contenu produit", encoding="utf-8")
+        return {
+            "agent_results": [
+                AgentResult(
+                    agent="back", phase=Phase.STUBS, status="success",
+                    output_files=["specs/run-001/back.md"],
+                )
+            ]
+        }
+
+    monkeypatch.setattr(cli_module.backend, "run", fake_backend_run)
+
+    reference_dir = tmp_path / "reference"
+    (reference_dir / "specs" / "run-001").mkdir(parents=True)
+    (reference_dir / "specs" / "run-001" / "back.md").write_text(
+        "contenu de référence", encoding="utf-8"
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "run-agent", "demo", "run-001", "back", "--phase", "STUBS",
+            "--reference-dir", str(reference_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "diffère de la référence" in result.output
+    assert "-contenu de référence" in result.output
+    assert "+contenu produit" in result.output
+
+
+def test_run_agent_reference_dir_missing_reference_file(
+    monkeypatch: pytest.MonkeyPatch, repo: Path, tmp_path: Path
+):
+    async def fake_backend_run(state):
+        (repo / "specs" / "run-001").mkdir(parents=True, exist_ok=True)
+        (repo / "specs" / "run-001" / "back.md").write_text("contenu produit", encoding="utf-8")
+        return {
+            "agent_results": [
+                AgentResult(
+                    agent="back", phase=Phase.STUBS, status="success",
+                    output_files=["specs/run-001/back.md"],
+                )
+            ]
+        }
+
+    monkeypatch.setattr(cli_module.backend, "run", fake_backend_run)
+
+    reference_dir = tmp_path / "reference"
+    reference_dir.mkdir()
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "run-agent", "demo", "run-001", "back", "--phase", "STUBS",
+            "--reference-dir", str(reference_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "référence absente" in result.output
+
+
+def test_run_agent_reference_dir_no_output_files_prints_note(
+    monkeypatch: pytest.MonkeyPatch, repo: Path, tmp_path: Path
+):
+    async def fake_architect_run(state):
+        return {"current_phase": Phase.IMPLEMENTATION, "current_agent_index": 0}
+
+    monkeypatch.setattr(cli_module.architect, "run", fake_architect_run)
+
+    reference_dir = tmp_path / "reference"
+    reference_dir.mkdir()
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "run-agent", "demo", "run-001", "architect", "--phase", "AUDIT_STUBS",
+            "--reference-dir", str(reference_dir),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "rien à comparer" in result.output
+
+
+def test_run_agent_without_reference_dir_skips_comparison(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    async def fake_backend_run(state):
+        return {
+            "agent_results": [
+                AgentResult(agent="back", phase=Phase.STUBS, status="success", output_files=[])
+            ]
+        }
+
+    monkeypatch.setattr(cli_module.backend, "run", fake_backend_run)
+
+    result = CliRunner().invoke(
+        main, ["run-agent", "demo", "run-001", "back", "--phase", "STUBS"]
+    )
+
+    assert result.exit_code == 0
+    assert "référence" not in result.output

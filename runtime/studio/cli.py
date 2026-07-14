@@ -14,6 +14,7 @@ Usage:
 """
 
 import asyncio
+import difflib
 import json
 import os
 import shutil
@@ -340,6 +341,16 @@ def _discover_optional(repo_path: Path, relative: Path) -> Optional[str]:
     "du PM en phase 3 et n'est pas persistée sur disque en dehors du checkpoint.",
 )
 @click.option("--branch-name", help="Nom de la branche du run (agent closer uniquement)")
+@click.option(
+    "--reference-dir", "reference_dir",
+    help="Répertoire de fiches/fichiers de référence (structure miroir du repo cible, ex. "
+    "<reference-dir>/specs/<run-id>/back.md) — si fourni, chaque fichier produit par AGENT "
+    "à cette invocation (AgentResult.output_files) est comparé en diff texte exact au "
+    "fichier de même chemin relatif sous ce répertoire. Sert à distinguer un agent qui lit "
+    "mal une bonne fiche d'entrée d'un agent qui produit une mauvaise fiche/sortie : on "
+    "compare la fiche produite à celle qu'un run de référence avait produite pour l'agent "
+    "suivant.",
+)
 def run_agent(
     project: str,
     run_id: str,
@@ -351,6 +362,7 @@ def run_agent(
     architect_brief_override: Optional[str],
     existing_files: tuple,
     branch_name: Optional[str],
+    reference_dir: Optional[str],
 ):
     """
     Exécute un seul agent hors du contexte d'un run complet (test isolé).
@@ -366,6 +378,7 @@ def run_agent(
     asyncio.run(_run_agent_async(
         project, run_id, agent, phase_name, objective, card_override,
         card_root_override, architect_brief_override, existing_files, branch_name,
+        reference_dir,
     ))
 
 
@@ -380,6 +393,7 @@ async def _run_agent_async(
     architect_brief_override: Optional[str],
     existing_files: tuple,
     branch_name: Optional[str],
+    reference_dir: Optional[str],
 ) -> None:
     _export_project_env(project)
     config = _load_config(project)
@@ -440,6 +454,59 @@ async def _run_agent_async(
     console.print(f"[green]Résultat — agent {agent!r} :[/green]")
     for key, value in updates.items():
         console.print(f"  {key} = {value!r}")
+
+    if reference_dir:
+        _compare_to_reference(config.repo_path, Path(reference_dir), updates)
+
+
+def _compare_to_reference(repo_path: Path, reference_dir: Path, updates: dict) -> None:
+    """
+    Diff texte exact entre chaque fichier produit par l'invocation (voir
+    AgentResult.output_files du dernier élément de updates["agent_results"])
+    et le fichier de même chemin relatif sous reference_dir.
+
+    Premier jet volontairement simple (décision utilisateur, 2026-07-14) :
+    diff texte exact, pas de comparaison sémantique/structurelle — les
+    reformulations libres d'un même agent d'un appel à l'autre (variance
+    documentée dans docs/roadmap.md) feront donc apparaître des diffs sur du
+    contenu par ailleurs correct. Assumé pour ce premier jet.
+    """
+    agent_results = updates.get("agent_results")
+    output_files = agent_results[-1].output_files if agent_results else []
+
+    if not output_files:
+        console.print(
+            "[yellow]Aucun fichier produit par cette invocation (voir "
+            "AgentResult.output_files) — rien à comparer à reference-dir.[/yellow]"
+        )
+        return
+
+    for relative_path in output_files:
+        produced_path = repo_path / relative_path
+        reference_path = reference_dir / relative_path
+
+        if not reference_path.is_file():
+            console.print(f"[yellow]? référence absente : {relative_path}[/yellow]")
+            continue
+        if not produced_path.is_file():
+            console.print(f"[red]✗ fichier produit introuvable : {relative_path}[/red]")
+            continue
+
+        produced = produced_path.read_text(encoding="utf-8")
+        reference = reference_path.read_text(encoding="utf-8")
+
+        if produced == reference:
+            console.print(f"[green]✓ identique à la référence : {relative_path}[/green]")
+            continue
+
+        console.print(f"[red]✗ diffère de la référence : {relative_path}[/red]")
+        diff = difflib.unified_diff(
+            reference.splitlines(keepends=True),
+            produced.splitlines(keepends=True),
+            fromfile=f"référence/{relative_path}",
+            tofile=f"produit/{relative_path}",
+        )
+        console.print("".join(diff) or "(fichiers vides tous les deux)")
 
 
 def _parse_run_history_table(content: str) -> list[list[str]]:

@@ -137,6 +137,51 @@ l'objectif pour `pm` si `--objective` omis, affichage du dict `updates`, erreur
 de node (KeyError réel, phase non gérée par l'Architecte) affichée sans
 traceback. **223/223 au total sur `runtime/tests/`** (était 207).
 
+**Livré (2026-07-14, complément) — `--reference-dir` : distinguer une fiche
+d'entrée mal lue d'une fiche de sortie mal produite.** Besoin exprimé par
+l'utilisateur après les sessions de test manuel : impossible de savoir si un
+échec venait de l'agent producteur (mauvaise fiche en sortie) ou de l'agent
+suivant (mauvaise lecture d'une fiche pourtant correcte). Réponse : fournir en
+entrée une fiche connue comme bonne (déjà possible via la découverte sur
+disque/`--card`), lancer l'agent, et comparer la fiche qu'il produit à la
+fiche qu'un run de référence avait produite au même point de la chaîne.
+
+- Nouvelle option `--reference-dir <chemin>` sur `run-agent`. Après l'appel du
+  node, chaque chemin de `AgentResult.output_files` (déjà renseigné par tous
+  les nodes producteurs de fiche/fichier — aucune donnée nouvelle à faire
+  remonter) est comparé au fichier de même chemin relatif sous
+  `reference-dir` (structure miroir du repo cible, ex.
+  `<reference-dir>/specs/<run-id>/back.md`).
+- **Décision utilisateur (2026-07-14) : diff texte exact** pour ce premier
+  jet, pas de comparaison sémantique/structurelle. Assumé comme limite :
+  Sonnet/Qwen reformulent différemment d'un appel à l'autre (variance déjà
+  documentée plus haut dans ce fichier, ex. points 9/11) — un diff peut donc
+  signaler un écart sur du contenu par ailleurs correct. Pas de comparaison
+  structurelle (agent_sequence, files_to_create/forbidden/dependencies)
+  envisagée pour l'instant : hors périmètre de cette itération, à reconsidérer
+  si le diff texte s'avère trop bruyant en pratique.
+  `difflib.unified_diff` (stdlib, aucune dépendance ajoutée).
+- Cas couverts : identique (✓), diffère (✗ + diff unifié), fichier de
+  référence absent (avertissement, pas un échec), fichier produit introuvable
+  sur disque (cas anormal, avertissement), aucun `output_files` pour cette
+  invocation (ex. `architect` en phase 5 sans écart détecté : rien à
+  comparer, note explicite plutôt qu'un silence ambigu).
+- **Limite connue, non résolue à ce stade** : l'annotation de feedback que
+  l'Architecte ajoute sur la fiche d'un agent fautif (phase 5,
+  `append_feedback`, modification en place d'un fichier existant) n'est pas
+  couverte — l'Architecte ne la déclare pas dans son propre
+  `AgentResult.output_files` (`_run_audit_stubs` passe `[]`, voir
+  `nodes/architect.py`). Comparer ce texte de feedback nécessiterait un
+  mécanisme séparé si le besoin se confirme.
+- Toujours pas de code de sortie non-nul en cas de divergence (cohérent avec
+  le reste de `cli.py`, qui n'utilise cette convention nulle part — un run
+  scriptable/CI sur le résultat de la comparaison resterait à faire si
+  nécessaire).
+- 5 tests ajoutés (`test_cli.py`) : identique, diffère (contenu du diff
+  vérifié), référence absente, aucun fichier produit, comportement par défaut
+  inchangé sans `--reference-dir`. **228/228 au total sur `runtime/tests/`**
+  (était 223).
+
 ## État au 2026-07-10
 
 - Aucune question en attente active dans le dépôt (vérifié : pas de point « en suspens »
