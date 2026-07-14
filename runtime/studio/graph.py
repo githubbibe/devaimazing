@@ -9,6 +9,7 @@ Le graphe est séquentiel avec des branches conditionnelles pour :
 """
 
 import aiosqlite
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -22,7 +23,13 @@ from studio.routing import (
     phase_agent_sequence,
     should_checkpoint,
 )
-from studio.state import RunStatus, StudioState
+from studio.state import AgentResult, Phase, RunStatus, StudioState
+
+# Types studio.state stockés tels quels dans le state du graphe (donc dans le
+# checkpoint LangGraph) : sans les déclarer ici, leur désérialisation lève un
+# warning (et sera bloquée par défaut dans une future version de
+# langgraph-checkpoint-sqlite) — voir docs/roadmap.md, 2026-07-15.
+_ALLOWED_MSGPACK_MODULES = [Phase, RunStatus, AgentResult]
 
 # Ré-exporté pour compatibilité : should_checkpoint vit dans studio.routing
 # (les nodes doivent aussi pouvoir l'appeler, voir sa docstring).
@@ -59,6 +66,13 @@ async def build_graph(config: StudioConfig) -> CompiledStateGraph:
         AsyncSqliteSaver (langgraph-checkpoint-sqlite) exige une connexion
         aiosqlite ouverte via `await`, impossible dans une fonction
         synchrone. Vérifié contre l'API réelle du paquet (voir ADR 0003).
+
+        Le checkpointer est construit avec un JsonPlusSerializer déclarant
+        explicitement _ALLOWED_MSGPACK_MODULES (Phase, RunStatus, AgentResult
+        — les types studio.state stockés tels quels dans StudioState) : sans
+        ça, LangGraph journalise un warning de désérialisation à chaque
+        resume/retry et bloquera par défaut dans une future version (voir
+        docs/roadmap.md, 2026-07-15).
     """
     graph = StateGraph(StudioState)
 
@@ -79,7 +93,8 @@ async def build_graph(config: StudioConfig) -> CompiledStateGraph:
 
     config.state_db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = await aiosqlite.connect(str(config.state_db_path))
-    checkpointer = AsyncSqliteSaver(conn)
+    serde = JsonPlusSerializer(allowed_msgpack_modules=_ALLOWED_MSGPACK_MODULES)
+    checkpointer = AsyncSqliteSaver(conn, serde=serde)
     await checkpointer.setup()
 
     return graph.compile(checkpointer=checkpointer)

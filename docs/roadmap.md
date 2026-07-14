@@ -1,7 +1,35 @@
 # Feuille de route - Implémentation du runtime devaimazing
 
-**Dernière mise à jour** : 2026-07-15 (PM phase Fiches : existing_files_to_read
-tolère les fichiers produits par un agent antérieur de la séquence)
+**Dernière mise à jour** : 2026-07-15 (checkpointer LangGraph : types
+studio.state déclarés dans allowed_msgpack_modules, warning résolu)
+
+## Checkpointer LangGraph (2026-07-15) : types studio.state déclarés dans
+allowed_msgpack_modules
+
+**Contexte** : backlog noté le 2026-07-14 (voir plus bas dans ce fichier,
+section « Backlog identifié en marge ») — chaque `devaimazing resume`/`retry`
+journalisait 3 warnings LangGraph (« Deserializing unregistered type
+studio.state.{Phase,RunStatus,AgentResult} from checkpoint »), non bloquant
+aujourd'hui mais promis à un blocage par défaut dans une future version de
+`langgraph-checkpoint-sqlite`.
+
+**Fix** : `graph.py::build_graph` construit le checkpointer avec
+`AsyncSqliteSaver(conn, serde=JsonPlusSerializer(allowed_msgpack_modules=[Phase,
+RunStatus, AgentResult]))` au lieu du serde par défaut. Passer les **classes**
+directement (`[Phase, RunStatus, AgentResult]`) plutôt que des tuples
+`[('studio.state', 'Phase'), ...]` écrits en dur — vérifié dans le code source
+de `langgraph.checkpoint.serde.jsonplus._normalize_module_keys` : un `type`
+est normalisé via `(cls.__module__, cls.__name__)`, donc équivalent au format
+attendu par LangGraph mais robuste à un renommage futur du module ou de la
+classe (pas de chaîne à maintenir manuellement en synchronisation).
+
+1 test ajouté (`test_graph.py::test_build_graph_checkpointer_serde_allows_
+studio_types_without_warning`) : round-trip `dumps_typed`/`loads_typed` des 3
+types via le vrai `serde` du checkpointer compilé, capture des logs
+(`caplog`), assertion qu'aucun warning « unregistered type » n'est émis —
+**vérifié rouge avant le fix** (le warning réel était bien reproduit).
+**255/256 sur `runtime/tests/`** (1 échec pré-existant sans rapport, inchangé
+depuis les sections précédentes).
 
 ## PM phase Fiches (2026-07-15) : existing_files_to_read tolère les fichiers
 produits par un agent antérieur de la séquence
@@ -1223,28 +1251,15 @@ confirmation (cas normal + agent hors bornes), confirmation refusée/acceptée,
 fermeture de connexion sur les deux chemins, affichage de la raison
 d'intervention manuelle. **207/207 au total sur `runtime/tests/`** (était 195).
 
-**Backlog identifié en marge (2026-07-14, pas bloquant, pour plus tard)** :
-warning LangGraph à chaque `resume` (constaté sur `run-20260714-205712`, projet
-`todo-list`) :
-
-```
-Deserializing unregistered type studio.state.Phase from checkpoint. This will be
-blocked in a future version. Set LANGGRAPH_STRICT_MSGPACK=true to block now, or
-add to allowed_msgpack_modules to allow explicitly: [('studio.state', 'Phase')]
-Deserializing unregistered type studio.state.RunStatus from checkpoint. ...
-Deserializing unregistered type studio.state.AgentResult from checkpoint. ...
-```
-
-Cause probable : `Phase`, `RunStatus` (enums) et `AgentResult` (dataclass) de
-`studio.state` sont sérialisés tels quels par le checkpointer SQLite dans
-`state.db`, sans être déclarés dans la liste `allowed_msgpack_modules` de
-LangGraph — non bloquant aujourd'hui (avertissement seul), mais une version
-future de `langgraph-checkpoint-sqlite` bloquera la désérialisation par défaut.
-À traiter avant une mise à jour de cette dépendance : soit déclarer les trois
-types dans `allowed_msgpack_modules` (config du checkpointer dans `graph.py`),
-soit les rendre sérialisables nativement (ex. `Enum` → `str`, dataclass → dict)
-avant écriture dans le checkpoint — à trancher au moment de l'implémentation,
-pas avant.
+**Résolu (2026-07-15)** — warning LangGraph à chaque `resume`/`retry`
+(`studio.state.Phase`/`RunStatus`/`AgentResult` non enregistrés dans
+`allowed_msgpack_modules`) : voir section dédiée plus haut dans ce fichier.
+`graph.py::build_graph` construit désormais le checkpointer avec un
+`JsonPlusSerializer(allowed_msgpack_modules=[Phase, RunStatus, AgentResult])`
+— passer les classes directement plutôt que des tuples `(module, nom)` en
+dur (LangGraph les normalise via `__module__`/`__name__`), plus robuste à un
+renommage futur. 1 test ajouté (`test_graph.py`), vérifié rouge (warning
+effectivement journalisé) avant le fix.
 
 **Décision prise (2026-07-10, hors code) — reportée en fin de projet (2026-07-14)** :
 la mise en production de devaimazing lui-même devra être conteneurisée Podman,

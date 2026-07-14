@@ -167,3 +167,31 @@ async def test_build_graph_registers_all_nodes_and_uses_sqlite_checkpointer(conf
         # build_graph laisse la connexion ouverte par conception (voir sa
         # docstring) ; on la ferme ici pour ne pas polluer la sortie de test.
         await compiled.checkpointer.conn.close()
+
+
+async def test_build_graph_checkpointer_serde_allows_studio_types_without_warning(
+    config_dir: Path, caplog: pytest.LogCaptureFixture
+):
+    """Régression : LangGraph journalise un warning (et bloquera un jour) la
+    désérialisation d'un type non enregistré dans allowed_msgpack_modules —
+    constaté en pratique sur Phase/RunStatus/AgentResult (voir
+    docs/roadmap.md, backlog 2026-07-14)."""
+    config = StudioConfig(project_name="demo", config_dir=config_dir)
+
+    compiled = await build_graph(config)
+    try:
+        serde = compiled.checkpointer.serde
+        values = [
+            Phase.FICHES,
+            RunStatus.WAITING_HUMAN,
+            AgentResult(agent="pm", phase=Phase.FICHES, status="success"),
+        ]
+        with caplog.at_level("WARNING"):
+            for value in values:
+                encoded = serde.dumps_typed(value)
+                decoded = serde.loads_typed(encoded)
+                assert decoded == value
+
+        assert "unregistered type" not in caplog.text
+    finally:
+        await compiled.checkpointer.conn.close()
