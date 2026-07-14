@@ -247,6 +247,37 @@ def test_parse_agent_file_blocks_no_fallback_path_still_raises():
         parse_agent_file_blocks(text, fallback_path=None)
 
 
+def test_parse_agent_file_blocks_absolute_path_raises():
+    # Régression (2026-07-14) : Path("/repo") / "/etc/passwd" == Path("/etc/passwd")
+    # en pathlib — un chemin absolu produit par l'agent contourne repo_path.
+    text = (
+        '<<<DEVAIMAZING_FILE path="/backend/main.py">>>\n'
+        'contenu\n'
+        '<<<DEVAIMAZING_END>>>'
+    )
+
+    with pytest.raises(ValueError):
+        parse_agent_file_blocks(text)
+
+
+def test_parse_agent_file_blocks_parent_traversal_raises():
+    text = (
+        '<<<DEVAIMAZING_FILE path="backend/../../etc/passwd">>>\n'
+        'contenu\n'
+        '<<<DEVAIMAZING_END>>>'
+    )
+
+    with pytest.raises(ValueError):
+        parse_agent_file_blocks(text)
+
+
+def test_parse_agent_file_blocks_fallback_absolute_path_raises():
+    text = "```python\nsolo\n```\n"
+
+    with pytest.raises(ValueError):
+        parse_agent_file_blocks(text, fallback_path="/backend/main.py")
+
+
 def _card_metadata(**overrides) -> dict:
     metadata = {
         "files_to_create": [], "files_to_modify": [], "files_forbidden": [],
@@ -351,3 +382,24 @@ def test_parse_structured_file_output_incomplete_file_entry_raises():
         parse_structured_file_output(
             '{"files": [{"path": "backend/a.py"}], "blocked_reason": ""}'
         )  # content absent
+
+
+def test_parse_structured_file_output_absolute_path_raises():
+    # Régression (2026-07-14, run réel) : qwen2.5:1.5b-instruct a produit
+    # "path": "/backend/main.py" (imitation littérale de "/backend/" dans
+    # prompts/backend.md) — Path("/repo") / "/backend/main.py" ignore
+    # silencieusement repo_path, écriture tentée hors du repo cible.
+    content = '{"files": [{"path": "/backend/main.py", "content": "x = 1"}], "blocked_reason": ""}'
+
+    with pytest.raises(ValueError):
+        parse_structured_file_output(content)
+
+
+def test_parse_structured_file_output_parent_traversal_raises():
+    content = (
+        '{"files": [{"path": "backend/../../etc/passwd", "content": "x"}], '
+        '"blocked_reason": ""}'
+    )
+
+    with pytest.raises(ValueError):
+        parse_structured_file_output(content)

@@ -1,6 +1,75 @@
 # Feuille de route - Implémentation du runtime devaimazing
 
-**Dernière mise à jour** : 2026-07-14 (ajout `devaimazing run-agent`)
+**Dernière mise à jour** : 2026-07-14 (bug réel trouvé et corrigé via un premier
+run réel de `devaimazing run-agent`)
+
+## Bug réel trouvé via `run-agent` (2026-07-14) : chemin de fichier absolu non validé
+
+Premier usage réel de `devaimazing run-agent` (voir chantiers ci-dessous) sur
+une cible jetable minimale (backend FastAPI + sqlite3, même structure que
+`demo-todo-app`), avec un vrai Ollama (conteneurisé, voir Notes
+d'environnement plus bas) et une fiche demandant d'ajouter
+`PATCH /todos/{id}/complete` à un `backend/main.py` déjà existant.
+
+**Trouvé** : `qwen2.5:1.5b-instruct` (modèle volontairement sous-dimensionné
+pour ce test rapide sur CPU, pas le `7b-instruct` de prod) a répondu avec
+`"path": "/backend/main.py"` (slash de tête) — imitation littérale probable
+de la formulation `/backend/` dans `prompts/backend.md` (« Tu travailles
+UNIQUEMENT dans le dossier `/backend/` du projet cible »). Aucun code du
+runtime ne validait qu'un chemin produit par un agent restait relatif :
+`config.repo_path / "/backend/main.py"` (pathlib) **ignore silencieusement**
+`repo_path` dès que le second opérande est absolu
+(`Path("/repo") / "/etc/passwd" == Path("/etc/passwd")`) — le node a donc
+tenté d'écrire directement sur `/backend/main.py` du système de fichiers
+réel. Bloqué par un `PermissionError` du système d'exploitation ici (pas par
+devaimazing), mais un vrai risque d'écriture hors périmètre sur un
+environnement où ce chemin serait accessible en écriture.
+
+**Fix** : nouvelle fonction `tools/filesystem.py::_validate_relative_path` —
+rejette (`ValueError`) un chemin vide, absolu, ou contenant une traversée de
+répertoire (`..`). Appliquée aux deux points d'entrée où un agent producteur
+déclare des chemins de fichiers : `parse_structured_file_output` (Back/Front/
+Test, sortie contrainte Ollama) et `parse_agent_file_blocks` (PM/Architecte,
+délimiteurs `<<<DEVAIMAZING_FILE>>>` via Claude Code CLI — même classe de
+risque des deux côtés, pas seulement Ollama). Aucun changement requis côté
+nodes : `backend.py`/`frontend.py`/`test.py` absorbaient déjà tout
+`ValueError` de `parse_structured_file_output` dans leur branche
+`feedback_sent`/`WAITING_HUMAN` existante (traite un chemin invalide comme un
+blocage détecté, pas un crash) ; `pm.py`/`architect.py` laissaient déjà
+remonter un `ValueError` de `parse_agent_file_blocks` sans l'absorber (échec
+net et visible, cohérent avec leur traitement existant d'un contrat de sortie
+non respecté).
+
+6 tests de régression ajoutés (`test_filesystem.py` : chemin absolu et
+traversée `..` pour les deux fonctions, y compris `fallback_path` ;
+`test_backend_node.py` : confirme la dégradation vers `feedback_sent`/
+`WAITING_HUMAN` plutôt qu'un crash), **vérifiés rouges sans le fix** — la
+désactivation temporaire de la validation a reproduit exactement le
+`PermissionError: [Errno 13] Permission denied: '/backend'` observé en run
+réel — avant d'être committés. **234/234 au total sur `runtime/tests/`**
+(était 228).
+
+**Notes d'environnement (2026-07-14, pertinent pour les prochains tests
+réels)** : voir aussi la note [[project_ollama_containerized]] en mémoire.
+Ollama doit tourner en conteneur Podman (l'utilisateur change souvent de
+machine) :
+
+```
+podman run -d --name ollama \
+  -v <chemin-large-fichiers>/Ollama:/root/.ollama \
+  -e OLLAMA_MODELS=/root/.ollama \
+  -p 11434:11434 \
+  docker.io/ollama/ollama:latest
+```
+
+Cette machine n'a pas de GPU (`nvidia-smi` absent) — `qwen2.5:7b-instruct`
+(modèle de prod, voir `config/studio.yml`) y traite le prompt à ~5
+tokens/s, largement au-delà du timeout par défaut (180s) dès que le prompt
+dépasse quelques centaines de tokens (skills injectés + fiche + contenu
+existant). `qwen2.5:1.5b-instruct` reste utilisable pour un test rapide du
+câblage (quelques dizaines de secondes), mais n'est pas représentatif de la
+qualité de sortie du modèle de prod — à ne pas confondre lors de la lecture
+de futurs runs de test sur cette machine.
 
 ## Priorité immédiate (ajouté 2026-07-14, avant tout le reste)
 

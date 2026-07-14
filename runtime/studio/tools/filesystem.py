@@ -73,6 +73,44 @@ PM_FICHES_SCHEMA = {
 }
 
 
+def _validate_relative_path(path: str) -> None:
+    """
+    Garde-fou appliqué à tout chemin de fichier produit par un agent
+    (parse_structured_file_output, parse_agent_file_blocks) avant qu'il ne
+    serve à construire un chemin d'écriture (config.repo_path / path).
+
+    pathlib ignore silencieusement le premier opérande d'un `/` dès que le
+    second est absolu (`Path("/repo") / "/etc/passwd" == Path("/etc/passwd")`)
+    — un chemin absolu produit par l'agent contournerait donc repo_path
+    entièrement. Trouvé en pratique (2026-07-14, voir docs/roadmap.md) :
+    qwen2.5:1.5b-instruct a produit `"path": "/backend/main.py"` (slash de
+    tête, imitation littérale de la formulation "/backend/" dans
+    prompts/backend.md) — écriture tentée hors du repo cible, bloquée par un
+    PermissionError du système d'exploitation, pas par devaimazing.
+
+    Args:
+        path: Chemin tel que renvoyé par l'agent (censé être relatif au repo
+            cible).
+
+    Raises:
+        ValueError: Si `path` est vide, absolu, ou contient un composant
+            ".." (traversée de répertoire) — dans les deux cas, le chemin
+            résultant pourrait s'écrire hors du repo cible.
+    """
+    if not path or not path.strip():
+        raise ValueError("Chemin de fichier vide produit par l'agent")
+    candidate = Path(path)
+    if candidate.is_absolute():
+        raise ValueError(
+            f"Chemin de fichier absolu rejeté : {path!r} — attendu un chemin relatif "
+            "au repo cible (ex. 'backend/main.py'), pas un chemin commençant par '/'"
+        )
+    if ".." in candidate.parts:
+        raise ValueError(
+            f"Chemin de fichier avec traversée de répertoire ('..') rejeté : {path!r}"
+        )
+
+
 async def read_card(card_path: Path) -> str:
     """
     Lit une fiche .md.
@@ -350,7 +388,9 @@ def parse_agent_file_blocks(text: str, fallback_path: Optional[str] = None) -> d
         ValueError: Si `text` ne contient aucun bloc de fichier reconnu, et
             que le repli (fallback_path) ne s'applique pas non plus (absent,
             ou `text` contient zéro ou plusieurs blocs ``` — ambigu, pas de
-            devinette dans ce cas).
+            devinette dans ce cas). Également si un chemin de fichier
+            (déclaré dans un bloc, ou fallback_path) est absolu ou contient
+            une traversée de répertoire ('..') — voir _validate_relative_path.
 
     Notes:
         Repli ajouté suite à un run réel (2026-07-11, voir docs/roadmap.md) :
@@ -373,9 +413,12 @@ def parse_agent_file_blocks(text: str, fallback_path: Optional[str] = None) -> d
     """
     matches = _FILE_BLOCK_PATTERN.findall(text)
     if matches:
+        for path, _content in matches:
+            _validate_relative_path(path)
         return {path: content for path, content in matches}
 
     if fallback_path is not None:
+        _validate_relative_path(fallback_path)
         fenced_blocks = _FENCED_CODE_PATTERN.findall(text)
         if len(fenced_blocks) == 1:
             return {fallback_path: fenced_blocks[0].strip()}
@@ -411,7 +454,10 @@ def parse_structured_file_output(content: str) -> tuple[dict[str, str], str]:
             absents, ou entrée de fichier sans "path"/"content"). Le grammar-
             constrained decoding d'Ollama garantit normalement la conformité,
             mais ce n'est pas supposé sans vérification (voir Notes de
-            tools.ollama.run_ollama).
+            tools.ollama.run_ollama). Également si un "path" est absolu ou
+            contient une traversée de répertoire ('..') — voir
+            _validate_relative_path ; trouvé en pratique (2026-07-14,
+            qwen2.5:1.5b-instruct produisant "/backend/main.py").
 
     Example:
         >>> parse_structured_file_output(
@@ -437,6 +483,7 @@ def parse_structured_file_output(content: str) -> tuple[dict[str, str], str]:
             raise ValueError(
                 f"Entrée de fichier incomplète (path/content attendus), reçu : {entry!r}"
             )
+        _validate_relative_path(entry["path"])
         files[entry["path"]] = entry["content"]
 
     return files, data["blocked_reason"]

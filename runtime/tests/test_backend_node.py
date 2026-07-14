@@ -352,6 +352,52 @@ async def test_backend_malformed_json_output_appends_feedback_and_waits_for_huma
     assert updates["agent_results"][0].status == "feedback_sent"
 
 
+async def test_backend_absolute_path_output_appends_feedback_and_waits_for_human(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    Régression (2026-07-14, run réel) : qwen2.5:1.5b-instruct a produit un
+    chemin de fichier absolu ("/backend/main.py", imitation littérale de
+    prompts/backend.md) — sans garde-fou, config.repo_path / "/backend/
+    main.py" ignore silencieusement repo_path (pathlib) et le node tente une
+    écriture hors du repo cible. tools.filesystem.parse_structured_file_output
+    rejette désormais ce chemin (ValueError), déjà absorbée par le
+    `except ValueError` existant du node — même dégradation que pour un JSON
+    malformé, pas de crash.
+    """
+    feedback_calls = []
+
+    async def fake_read_card(path):
+        return "fiche back"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(
+            '{"files": [{"path": "/backend/main.py", "content": "x"}], "blocked_reason": ""}'
+        )
+
+    async def fake_append_feedback(card_path, agent_source, feedback):
+        feedback_calls.append((agent_source, feedback))
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "append_feedback", fake_append_feedback)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back", "front"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
+    )
+
+    updates = await backend_node.run(state)
+
+    assert len(feedback_calls) == 1
+    assert updates["agent_results"][0].status == "feedback_sent"
+    assert updates["status"] == RunStatus.WAITING_HUMAN
+
+
 async def test_backend_max_iterations_exceeded_fails_without_calling_ollama(
     monkeypatch: pytest.MonkeyPatch,
 ):
