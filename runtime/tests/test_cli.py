@@ -1108,3 +1108,177 @@ def test_run_agent_without_reference_dir_skips_comparison(
 
     assert result.exit_code == 0
     assert "référence" not in result.output
+
+
+# --- new-project ---
+
+
+@pytest.fixture
+def fake_studio_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """
+    Racine devaimazing factice sous tmp_path (jamais la vraie racine du repo) :
+    new-project ne doit jamais créer de dossier à côté du vrai checkout
+    pendant les tests. Le vrai template est copié tel quel pour vérifier le
+    comportement réel de substitution.
+    """
+    root = tmp_path / "devaimazing"
+    templates_dir = root / "templates"
+    templates_dir.mkdir(parents=True)
+    real_template = (
+        Path(__file__).resolve().parents[2] / "templates" / "project-config.yml.template"
+    )
+    (templates_dir / "project-config.yml.template").write_text(
+        real_template.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    monkeypatch.setattr(cli_module, "_devaimazing_root", lambda: root)
+    return root
+
+
+def _config_path(tmp_path: Path, name: str) -> Path:
+    return tmp_path / "config" / "projects" / f"{name}.yml"
+
+
+async def _fail_if_called(*args, **kwargs):
+    raise AssertionError("ne devrait pas être appelé")
+
+
+def test_new_project_creates_repo_and_config(
+    monkeypatch: pytest.MonkeyPatch, fake_studio_root: Path, tmp_path: Path
+):
+    result = CliRunner().invoke(main, ["new-project", "mon-projet", "--skip-github"])
+
+    assert result.exit_code == 0
+    target = fake_studio_root.parent / "mon-projet"
+    assert (target / ".git").is_dir()
+    assert (target / "README.md").read_text(encoding="utf-8") == "# mon-projet\n"
+
+    config_path = _config_path(tmp_path, "mon-projet")
+    assert config_path.is_file()
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert config["name"] == "mon-projet"
+    assert config["repo_path"] == str(target)
+
+
+def test_new_project_config_already_exists_is_noop(
+    monkeypatch: pytest.MonkeyPatch, fake_studio_root: Path, tmp_path: Path
+):
+    config_path = _config_path(tmp_path, "mon-projet")
+    _write_yaml(config_path, {"name": "mon-projet", "repo_path": "/déjà/là"})
+    monkeypatch.setattr(cli_module, "init_repo", _fail_if_called)
+
+    result = CliRunner().invoke(main, ["new-project", "mon-projet", "--skip-github"])
+
+    assert result.exit_code == 0
+    assert "existe déjà" in result.output
+    assert not (fake_studio_root.parent / "mon-projet").exists()
+
+
+def test_new_project_reuses_existing_git_repo(
+    monkeypatch: pytest.MonkeyPatch, fake_studio_root: Path, tmp_path: Path
+):
+    target = fake_studio_root.parent / "mon-projet"
+    (target / ".git").mkdir(parents=True)
+    monkeypatch.setattr(cli_module, "init_repo", _fail_if_called)
+    monkeypatch.setattr(cli_module, "create_initial_commit", _fail_if_called)
+
+    result = CliRunner().invoke(main, ["new-project", "mon-projet", "--skip-github"])
+
+    assert result.exit_code == 0
+    config_path = _config_path(tmp_path, "mon-projet")
+    assert config_path.is_file()
+
+
+def test_new_project_target_exists_not_git_repo_prints_error(
+    fake_studio_root: Path, tmp_path: Path
+):
+    target = fake_studio_root.parent / "mon-projet"
+    target.mkdir(parents=True)
+    (target / "fichier.txt").write_text("contenu", encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["new-project", "mon-projet", "--skip-github"])
+
+    assert "n'est pas un repo Git" in result.output
+    assert not _config_path(tmp_path, "mon-projet").exists()
+
+
+def test_new_project_gh_missing_warns_but_still_writes_config(
+    monkeypatch: pytest.MonkeyPatch, fake_studio_root: Path, tmp_path: Path
+):
+    monkeypatch.setattr(cli_module, "_gh_available", lambda: False)
+    monkeypatch.setattr(cli_module, "create_github_remote", _fail_if_called)
+
+    result = CliRunner().invoke(main, ["new-project", "mon-projet"])
+
+    assert result.exit_code == 0
+    assert "gh introuvable" in result.output
+    assert _config_path(tmp_path, "mon-projet").is_file()
+
+
+def test_new_project_confirmation_declined_skips_github(
+    monkeypatch: pytest.MonkeyPatch, fake_studio_root: Path, tmp_path: Path
+):
+    monkeypatch.setattr(cli_module, "_gh_available", lambda: True)
+    monkeypatch.setattr(cli_module, "create_github_remote", _fail_if_called)
+    monkeypatch.setattr(cli_module, "push_branch", _fail_if_called)
+
+    result = CliRunner().invoke(main, ["new-project", "mon-projet"], input="n\n")
+
+    assert result.exit_code == 0
+    assert "non créé" in result.output
+
+
+def test_new_project_confirmation_accepted_creates_remote_and_pushes(
+    monkeypatch: pytest.MonkeyPatch, fake_studio_root: Path, tmp_path: Path
+):
+    calls: list = []
+
+    async def fake_create_github_remote(repo_path, name, private=True):
+        calls.append(("create", repo_path, name, private))
+
+    async def fake_push_branch(repo_path, branch, remote="origin"):
+        calls.append(("push", repo_path, branch, remote))
+
+    monkeypatch.setattr(cli_module, "_gh_available", lambda: True)
+    monkeypatch.setattr(cli_module, "create_github_remote", fake_create_github_remote)
+    monkeypatch.setattr(cli_module, "push_branch", fake_push_branch)
+
+    result = CliRunner().invoke(main, ["new-project", "mon-projet"], input="y\n")
+
+    assert result.exit_code == 0
+    target = fake_studio_root.parent / "mon-projet"
+    assert calls[0] == ("create", target, "mon-projet", True)
+    assert calls[1] == ("push", target, "develop", "origin")
+
+
+def test_new_project_public_flag_passed_through(
+    monkeypatch: pytest.MonkeyPatch, fake_studio_root: Path, tmp_path: Path
+):
+    calls: list = []
+
+    async def fake_create_github_remote(repo_path, name, private=True):
+        calls.append(private)
+
+    async def fake_push_branch(repo_path, branch, remote="origin"):
+        pass
+
+    monkeypatch.setattr(cli_module, "_gh_available", lambda: True)
+    monkeypatch.setattr(cli_module, "create_github_remote", fake_create_github_remote)
+    monkeypatch.setattr(cli_module, "push_branch", fake_push_branch)
+
+    result = CliRunner().invoke(main, ["new-project", "mon-projet", "--public"], input="y\n")
+
+    assert result.exit_code == 0
+    assert calls == [False]
+
+
+def test_new_project_skip_github_never_prompts(
+    monkeypatch: pytest.MonkeyPatch, fake_studio_root: Path, tmp_path: Path
+):
+    monkeypatch.setattr(cli_module, "_gh_available", lambda: True)
+    monkeypatch.setattr(cli_module, "create_github_remote", _fail_if_called)
+    monkeypatch.setattr(cli_module, "push_branch", _fail_if_called)
+
+    result = CliRunner().invoke(main, ["new-project", "mon-projet", "--skip-github"])
+
+    assert result.exit_code == 0
+    assert "--skip-github" in result.output

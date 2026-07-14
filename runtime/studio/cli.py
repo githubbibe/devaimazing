@@ -9,6 +9,8 @@ Usage:
                                          Exécute un seul agent hors run complet (test isolé)
     devaimazing runs <project>          Liste les runs d'un projet
     devaimazing metrics <run-id>        Affiche les métriques d'un run
+    devaimazing new-project <name>      Initialise un nouveau projet cible (dossier
+                                         frère, repo Git, config/projects/<name>.yml)
     devaimazing projects                Liste les projets configurés
     devaimazing doctor                  Vérifie l'environnement
 """
@@ -30,12 +32,24 @@ from rich.table import Table
 from studio.config import StudioConfig
 from studio.graph import build_graph
 from studio.metrics import MetricsCollector
-from studio.nodes import architect, backend, closer, frontend, pm, security, test as test_node
+from studio.nodes import architect, backend, closer, frontend, pm, security
+from studio.nodes import test as test_node
 from studio.routing import AGENT_TO_NODE
 from studio.state import Phase, RunStatus, StudioState
-from studio.tools.git import checkout_branch
+from studio.tools.git import (
+    checkout_branch,
+    create_github_remote,
+    create_initial_commit,
+    init_repo,
+    push_branch,
+)
 
 console = Console()
+
+
+def _devaimazing_root() -> Path:
+    """Racine du repo studio (parent de runtime/studio/cli.py)."""
+    return Path(__file__).resolve().parents[2]
 
 
 def _resolve_config_dir() -> Optional[Path]:
@@ -46,6 +60,15 @@ def _resolve_config_dir() -> Optional[Path]:
     """
     config_dir_raw = os.environ.get("DEVAIMAZING_CONFIG_DIR")
     return Path(config_dir_raw).expanduser() if config_dir_raw else None
+
+
+def _config_projects_dir() -> Path:
+    base_config_dir = _resolve_config_dir() or _devaimazing_root() / "config"
+    return base_config_dir / "projects"
+
+
+def _gh_available() -> bool:
+    return shutil.which("gh") is not None
 
 
 def _load_config(project: str) -> StudioConfig:
@@ -602,11 +625,91 @@ async def _metrics_async(run_id: str, project: str, output_format: str) -> None:
     console.print(table)
 
 
+@main.command(name="new-project")
+@click.argument("name")
+@click.option(
+    "--private/--public", default=True,
+    help="Visibilité du repo GitHub créé (privé par défaut)",
+)
+@click.option(
+    "--skip-github", is_flag=True,
+    help="Ne crée pas de repo GitHub distant (repo Git local uniquement)",
+)
+def new_project(name: str, private: bool, skip_github: bool):
+    """
+    Initialise un nouveau projet cible NAME : dossier frère de devaimazing
+    (repo Git séparé), et config/projects/NAME.yml dans le repo studio.
+    """
+    asyncio.run(_new_project_async(name, private, skip_github))
+
+
+def _write_project_config(config_path: Path, name: str, repo_path: Path) -> None:
+    template_path = _devaimazing_root() / "templates" / "project-config.yml.template"
+    content = template_path.read_text(encoding="utf-8")
+    content = content.replace("{{PROJECT_NAME}}", name).replace("{{REPO_PATH}}", str(repo_path))
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(content, encoding="utf-8")
+
+
+async def _new_project_async(name: str, private: bool, skip_github: bool) -> None:
+    config_path = _config_projects_dir() / f"{name}.yml"
+    if config_path.exists():
+        console.print(
+            f"[yellow]config/projects/{name}.yml existe déjà — "
+            "projet déjà initialisé, rien à faire.[/yellow]"
+        )
+        return
+
+    target = _devaimazing_root().parent / name
+
+    if target.exists():
+        if not target.is_dir():
+            console.print(f"[red]{target} existe déjà mais n'est pas un dossier.[/red]")
+            return
+        if not (target / ".git").is_dir():
+            console.print(
+                f"[red]{target} existe déjà mais n'est pas un repo Git — "
+                "à résoudre manuellement.[/red]"
+            )
+            return
+        console.print(f"[cyan]{target} existe déjà, réutilisation (pas de git init/GitHub).[/cyan]")
+    else:
+        target.mkdir(parents=True)
+        await init_repo(target, initial_branch="develop")
+        await create_initial_commit(target, name)
+        console.print(f"[green]Repo Git initialisé dans {target}[/green]")
+
+        if skip_github:
+            console.print("[yellow]--skip-github : pas de repo GitHub distant créé.[/yellow]")
+        elif not _gh_available():
+            console.print(
+                "[yellow]gh introuvable dans PATH — repo GitHub non créé, "
+                "à faire manuellement si besoin.[/yellow]"
+            )
+        else:
+            visibility_label = "privé" if private else "public"
+            confirm_message = (
+                f"Créer le repo GitHub '{name}' ({visibility_label}) "
+                "et y pousser la branche develop ?"
+            )
+            if click.confirm(confirm_message, default=False):
+                await create_github_remote(target, name, private=private)
+                await push_branch(target, "develop")
+                console.print("[green]Repo GitHub créé et branche develop poussée.[/green]")
+            else:
+                console.print(
+                    "[yellow]Repo GitHub non créé — à faire manuellement si besoin.[/yellow]"
+                )
+
+    _write_project_config(config_path, name, target)
+    console.print(f"[green]Config créée : {config_path}[/green]")
+    console.print(f"Prochaine étape : devaimazing run {name}")
+
+
 @main.command()
 def projects():
     """Liste les projets configurés dans config/projects/."""
-    base_config_dir = _resolve_config_dir() or Path(__file__).resolve().parents[2] / "config"
-    config_dir = base_config_dir / "projects"
+    config_dir = _config_projects_dir()
     if not config_dir.is_dir():
         console.print("[yellow]Aucun répertoire config/projects/ trouvé.[/yellow]")
         return

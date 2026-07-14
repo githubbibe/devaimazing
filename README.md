@@ -204,7 +204,8 @@ devaimazing/
 │   ├── card-root.md.template
 │   ├── card-agent.md.template
 │   ├── project-map.md.template
-│   └── architect-map.md.template
+│   ├── architect-map.md.template
+│   └── project-config.yml.template  # Squelette config/projects/<nom>.yml
 ├── runtime/                     # Code Python du studio
 │   ├── studio/
 │   │   ├── graph.py             # Definition LangGraph
@@ -239,8 +240,7 @@ devaimazing/
 │   └── demo-todo-app/           # Doc sur le projet de demo (le code vit hors
 │       └── README.md            # de ce depot, voir config/projects/demo-todo-app.yml)
 └── scripts/
-    ├── setup.sh                 # Installation complete
-    └── new-project.sh           # Initialise un nouveau projet cible
+    └── setup.sh                 # Installation complete
 ```
 
 ---
@@ -284,9 +284,9 @@ devaimazing --version
 # Puller le modele Ollama
 ollama pull qwen2.5:7b-instruct
 
-# Configurer un projet cible
-cp config/projects/webaimazing-v2.yml config/projects/mon-projet.yml
-# Editer mon-projet.yml avec le chemin vers ton repo
+# Initialiser un nouveau projet cible (dossier frere de devaimazing, repo Git,
+# config/projects/mon-projet.yml) — voir section "Projets cibles" plus bas
+devaimazing new-project mon-projet
 
 # Lancer un run sur le projet exemple (nom de projet, pas un chemin — voir
 # config/projects/demo-todo-app.yml)
@@ -318,6 +318,9 @@ devaimazing metrics <run-id>
 # Reprendre un run apres un checkpoint humain
 devaimazing resume <run-id>
 
+# Initialiser un nouveau projet cible
+devaimazing new-project <project-name>
+
 # Lister les projets configures
 devaimazing projects
 ```
@@ -343,23 +346,28 @@ Le `git log` permet de tracer exactement quel agent a produit quel code.
 
 ## Projets cibles
 
-devaimazing peut piloter n'importe quel repo projet via un fichier de config :
+devaimazing peut piloter n'importe quel repo projet via un fichier de config. La commande
+`new-project` automatise l'initialisation complete :
 
-```yaml
-# config/projects/mon-projet.yml
-name: mon-projet
-repo_path: ~/code/aimazing/mon-projet/
-git:
-  branch_prefix: studio/
-structure:
-  specs_dir: specs/
-
-# Overrides de modeles (optionnel, herite de config/studio.yml sinon)
-# models:
-#   agents_local: qwen2.5:14b-instruct  # si assez de RAM
+```bash
+devaimazing new-project mon-projet
 ```
 
-Les projets vivent dans `~/code/aimazing/<projet>/`, au meme niveau que devaimazing. Aucun fichier projet n'est stocke dans le repo studio.
+Ce que fait la commande :
+
+1. Cree le dossier `mon-projet/` **au meme niveau que devaimazing** (dossier frere, quel
+   que soit l'emplacement du checkout devaimazing sur la machine).
+2. Initialise un repo Git local dedie dans ce dossier (branche `develop`, un commit initial).
+3. Propose (confirmation interactive, `--private`/`--public`, defaut prive) de creer le
+   repo GitHub distant correspondant via `gh` et d'y pousser `develop` — desactivable avec
+   `--skip-github` pour un repo local uniquement.
+4. Ecrit `config/projects/mon-projet.yml` (depuis `templates/project-config.yml.template`)
+   avec le `repo_path` resolu.
+
+Si le dossier ou le repo GitHub existent deja, `new-project` reutilise ce qui est present
+(idempotent) et se contente d'ecrire la config manquante. Aucun fichier projet n'est stocke
+dans le repo studio : le seul lien entre devaimazing et un projet cible est ce fichier de
+config, via `repo_path`.
 
 ---
 

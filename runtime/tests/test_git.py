@@ -3,7 +3,9 @@ Tests des opérations Git devaimazing.
 
 Utilise de vrais dépôts Git dans des répertoires temporaires (via tmp_path) :
 pas de mock, pour vérifier le comportement réel des commandes git invoquées
-en sous-process.
+en sous-process. Exception : create_github_remote, qui appellerait le vrai
+binaire `gh` et créerait un repo GitHub réel — sous-process scripté à la
+place (même pattern que test_claude_code.py).
 """
 
 import re
@@ -12,12 +14,17 @@ from pathlib import Path
 
 import pytest
 
+import studio.tools.git as git_tool
 from studio.tools.git import (
     AGENT_GIT_IDENTITIES,
     commit_as_agent,
+    create_github_remote,
+    create_initial_commit,
     create_run_branch,
     generate_branch_name,
+    init_repo,
     merge_run_branch,
+    push_branch,
     slugify_feature_name,
 )
 
@@ -131,3 +138,88 @@ async def test_merge_run_branch_conflict_raises(repo: Path):
 
     with pytest.raises(RuntimeError):
         await merge_run_branch(repo, branch_name, target_branch="develop")
+
+
+async def test_init_repo_creates_develop_branch(tmp_path: Path):
+    repo_path = tmp_path / "nouveau-projet"
+    repo_path.mkdir()
+
+    await init_repo(repo_path, initial_branch="develop")
+
+    assert (repo_path / ".git").is_dir()
+    assert _git(repo_path, "symbolic-ref", "--short", "HEAD") == "develop"
+
+
+async def test_init_repo_is_idempotent(tmp_path: Path):
+    """git init est lui-même idempotent (« Reinitialized existing... ») — pas d'erreur à gérer ici."""
+    repo_path = tmp_path / "deja-un-repo"
+    repo_path.mkdir()
+    await init_repo(repo_path, initial_branch="develop")
+
+    await init_repo(repo_path, initial_branch="develop")
+
+    assert (repo_path / ".git").is_dir()
+
+
+async def test_create_initial_commit_writes_readme_and_commits(tmp_path: Path):
+    repo_path = tmp_path / "nouveau-projet"
+    repo_path.mkdir()
+    await init_repo(repo_path, initial_branch="develop")
+
+    commit_hash = await create_initial_commit(repo_path, "mon-projet")
+
+    assert re.fullmatch(r"[0-9a-f]{40}", commit_hash)
+    assert (repo_path / "README.md").read_text(encoding="utf-8") == "# mon-projet\n"
+    assert _git(repo_path, "log", "-1", "--format=%s") == "chore: initialise mon-projet"
+    author = _git(repo_path, "log", "-1", "--format=%an <%ae>")
+    assert author == "devaimazing-bootstrap <bootstrap@aimazing.fr>"
+
+
+async def test_push_branch_no_remote_raises(tmp_path: Path):
+    repo_path = tmp_path / "nouveau-projet"
+    repo_path.mkdir()
+    await init_repo(repo_path, initial_branch="develop")
+    await create_initial_commit(repo_path, "mon-projet")
+
+    with pytest.raises(RuntimeError):
+        await push_branch(repo_path, "develop")
+
+
+class _FakeGhProcess:
+    def __init__(self, returncode: int, stderr: bytes = b""):
+        self.returncode = returncode
+        self._stderr = stderr
+
+    async def communicate(self):
+        return b"", self._stderr
+
+
+async def test_create_github_remote_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    repo_path = tmp_path / "nouveau-projet"
+    repo_path.mkdir()
+    captured_args: list = []
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        captured_args.extend(args)
+        return _FakeGhProcess(returncode=0)
+
+    monkeypatch.setattr(git_tool.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+
+    await create_github_remote(repo_path, "mon-projet", private=True)
+
+    assert captured_args[:3] == ["gh", "repo", "create"]
+    assert "mon-projet" in captured_args
+    assert "--private" in captured_args
+
+
+async def test_create_github_remote_failure_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    repo_path = tmp_path / "nouveau-projet"
+    repo_path.mkdir()
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        return _FakeGhProcess(returncode=1, stderr=b"name already taken")
+
+    monkeypatch.setattr(git_tool.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+
+    with pytest.raises(RuntimeError, match="name already taken"):
+        await create_github_remote(repo_path, "mon-projet")

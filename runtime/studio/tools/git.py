@@ -231,3 +231,116 @@ async def merge_run_branch(repo_path: Path, branch_name: str, target_branch: str
         "-m", f"merge: {branch_name} into {target_branch}",
     )
     return await _run_git(repo_path, "rev-parse", "HEAD")
+
+
+async def init_repo(repo_path: Path, initial_branch: str = "develop") -> None:
+    """
+    Initialise un nouveau repo Git vide dans repo_path, sur initial_branch.
+
+    Args:
+        repo_path: Chemin absolu vers le dossier (doit déjà exister, vide ou non).
+        initial_branch: Nom de la branche initiale (develop par défaut, cohérent
+            avec git.base_branch de config/studio.yml).
+
+    Raises:
+        RuntimeError: Si git init échoue (repo_path inexistant, déjà un repo Git).
+
+    Side effects:
+        Crée un répertoire .git dans repo_path.
+
+    Notes:
+        Le ref de la branche n'existe pas tant qu'aucun commit n'a été fait
+        (voir create_initial_commit) — un `checkout`/`push` avant ce premier
+        commit échouerait.
+    """
+    await _run_git(repo_path, "init", "-b", initial_branch)
+
+
+async def create_initial_commit(repo_path: Path, project_name: str) -> str:
+    """
+    Crée le commit initial (README.md minimal) d'un repo tout juste initialisé.
+
+    Args:
+        repo_path: Chemin absolu vers le repo projet (déjà initialisé via init_repo).
+        project_name: Nom du projet, utilisé dans le contenu du README et le message.
+
+    Returns:
+        Hash du commit créé.
+
+    Raises:
+        RuntimeError: Si le commit échoue.
+
+    Side effects:
+        Crée/écrase repo_path/README.md et crée un commit sur la branche courante.
+
+    Notes:
+        Identité Git dédiée (devaimazing-bootstrap), distincte de
+        AGENT_GIT_IDENTITIES : ce commit ne représente le travail d'aucun agent,
+        seulement l'initialisation du repo par la commande `new-project`.
+    """
+    (repo_path / "README.md").write_text(f"# {project_name}\n", encoding="utf-8")
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "devaimazing-bootstrap",
+        "GIT_AUTHOR_EMAIL": "bootstrap@aimazing.fr",
+        "GIT_COMMITTER_NAME": "devaimazing-bootstrap",
+        "GIT_COMMITTER_EMAIL": "bootstrap@aimazing.fr",
+    }
+    await _run_git(repo_path, "add", "README.md")
+    await _run_git(repo_path, "commit", "-m", f"chore: initialise {project_name}", env=env)
+    return await _run_git(repo_path, "rev-parse", "HEAD")
+
+
+async def create_github_remote(repo_path: Path, name: str, private: bool = True) -> None:
+    """
+    Crée le repo GitHub distant via `gh repo create` et l'ajoute comme remote `origin`.
+
+    Args:
+        repo_path: Chemin absolu vers le repo projet local (source).
+        name: Nom du repo à créer côté GitHub.
+        private: Visibilité du repo créé (privé par défaut).
+
+    Raises:
+        RuntimeError: Si `gh` échoue (non authentifié, nom déjà pris, etc.)
+
+    Side effects:
+        Crée un repo distant sur GitHub (action visible, persistante, hors de ce
+        process) et ajoute un remote `origin` au repo local.
+
+    Notes:
+        Ne pousse aucune branche (voir push_branch séparément) — ce découplage
+        permet à l'appelant de confirmer explicitement chaque effet de bord côté
+        GitHub avant de l'exécuter, plutôt qu'une seule confirmation couvrant
+        création + push en un geste opaque.
+    """
+    visibility = "--private" if private else "--public"
+    process = await asyncio.create_subprocess_exec(
+        "gh", "repo", "create", name, visibility,
+        "--source", str(repo_path), "--remote", "origin",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"Échec de la création du repo GitHub {name!r} : "
+            f"{stderr.decode('utf-8', errors='replace').strip()}"
+        )
+
+
+async def push_branch(repo_path: Path, branch: str, remote: str = "origin") -> None:
+    """
+    Pousse branch vers remote en configurant le suivi amont (-u).
+
+    Args:
+        repo_path: Chemin absolu vers le repo projet.
+        branch: Nom de la branche à pousser.
+        remote: Nom du remote (origin par défaut).
+
+    Raises:
+        RuntimeError: Si le push échoue (remote absent, réseau, permissions).
+
+    Side effects:
+        Pousse des commits vers un serveur Git distant.
+    """
+    await _run_git(repo_path, "push", "-u", remote, branch)

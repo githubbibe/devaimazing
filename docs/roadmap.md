@@ -1,7 +1,68 @@
 # Feuille de route - Implémentation du runtime devaimazing
 
-**Dernière mise à jour** : 2026-07-14 (bug réel trouvé et corrigé via un premier
-run réel de `devaimazing run-agent`)
+**Dernière mise à jour** : 2026-07-14 (`devaimazing new-project` : initialisation
+automatisée d'un nouveau projet cible)
+
+## `devaimazing new-project <nom>` (2026-07-14) : initialisation d'un nouveau projet cible
+
+**Contexte/décision utilisateur** : un projet piloté par devaimazing doit vivre dans un
+dossier frère de devaimazing (même parent, quel que soit l'emplacement du checkout —
+confirme et généralise la convention déjà documentée dans `README.md`, jusqu'ici non
+outillée), dans son propre repo Git/GitHub, distinct de celui du studio. `config/
+projects/<nom>.yml` reste le seul point de couplage entre les deux : une valeur de
+config (`repo_path`), pas un lien filesystem — un symlink `devaimazing/projets/<nom>`
+envisagé un temps a été écarté (irait à l'encontre du principe déjà en place « aucun
+fichier projet stocké dans le repo studio », et redondant : `config/projects/*.yml`
+suffit déjà à lister les projets en cours ; les agents éditant directement via
+`repo_path` absolu, un point d'accès supplémentaire dans l'arborescence studio n'apporte
+rien).
+
+**Livré** : `devaimazing new-project <nom>` (`cli.py::new_project`/`_new_project_async`) :
+- Résout la cible comme `<parent-de-devaimazing>/<nom>` (`_devaimazing_root()`, dérivé de
+  `__file__`, même pattern que le défaut de `_resolve_config_dir`).
+- Si `config/projects/<nom>.yml` existe déjà : no-op (idempotent, message explicite).
+- Si le dossier cible n'existe pas : `mkdir`, `tools/git.py::init_repo` (nouveau —
+  `git init -b develop`, cohérent avec `git.base_branch` par défaut de
+  `config/studio.yml`) puis `create_initial_commit` (nouveau — README.md minimal,
+  identité Git dédiée `devaimazing-bootstrap`, distincte de `AGENT_GIT_IDENTITIES` :
+  ce commit ne représente le travail d'aucun agent). Un ref de branche n'existe qu'après
+  un premier commit — nécessaire avant tout push ultérieur.
+- Si le dossier cible existe déjà (repo cloné/créé manuellement en amont) : réutilisé tel
+  quel (erreur explicite si ce n'est pas un repo Git), aucun `git init`/commit forcé.
+- Repo GitHub : **jamais automatique sans confirmation** (`click.confirm`, défaut non) —
+  action visible/persistante sur un service externe, traitée comme telle. `--private`/
+  `--public` (défaut privé, décision utilisateur), `--skip-github` pour repo local
+  uniquement. `tools/git.py::create_github_remote` (nouveau, sous-process `gh repo create
+  --source --remote origin`) puis `push_branch` (nouveau, `git push -u`) — deux fonctions
+  séparées plutôt qu'un seul appel `--push`, pour que l'appelant puisse à l'avenir confirmer
+  indépendamment la création et la publication si besoin. Si `gh` absent du PATH : avertit,
+  ne bloque pas (repo local déjà utilisable).
+- `config/projects/<nom>.yml` écrit depuis un nouveau template dédié,
+  `templates/project-config.yml.template` (placeholders `{{PROJECT_NAME}}`/
+  `{{REPO_PATH}}`) — **pas** une copie de `config/projects/webaimazing-v2.yml` (ancien
+  comportement de `scripts/new-project.sh`, supprimé dans ce commit) : `project_constraints`
+  d'un projet réel (postgresql/redis/react/etc.) n'ont aucune raison d'être les valeurs par
+  défaut d'un projet dont la stack n'est pas encore connue — laissé vide/commenté dans le
+  nouveau template, à compléter explicitement.
+- `scripts/new-project.sh` supprimé (superseded) : logique dupliquée et plus limitée
+  (supposait le dossier déjà existant, aucune création de repo Git ni GitHub, substitution
+  de placeholders via `sed -i ''` — syntaxe BSD/macOS uniquement, cassée sur Linux).
+  `specs/project-map.md`/`architect-map.md` ne sont volontairement plus pré-créés par cette
+  commande (contrairement à l'ancien script) : `nodes/closer.py::_update_project_map` crée
+  déjà `project-map.md` depuis le template au premier run si absent, et
+  `nodes/architect.py` tolère déjà l'absence d'`architect-map.md` (« premier run du
+  projet ») — pré-créer ces fichiers aurait dupliqué une logique de scaffolding déjà
+  gérée ailleurs, avec un risque de divergence (l'ancien script substituait `{{DATE}}`
+  dans l'en-tête, `closer.py` ne le fait pas).
+- 4 fonctions ajoutées à `tools/git.py` (`init_repo`, `create_initial_commit`,
+  `create_github_remote`, `push_branch`), testées dans `test_git.py` sur de vrais repos
+  temporaires (sauf `create_github_remote`, sous-process `gh` scripté — même pattern que
+  `test_claude_code.py` pour ne jamais créer de repo GitHub réel en test). 9 tests ajoutés
+  dans `test_cli.py` (création dossier+repo+config, no-op si config déjà présente,
+  réutilisation d'un repo existant, dossier existant non-Git refusé, `gh` absent,
+  confirmation refusée/acceptée avec vérification des arguments passés, `--public`,
+  `--skip-github` ne déclenche jamais de prompt). README.md mis à jour (arbre, Setup,
+  Usage, section « Projets cibles »). **249/249 au total sur `runtime/tests/`** (était 234).
 
 ## Bug réel trouvé via `run-agent` (2026-07-14) : chemin de fichier absolu non validé
 
