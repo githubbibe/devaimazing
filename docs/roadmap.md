@@ -1,7 +1,43 @@
 # Feuille de route - Implémentation du runtime devaimazing
 
-**Dernière mise à jour** : 2026-07-15 (PM phase Fiches : deux appels séparés,
-métadonnées puis prose, au lieu d'un appel unique mêlant les deux)
+**Dernière mise à jour** : 2026-07-15 (PM phase Fiches : existing_files_to_read
+tolère les fichiers produits par un agent antérieur de la séquence)
+
+## PM phase Fiches (2026-07-15) : existing_files_to_read tolère les fichiers
+produits par un agent antérieur de la séquence
+
+**Incident** : une fois les deux fix précédents en place (dégradation
+gracieuse, puis deux appels séparés), le run `run-20260714-205712`
+(`todo-list`) a de nouveau crashé, mais sur un garde-fou différent, explicitement
+marqué « hors scope » quelques heures plus tôt faute d'occurrence observée :
+`existing_files_to_read` de `back-tu` référençait `backend/main.py`, absent du
+repo cible **au moment où le PM écrit les fiches** (phase 3, avant que `back`
+n'ait tourné). Pas une hallucination : `back` précède `back-tu` dans
+`agent_sequence` et créera bien ce fichier avant que `back-tu` ne s'exécute
+réellement (phase 4/6) — la fiche `back-tu` référence même la dépendance
+correctement dans son champ `dependencies` (« back — tous les fichiers
+backend/ »). Le bug était dans la validation elle-même : elle vérifie
+l'existence sur disque au mauvais moment (écriture des fiches) au lieu du bon
+(exécution de l'agent lecteur, après l'agent producteur). Ce n'est pas un cas
+rare : quasiment tout run full-stack déclenche ce faux positif dès qu'un agent
+de tests (`back-tu`, `front-tu`) ou aval référence les fichiers d'un agent qui
+le précède.
+
+**Fix** : nouvelle fonction `nodes/pm.py::_will_be_created_by_earlier_agent` —
+un chemin de `existing_files_to_read` est désormais valide s'il existe déjà
+sur disque **ou** s'il figure dans `files_to_create`/`files_to_modify` d'un
+agent précédant celui qui le référence dans `agent_sequence`. La vérification
+est déplacée à l'intérieur du même `try/except` que les 3 autres checks du
+canal prose (au lieu d'un bloc séparé toujours fatal) : un échec réel (ni sur
+disque, ni produit par un agent antérieur — véritable hallucination) dégrade
+maintenant lui aussi en `feedback_sent`/`WAITING_HUMAN`, pour rester cohérent
+avec le reste — plus de raison de garder ce seul cas à part.
+
+3 tests ajoutés/modifiés (`test_pm_node.py`) : cas valide (fichier créé par un
+agent antérieur, absent du disque — reproduit l'incident réel) ; cas toujours
+invalide (dégradé, plus de crash) ; **vérifiés rouges contre le code d'avant
+ce fix par `git stash` temporaire** avant d'être committés. **254/255 sur
+`runtime/tests/`** (1 échec pré-existant sans rapport, inchangé).
 
 ## PM phase Fiches (2026-07-15) : deux appels séparés au lieu d'un appel unique
 mêlant JSON schema et prose

@@ -519,7 +519,7 @@ async def test_fiches_max_iterations_exceeded_skips_llm_call(
     assert "pm" in updates["failed_agents"]
 
 
-async def test_fiches_existing_file_to_read_missing_on_disk_raises_runtime_error(
+async def test_fiches_existing_file_to_read_missing_on_disk_sends_feedback_and_waits(
     monkeypatch: pytest.MonkeyPatch, repo: Path
 ):
     _write_card_root(repo)
@@ -545,11 +545,68 @@ async def test_fiches_existing_file_to_read_missing_on_disk_raises_runtime_error
         run_id="run-042", current_phase=Phase.FICHES, card_root_path="specs/run-042/card-root.md",
         architect_brief_path="specs/run-042/architect-brief.md",
     )
-    with pytest.raises(RuntimeError):
-        await pm_node.run(state)
+    updates = await pm_node.run(state)
 
+    assert updates["status"] == RunStatus.WAITING_HUMAN
+    assert updates["agent_results"][-1].status == "feedback_sent"
     assert not (repo / "specs" / "run-042" / "back.md").is_file()
     assert not (repo / "specs" / "run-042" / "front.md").is_file()
+
+
+async def test_fiches_existing_file_to_read_created_by_earlier_agent_succeeds(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    """back-tu référence backend/main.py, produit par back qui le précède
+    dans la séquence — dépendance légitime entre agents du même run, pas
+    encore sur disque au moment où le PM écrit les fiches (voir
+    docs/roadmap.md, 2026-07-15)."""
+    _write_card_root(repo)
+
+    fiches_response = (
+        '<<<DEVAIMAZING_FILE path="specs/run-042/back.md">>>\n'
+        'fiche back\n\n## Feedback\n\n_Aucun feedback pour l\'instant._\n'
+        '<<<DEVAIMAZING_END>>>\n'
+        '<<<DEVAIMAZING_FILE path="specs/run-042/back-tu.md">>>\n'
+        'fiche back-tu\n\n## Feedback\n\n_Aucun feedback pour l\'instant._\n'
+        '<<<DEVAIMAZING_END>>>'
+    )
+
+    async def fake_run_claude_code(**kwargs):
+        return _fake_claude_result(
+            fiches_response,
+            structured_output={
+                "sequence": ["back", "back-tu"],
+                "cards": [
+                    {
+                        "agent": "back",
+                        **_card_metadata(files_to_create=["backend/main.py"]),
+                    },
+                    {
+                        "agent": "back-tu",
+                        **_card_metadata(existing_files_to_read=["backend/main.py"]),
+                    },
+                ],
+            },
+        )
+
+    async def fake_create_run_branch(repo_path, feature_name, base_branch="develop"):
+        return "studio/ajout-panier-a3f9c"
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    monkeypatch.setattr(pm_node, "create_run_branch", fake_create_run_branch)
+    monkeypatch.setattr(pm_node, "commit_as_agent", fake_commit_as_agent)
+
+    state = StudioState(
+        run_id="run-042", current_phase=Phase.FICHES, card_root_path="specs/run-042/card-root.md",
+        architect_brief_path="specs/run-042/architect-brief.md",
+    )
+    updates = await pm_node.run(state)
+
+    assert updates["current_phase"] == Phase.STUBS
+    assert (repo / "specs" / "run-042" / "back-tu.md").is_file()
 
 
 async def test_fiches_existing_file_to_read_present_on_disk_succeeds(

@@ -50,6 +50,28 @@ def _specs_dir(config: StudioConfig) -> str:
     return config.get("structure", {}).get("specs_dir", "specs/")
 
 
+def _will_be_created_by_earlier_agent(
+    relative_path: str, agent: str, agent_sequence: list, agent_card_metadata: dict
+) -> bool:
+    """
+    True si `relative_path` figure dans files_to_create/files_to_modify d'un
+    agent précédant `agent` dans agent_sequence — auquel cas le fichier
+    n'existe pas encore au moment où le PM écrit les fiches (phase 3), mais
+    existera bien quand `agent` s'exécutera réellement (phase 4/6, après
+    l'agent producteur). Distingue une dépendance légitime entre agents de la
+    même séquence d'une référence à un fichier qui n'existera jamais (voir
+    docs/roadmap.md, 2026-07-15).
+    """
+    agent_index = agent_sequence.index(agent)
+    for earlier_agent in agent_sequence[:agent_index]:
+        earlier_metadata = agent_card_metadata.get(earlier_agent, {})
+        if relative_path in earlier_metadata.get("files_to_create", []):
+            return True
+        if relative_path in earlier_metadata.get("files_to_modify", []):
+            return True
+    return False
+
+
 def _extract_feature_name(card_root_content: str) -> str:
     match = _FEATURE_NAME_PATTERN.search(card_root_content)
     if not match:
@@ -172,14 +194,22 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
        la branche et de commiter.
 
     Si la réponse du PM ne respecte pas le contrat de sortie (aucun bloc de
-    fichier reconnu, fiche manquante pour un agent, ou fiche sans section
-    Feedback) : dégradation gracieuse plutôt qu'échec net (alignée sur le
-    traitement déjà appliqué à Back/Front/Test, voir nodes/backend.py) —
-    state.status=RunStatus.WAITING_HUMAN, aucune fiche écrite, aucune
-    progression d'état, pour qu'une reprise (`devaimazing resume`) retente
-    l'appel depuis le début. Bornée par agents.max_iterations (comme les
-    autres agents producteurs) : au-delà, RunStatus.FAILED sans nouvel
-    appel LLM.
+    fichier reconnu, fiche manquante pour un agent, fiche sans section
+    Feedback, ou existing_files_to_read référençant un chemin qui n'existe ni
+    sur disque ni dans les files_to_create/files_to_modify d'un agent
+    antérieur de la séquence) : dégradation gracieuse plutôt qu'échec net
+    (alignée sur le traitement déjà appliqué à Back/Front/Test, voir
+    nodes/backend.py) — state.status=RunStatus.WAITING_HUMAN, aucune fiche
+    écrite, aucune progression d'état, pour qu'une reprise
+    (`devaimazing resume`) retente l'appel depuis le début. Bornée par
+    agents.max_iterations (comme les autres agents producteurs) : au-delà,
+    RunStatus.FAILED sans nouvel appel LLM.
+
+    Un chemin de existing_files_to_read référençant un fichier que
+    créera/modifiera un agent antérieur dans agent_sequence (ex. back-tu lit
+    backend/main.py, produit par back qui le précède) est valide même s'il
+    n'existe pas encore sur disque au moment de l'écriture des fiches — voir
+    _will_be_created_by_earlier_agent et docs/roadmap.md, 2026-07-15.
 
     Génération en deux appels Claude Code CLI séparés (voir docs/roadmap.md,
     2026-07-15) : un appel contraint par schéma JSON demandant à la fois du
@@ -295,6 +325,23 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
                     "(l'Architecte et Sécu y annotent leurs écarts via append_feedback, voir "
                     "prompts/pm.md, section Format de sortie — phase 3)"
                 )
+
+        for agent, metadata in agent_card_metadata.items():
+            for relative_path in metadata["existing_files_to_read"]:
+                if (config.repo_path / relative_path).is_file():
+                    continue
+                if _will_be_created_by_earlier_agent(
+                    relative_path, agent, agent_sequence, agent_card_metadata
+                ):
+                    continue
+                raise RuntimeError(
+                    f"Fiche produite pour l'agent {agent!r} référence, dans "
+                    f"existing_files_to_read, {relative_path!r} qui n'existe pas dans le repo "
+                    f"cible ({config.repo_path}) et n'est produit par aucun agent antérieur de "
+                    "la séquence — corriger la fiche (fichier inexistant à retirer, ou à "
+                    "déplacer vers files_to_create s'il doit être créé) avant toute écriture "
+                    "(voir prompts/pm.md, section Format de sortie — phase 3)"
+                )
     except (ValueError, RuntimeError) as exc:
         agent_result = AgentResult(
             agent="pm",
@@ -319,17 +366,6 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
                 state.total_tokens_sonnet + combined_tokens_prompt + combined_tokens_completion
             ),
         }
-
-    for agent, metadata in agent_card_metadata.items():
-        for relative_path in metadata["existing_files_to_read"]:
-            if not (config.repo_path / relative_path).is_file():
-                raise RuntimeError(
-                    f"Fiche produite pour l'agent {agent!r} référence, dans "
-                    f"existing_files_to_read, {relative_path!r} qui n'existe pas dans le repo "
-                    f"cible ({config.repo_path}) — corriger la fiche (fichier inexistant à "
-                    "retirer, ou à déplacer vers files_to_create s'il doit être créé) avant "
-                    "toute écriture (voir prompts/pm.md, section Format de sortie — phase 3)"
-                )
 
     for relative_path, file_content in files.items():
         await write_card(config.repo_path / relative_path, file_content)
