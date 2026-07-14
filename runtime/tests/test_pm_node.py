@@ -217,6 +217,46 @@ async def test_fiches_first_pass_no_checkpoint_creates_branch(
     assert committed["agent"] == "pm"
 
 
+async def test_fiches_two_separate_calls_metadata_then_prose(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    """Étape 1 (schéma seul) puis étape 2 (prose seule, informée par l'étape 1) —
+    voir docs/roadmap.md 2026-07-15 : un appel unique mêlant les deux échouait
+    systématiquement en pratique."""
+    _write_card_root(repo)
+
+    calls = []
+
+    async def fake_run_claude_code(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return _fake_claude_result("", structured_output=FICHES_STRUCTURED_OUTPUT)
+        return _fake_claude_result(FICHES_RESPONSE)
+
+    async def fake_create_run_branch(repo_path, feature_name, base_branch="develop"):
+        return "studio/ajout-panier-a3f9c"
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    monkeypatch.setattr(pm_node, "create_run_branch", fake_create_run_branch)
+    monkeypatch.setattr(pm_node, "commit_as_agent", fake_commit_as_agent)
+
+    state = StudioState(
+        run_id="run-042", current_phase=Phase.FICHES, card_root_path="specs/run-042/card-root.md",
+        architect_brief_path="specs/run-042/architect-brief.md",
+    )
+    await pm_node.run(state)
+
+    assert len(calls) == 2
+    assert calls[0]["response_schema"] is not None
+    assert calls[1].get("response_schema") is None
+    # L'appel 2 reçoit bien les métadonnées déterminées par l'appel 1.
+    assert "back" in calls[1]["prompt"]
+    assert "front" in calls[1]["prompt"]
+
+
 async def test_fiches_first_pass_with_checkpoint_stops_before_branch(
     monkeypatch: pytest.MonkeyPatch, repo: Path, tmp_path: Path
 ):
@@ -289,7 +329,10 @@ async def test_fiches_missing_structured_output_raises_runtime_error(
 ):
     _write_card_root(repo)
 
+    calls = []
+
     async def fake_run_claude_code(**kwargs):
+        calls.append(kwargs)
         return _fake_claude_result("Pas de format reconnu ici.")  # structured_output=None
 
     monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
@@ -300,6 +343,9 @@ async def test_fiches_missing_structured_output_raises_runtime_error(
     )
     with pytest.raises(RuntimeError):
         await pm_node.run(state)
+
+    # L'échec de l'étape 1 (métadonnées) est fatal avant tout appel de l'étape 2.
+    assert len(calls) == 1
 
 
 async def test_fiches_agent_missing_from_structured_output_cards_raises_runtime_error(

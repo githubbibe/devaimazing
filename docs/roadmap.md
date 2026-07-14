@@ -1,7 +1,72 @@
 # Feuille de route - Implémentation du runtime devaimazing
 
-**Dernière mise à jour** : 2026-07-15 (PM phase Fiches : dégradation gracieuse
-au lieu d'un échec net sur sortie mal formée)
+**Dernière mise à jour** : 2026-07-15 (PM phase Fiches : deux appels séparés,
+métadonnées puis prose, au lieu d'un appel unique mêlant les deux)
+
+## PM phase Fiches (2026-07-15) : deux appels séparés au lieu d'un appel unique
+mêlant JSON schema et prose
+
+**Contexte** : le fix « dégradation gracieuse » du même jour (voir section
+suivante) a permis d'observer, sans crash, le contenu brut produit par le PM en
+phase 3 lors d'un nouvel échec sur `run-20260714-205712` (projet `todo-list`).
+Ce contenu s'est révélé être **du JSON pur, identique à `structured_output`** —
+aucune trace de bloc `<<<DEVAIMAZING_FILE>>>`, ni d'excuse sur un refus d'outil
+(contrairement à l'hypothèse initiale de variance liée à un refus Bash, qui
+n'était donc probablement qu'une coïncidence récurrente, pas la cause réelle).
+
+**Diagnostic** : `prompts/pm.md` demandait au modèle de produire, dans le même
+appel `run_claude_code(response_schema=PM_FICHES_SCHEMA)`, à la fois un JSON
+conforme au schéma (`sequence`+`cards`, uniquement les listes de fichiers) et,
+en parallèle, du texte libre contenant jusqu'à 6 fiches Markdown complètes
+délimitées par `<<<DEVAIMAZING_FILE>>>`. En pratique, le modèle traite le
+respect du schéma JSON comme la totalité de sa tâche et n'écrit jamais la
+partie prose — hypothèse implicite du chantier « Fiches PM en sortie
+structurée » (2026-07-14), jamais vérifiée empiriquement sur un run réel avant
+ce jour.
+
+**Décision utilisateur** : remplacer l'appel unique par **deux appels
+`run_claude_code` séquentiels** plutôt qu'un contrôleur anti-hallucination
+séparé (option écartée après discussion, voir section suivante pour le
+contexte complet de cette comparaison) :
+1. **Étape 1 — métadonnées** (`response_schema=PM_FICHES_SCHEMA`) : prompt
+   utilisateur précisant explicitement qu'aucun texte libre n'est attendu dans
+   cette réponse, uniquement le JSON.
+2. **Étape 2 — fiches en prose** (sans schéma) : reçoit en entrée la séquence
+   et les métadonnées déterminées à l'étape 1 (sérialisées en JSON dans le
+   prompt), pour que le contenu prose (ex. "Fichiers à créer" de chaque fiche)
+   reste cohérent avec les listes déjà déterminées. Demande uniquement les
+   blocs `<<<DEVAIMAZING_FILE>>>`.
+
+**Livré** : `nodes/pm.py::_run_fiches` reconstruit avec les deux appels
+séquentiels. Points de conception actés :
+- Si l'étape 1 échoue (`parse_pm_structured_output` invalide) : reste fatal
+  (`RuntimeError`, inchangé) — l'étape 2 n'est **jamais** déclenchée dans ce
+  cas (pas d'appel LLM gaspillé sur un état déjà invalide).
+- Si l'étape 2 échoue (aucun bloc reconnu, fiche manquante, ou sans section
+  Feedback) : comportement dégradé de la section précédente (`feedback_sent`/
+  `WAITING_HUMAN`, borné par `agents.max_iterations`) — inchangé, mais
+  s'applique maintenant à un échec isolé de l'étape 2 uniquement.
+- **Décision utilisateur explicite** : sur reprise après un `feedback_sent`,
+  les **deux** appels sont refaits intégralement — pas de mémorisation du
+  résultat de l'étape 1 (pas de nouveau champ `StudioState`). Compromis
+  assumé : un appel LLM « gratuit » en plus à chaque retry (l'étape 1 avait
+  peut-être déjà réussi), au bénéfice d'un état plus simple à maintenir/tester.
+- `tokens_prompt`/`tokens_completion`/`duration_ms` de l'`AgentResult` (succès
+  ou `feedback_sent`) cumulent désormais les deux appels ; `claude_code_calls`
+  passe de `1` à `2` dans `record_agent_result`.
+- `prompts/pm.md`, section Format de sortie — Phase 3, réécrite en « Étape 1 »/
+  « Étape 2 » explicites, chacune précisant ce qui n'est **pas** attendu dans
+  sa réponse (pas de prose à l'étape 1, pas de JSON à l'étape 2).
+
+6 tests ajoutés/modifiés (`test_pm_node.py`) : nouveau test vérifiant les deux
+appels distincts (premier avec `response_schema`, second sans, second informé
+par le premier) — **vérifié rouge contre l'ancien code par `git stash`
+temporaire** (1 seul appel constaté au lieu de 2) avant d'être committé, seule
+façon fiable de prouver la régression vu que l'ancienne architecture
+(un seul appel) n'existe plus dans le code une fois le fix écrit ; test
+existant sur l'échec de l'étape 1 complété pour vérifier qu'aucun second
+appel n'est déclenché. **253/254 sur `runtime/tests/`** (1 échec pré-existant
+sans rapport, inchangé depuis la section précédente).
 
 ## PM phase Fiches (2026-07-15) : dégradation gracieuse au lieu d'un échec net
 

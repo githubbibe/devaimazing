@@ -127,38 +127,42 @@ Le runtime affiche ensuite cette proposition à l'utilisateur pour confirmation
 explicite avant de l'écrire sur disque — ne saute jamais cette étape toi-même, la
 validation humaine finale n'est pas de ton ressort.
 
-**Fiches dépendantes (phase 3)** : réponds avec un bloc de fichier par fiche produite
-(même contrat que Back/Front/Test/Architecte) :
+**Fiches dépendantes (phase 3) — deux appels séparés, dans cet ordre** (un appel
+contraint par schéma qui mélange JSON et texte libre produit de façon peu fiable
+l'un des deux, voir docs/roadmap.md, 2026-07-15) :
+
+**Étape 1 — métadonnées structurées.** Réponse contrainte par schéma (le CLI garantit
+la forme — tu n'as rien à formater toi-même, remplis simplement les valeurs demandées,
+une entrée par agent de la séquence). **Aucun texte libre, aucun bloc
+`<<<DEVAIMAZING_FILE>>>` dans cette réponse** — le contenu des fiches est demandé à
+l'étape 2, dans un appel séparé :
+- `sequence` : l'ordre des agents choisis, parmi `back`, `back-tu`, `front`, `front-tu`,
+  `test`, `secu` (table ci-dessus).
+- Pour chaque agent de `sequence`, une entrée avec :
+  - `files_to_create` : chemins des fichiers que cet agent doit créer.
+  - `files_to_modify` : chemins des fichiers existants que cet agent doit modifier.
+  - `files_forbidden` : chemins que cet agent ne doit pas toucher.
+  - `existing_files_to_read` : chemins **réels, déjà présents dans le repo cible**, que
+    l'agent doit lire avant d'écrire. **Un chemin qui n'existe pas encore dans le repo
+    cible ne va jamais ici** — s'il doit être créé, il va dans `files_to_create` ; le
+    runtime rejette la fiche entière avant toute écriture si un chemin de cette liste
+    n'existe pas sur disque.
+  - `dependencies` : identifiants ou description courte des livrables d'agents
+    précédents dont celui-ci dépend.
+  Chaque champ est une liste (vide si non applicable) — jamais absent.
+
+**Étape 2 — contenu des fiches.** Tu reçois en entrée la séquence et les métadonnées
+déterminées à l'étape 1. Réponds avec un bloc de fichier par fiche produite (même
+contrat que Back/Front/Test/Architecte), **cohérent avec les listes de fichiers déjà
+déterminées** (ex. "Fichiers à créer" de la fiche prose doit correspondre à
+`files_to_create` de l'étape 1) :
 ```
 <<<DEVAIMAZING_FILE path="specs/run-NNN/back.md">>>
 <contenu intégral, suivant templates/card-agent.md.template>
 <<<DEVAIMAZING_END>>>
 ```
 Un bloc fichier par agent de la séquence, chemin `specs/run-NNN/<agent>.md` (run-NNN = le
-run courant).
-
-**En plus de ce texte**, la séquence d'agents et les listes de fichiers par agent sont
-transmises séparément, dans un canal structuré contraint par schéma (le CLI garantit la
-forme — tu n'as rien à formater toi-même, remplis simplement les valeurs demandées, une
-entrée par agent de la séquence) :
-- `sequence` : l'ordre des agents choisis, parmi `back`, `back-tu`, `front`, `front-tu`,
-  `test`, `secu` (table ci-dessus).
-- Pour chaque agent de `sequence`, une entrée avec :
-  - `files_to_create` : chemins des fichiers que cet agent doit créer (cohérent avec la
-    section "Périmètre fichiers > Fichiers à créer" de sa fiche prose).
-  - `files_to_modify` : chemins des fichiers existants que cet agent doit modifier
-    (cohérent avec "Fichiers à modifier").
-  - `files_forbidden` : chemins que cet agent ne doit pas toucher (cohérent avec
-    "Fichiers interdits").
-  - `existing_files_to_read` : chemins **réels, déjà présents dans le repo cible**, que
-    l'agent doit lire avant d'écrire (cohérent avec "Dépendances > Fichiers existants en
-    lecture"). **Un chemin qui n'existe pas encore dans le repo cible ne va jamais ici**
-    — s'il doit être créé, il va dans `files_to_create` ; le runtime rejette la fiche
-    entière avant toute écriture si un chemin de cette liste n'existe pas sur disque.
-  - `dependencies` : identifiants ou description courte des livrables d'agents
-    précédents dont celui-ci dépend (cohérent avec "Dépendances > Output de l'agent
-    précédent").
-  Chaque champ est une liste (vide si non applicable) — jamais absent.
+run courant). **Aucun JSON dans cette réponse** — uniquement du texte libre.
 
 ## Mémoire projet
 

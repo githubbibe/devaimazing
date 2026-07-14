@@ -17,6 +17,7 @@ Le node ne couvre pas la phase 10 (clôture) : celle-ci est gérée par
 studio.nodes.closer, Python pur sans appel LLM.
 """
 
+import json
 import re
 from pathlib import Path
 
@@ -179,6 +180,16 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
     l'appel depuis le début. Bornée par agents.max_iterations (comme les
     autres agents producteurs) : au-delà, RunStatus.FAILED sans nouvel
     appel LLM.
+
+    Génération en deux appels Claude Code CLI séparés (voir docs/roadmap.md,
+    2026-07-15) : un appel contraint par schéma JSON demandant à la fois du
+    JSON et du texte libre en parallèle s'est révélé peu fiable en pratique
+    (le modèle ne produit que le JSON, jamais le texte) — remplacé par un
+    appel « métadonnées » (schéma seul) suivi d'un appel « fiches » (prose
+    seule, recevant les métadonnées du premier appel en entrée pour rester
+    cohérent). Les deux appels sont refaits intégralement à chaque tentative
+    (y compris en cas de reprise après un feedback_sent) — pas de mémorisation
+    intermédiaire du premier appel, décision actée pour garder l'état simple.
     """
     card_root_content = await read_card(config.repo_path / state.card_root_path)
     feature_name = _extract_feature_name(card_root_content)
@@ -204,31 +215,65 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
     architect_brief_content = await read_card(config.repo_path / state.architect_brief_path)
 
     system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
-    user_prompt = (
-        "## Phase 3 - Fiches dépendantes\n\n"
+    claude_code_config = config.get("claude_code", {})
+
+    # Étape 1 — métadonnées structurées (JSON schema uniquement, aucun texte libre).
+    metadata_user_prompt = (
+        "## Phase 3 - Fiches dépendantes - Étape 1 : métadonnées structurées\n\n"
         f"## card-root.md\n\n{card_root_content}\n\n"
         f"## architect-brief.md\n\n{architect_brief_content}\n\n"
-        f"Run ID : {state.run_id}."
+        f"Run ID : {state.run_id}.\n\n"
+        "Pour cette réponse, produis UNIQUEMENT le JSON structuré (sequence + cards) "
+        "conforme au schéma — aucun bloc <<<DEVAIMAZING_FILE>>>, aucun texte libre. Le "
+        "contenu des fiches sera demandé dans un appel séparé (étape 2)."
     )
-    claude_code_config = config.get("claude_code", {})
-    result = await run_claude_code(
-        prompt=f"{system_prompt}\n\n---\n\n{user_prompt}",
+    metadata_result = await run_claude_code(
+        prompt=f"{system_prompt}\n\n---\n\n{metadata_user_prompt}",
         model=config.models["pm_sonnet"],
         cwd=config.repo_path,
         timeout_seconds=claude_code_config.get("timeout_seconds", 300),
         output_format=claude_code_config.get("output_format", "json"),
         response_schema=PM_FICHES_SCHEMA,
     )
-    content = result["content"]
 
     try:
         agent_sequence, agent_card_metadata = parse_pm_structured_output(
-            result.get("structured_output")
+            metadata_result.get("structured_output")
         )
     except ValueError as exc:
-        raise RuntimeError(f"Réponse du PM (phase 3) invalide : {exc}") from exc
+        raise RuntimeError(f"Réponse du PM (phase 3, étape métadonnées) invalide : {exc}") from exc
 
     iteration = agent_iteration_count(state, "pm") + 1
+
+    # Étape 2 — contenu des fiches en prose, cohérent avec les métadonnées de l'étape 1.
+    fiches_user_prompt = (
+        "## Phase 3 - Fiches dépendantes - Étape 2 : contenu des fiches\n\n"
+        f"## card-root.md\n\n{card_root_content}\n\n"
+        f"## architect-brief.md\n\n{architect_brief_content}\n\n"
+        "## Séquence et métadonnées déjà déterminées (à respecter strictement)\n\n"
+        f"{json.dumps(metadata_result.get('structured_output'), ensure_ascii=False, indent=2)}\n\n"
+        f"Run ID : {state.run_id}.\n\n"
+        "Pour cette réponse, produis UNIQUEMENT les blocs <<<DEVAIMAZING_FILE>>> des "
+        "fiches, un par agent de la séquence ci-dessus — aucun JSON n'est demandé ici."
+    )
+    result = await run_claude_code(
+        prompt=f"{system_prompt}\n\n---\n\n{fiches_user_prompt}",
+        model=config.models["pm_sonnet"],
+        cwd=config.repo_path,
+        timeout_seconds=claude_code_config.get("timeout_seconds", 300),
+        output_format=claude_code_config.get("output_format", "json"),
+    )
+    content = result["content"]
+
+    combined_tokens_prompt = (
+        metadata_result.get("usage", {}).get("input_tokens", 0)
+        + result.get("usage", {}).get("input_tokens", 0)
+    )
+    combined_tokens_completion = (
+        metadata_result.get("usage", {}).get("output_tokens", 0)
+        + result.get("usage", {}).get("output_tokens", 0)
+    )
+    combined_duration_ms = metadata_result.get("duration_ms", 0) + result.get("duration_ms", 0)
 
     try:
         files = parse_agent_file_blocks(content)
@@ -251,26 +296,27 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
                     "prompts/pm.md, section Format de sortie — phase 3)"
                 )
     except (ValueError, RuntimeError) as exc:
-        usage = result.get("usage", {})
         agent_result = AgentResult(
             agent="pm",
             phase=state.current_phase,
             status="feedback_sent",
-            feedback=f"{exc}\n\n--- Contenu brut produit par l'agent ---\n{content}",
+            feedback=(
+                f"{exc}\n\n--- Contenu brut produit par l'agent (étape fiches) ---\n{content}"
+            ),
             iteration=iteration,
-            tokens_prompt=usage.get("input_tokens", 0),
-            tokens_completion=usage.get("output_tokens", 0),
-            duration_ms=result.get("duration_ms", 0),
+            tokens_prompt=combined_tokens_prompt,
+            tokens_completion=combined_tokens_completion,
+            duration_ms=combined_duration_ms,
         )
         await record_agent_result(
-            config, state, agent_result, model=config.models["pm_sonnet"], claude_code_calls=1
+            config, state, agent_result, model=config.models["pm_sonnet"], claude_code_calls=2
         )
         return {
             "agent_results": state.agent_results + [agent_result],
             "status": RunStatus.WAITING_HUMAN,
             "awaiting_human_validation": True,
             "total_tokens_sonnet": (
-                state.total_tokens_sonnet + usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+                state.total_tokens_sonnet + combined_tokens_prompt + combined_tokens_completion
             ),
         }
 
@@ -288,18 +334,17 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
     for relative_path, file_content in files.items():
         await write_card(config.repo_path / relative_path, file_content)
 
-    usage = result.get("usage", {})
     agent_result = AgentResult(
         agent="pm",
         phase=state.current_phase,
         status="success",
         output_files=sorted(files.keys()),
         iteration=iteration,
-        tokens_prompt=usage.get("input_tokens", 0),
-        tokens_completion=usage.get("output_tokens", 0),
-        duration_ms=result.get("duration_ms", 0),
+        tokens_prompt=combined_tokens_prompt,
+        tokens_completion=combined_tokens_completion,
+        duration_ms=combined_duration_ms,
     )
-    await record_agent_result(config, state, agent_result, model=config.models["pm_sonnet"], claude_code_calls=1)
+    await record_agent_result(config, state, agent_result, model=config.models["pm_sonnet"], claude_code_calls=2)
 
     updates: dict = {
         "agent_results": state.agent_results + [agent_result],
@@ -307,7 +352,7 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
         "agent_sequence": agent_sequence,
         "agent_card_metadata": agent_card_metadata,
         "total_tokens_sonnet": (
-            state.total_tokens_sonnet + usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+            state.total_tokens_sonnet + combined_tokens_prompt + combined_tokens_completion
         ),
     }
 
@@ -365,7 +410,9 @@ async def run(state: StudioState) -> StudioState:
     Side effects:
         - Appelle tools.claude_code.run_claude_code (modèle models.pm_opus
           en Phase.CADRAGE, models.pm_sonnet en Phase.FICHES) — plusieurs
-          fois en Phase.CADRAGE (une fois par tour de dialogue).
+          fois en Phase.CADRAGE (une fois par tour de dialogue), deux fois
+          en Phase.FICHES (métadonnées structurées puis contenu des fiches,
+          voir docs/roadmap.md 2026-07-15).
         - Lit et écrit au terminal (input()/print()) pendant le dialogue de
           cadrage — seul node de tout le studio à le faire.
         - Écrit specs/<specs_dir>/run-<run_id>/card-root.md (phase 1) et
