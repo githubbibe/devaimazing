@@ -18,7 +18,7 @@ from click.testing import CliRunner
 
 import studio.cli as cli_module
 from studio.cli import main
-from studio.state import Phase, RunStatus
+from studio.state import AgentResult, Phase, RunStatus
 
 
 def _write_yaml(path: Path, data: dict) -> None:
@@ -311,6 +311,334 @@ def test_resume_unknown_run_prints_error(monkeypatch: pytest.MonkeyPatch):
 
     assert result.exit_code == 0
     assert "introuvable" in result.output
+
+
+# --- retry ---
+
+def test_retry_run_not_found(monkeypatch: pytest.MonkeyPatch):
+    async def fake_aget_state(config):
+        return _FakeSnapshot({})
+
+    async def fail_ainvoke(state, config):
+        raise AssertionError("ainvoke ne doit pas être appelé si le run est introuvable")
+
+    fake_graph = SimpleNamespace(
+        aget_state=fake_aget_state, ainvoke=fail_ainvoke, checkpointer=_fake_checkpointer([]),
+    )
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["retry", "run-042", "--project", "demo"])
+
+    assert result.exit_code == 0
+    assert "introuvable" in result.output
+
+
+def test_retry_refuses_awaiting_human_validation(monkeypatch: pytest.MonkeyPatch):
+    async def fake_aget_state(config):
+        return _FakeSnapshot({
+            "awaiting_human_validation": True, "status": RunStatus.WAITING_HUMAN,
+        })
+
+    async def fail_ainvoke(state, config):
+        raise AssertionError("ainvoke ne doit pas être appelé, run en attente de validation")
+
+    fake_graph = SimpleNamespace(
+        aget_state=fake_aget_state, ainvoke=fail_ainvoke, checkpointer=_fake_checkpointer([]),
+    )
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["retry", "run-042", "--project", "demo"])
+
+    assert result.exit_code == 0
+    assert "devaimazing resume" in result.output
+
+
+def test_retry_refuses_completed(monkeypatch: pytest.MonkeyPatch):
+    async def fake_aget_state(config):
+        return _FakeSnapshot({"awaiting_human_validation": False, "status": RunStatus.COMPLETED})
+
+    async def fail_ainvoke(state, config):
+        raise AssertionError("ainvoke ne doit pas être appelé, run déjà terminé")
+
+    fake_graph = SimpleNamespace(
+        aget_state=fake_aget_state, ainvoke=fail_ainvoke, checkpointer=_fake_checkpointer([]),
+    )
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["retry", "run-042", "--project", "demo"])
+
+    assert result.exit_code == 0
+    assert "rien à rejouer" in result.output
+
+
+def test_retry_refuses_failed(monkeypatch: pytest.MonkeyPatch):
+    async def fake_aget_state(config):
+        return _FakeSnapshot({"awaiting_human_validation": False, "status": RunStatus.FAILED})
+
+    async def fail_ainvoke(state, config):
+        raise AssertionError("ainvoke ne doit pas être appelé, run déjà échoué")
+
+    fake_graph = SimpleNamespace(
+        aget_state=fake_aget_state, ainvoke=fail_ainvoke, checkpointer=_fake_checkpointer([]),
+    )
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["retry", "run-042", "--project", "demo"])
+
+    assert result.exit_code == 0
+    assert "rien à rejouer" in result.output
+
+
+def test_retry_refuses_pending(monkeypatch: pytest.MonkeyPatch):
+    # Garde-fou : ce statut n'a normalement pas de checkpoint exploitable,
+    # mais retry doit refuser proprement plutôt que de tenter un ainvoke.
+    async def fake_aget_state(config):
+        return _FakeSnapshot({"awaiting_human_validation": False, "status": RunStatus.PENDING})
+
+    async def fail_ainvoke(state, config):
+        raise AssertionError("ainvoke ne doit pas être appelé pour un run PENDING")
+
+    fake_graph = SimpleNamespace(
+        aget_state=fake_aget_state, ainvoke=fail_ainvoke, checkpointer=_fake_checkpointer([]),
+    )
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["retry", "run-042", "--project", "demo"])
+
+    assert result.exit_code == 0
+    assert "rien à rejouer" in result.output
+
+
+def test_retry_diagnostic_displayed_before_confirmation(monkeypatch: pytest.MonkeyPatch):
+    state = {
+        "awaiting_human_validation": False,
+        "status": RunStatus.IN_PROGRESS,
+        "current_phase": Phase.STUBS,
+        "agent_sequence": ["back", "back-tu", "test", "secu"],
+        "current_agent_index": 1,
+        "agent_results": [
+            AgentResult(agent="back", phase=Phase.STUBS, status="success", iteration=1),
+        ],
+    }
+
+    async def fake_aget_state(config):
+        return _FakeSnapshot(dict(state))
+
+    async def fail_ainvoke(input_state, config):
+        raise AssertionError("ainvoke ne doit pas être appelé sans confirmation")
+
+    fake_graph = SimpleNamespace(
+        aget_state=fake_aget_state, ainvoke=fail_ainvoke, checkpointer=_fake_checkpointer([]),
+    )
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    # Confirmation refusée (défaut de click.confirm) : "\n" équivaut à répondre non.
+    result = CliRunner().invoke(main, ["retry", "run-042", "--project", "demo"], input="\n")
+
+    assert result.exit_code == 0
+    assert "Diagnostic" in result.output
+    assert "back-tu" in result.output  # agent courant (index 1)
+    assert "back" in result.output  # dernier résultat
+
+
+def test_retry_diagnostic_unknown_agent_index(monkeypatch: pytest.MonkeyPatch):
+    state = {
+        "awaiting_human_validation": False,
+        "status": RunStatus.IN_PROGRESS,
+        "current_phase": Phase.STUBS,
+        "agent_sequence": ["back"],
+        "current_agent_index": 5,  # hors bornes
+        "agent_results": [],
+    }
+
+    async def fake_aget_state(config):
+        return _FakeSnapshot(dict(state))
+
+    async def fail_ainvoke(input_state, config):
+        raise AssertionError("ainvoke ne doit pas être appelé sans confirmation")
+
+    fake_graph = SimpleNamespace(
+        aget_state=fake_aget_state, ainvoke=fail_ainvoke, checkpointer=_fake_checkpointer([]),
+    )
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["retry", "run-042", "--project", "demo"], input="\n")
+
+    assert result.exit_code == 0  # pas d'IndexError
+    assert "inconnu" in result.output
+
+
+def test_retry_confirmation_declined_does_not_invoke(monkeypatch: pytest.MonkeyPatch):
+    closed = []
+    state = {
+        "awaiting_human_validation": False, "status": RunStatus.IN_PROGRESS,
+        "current_phase": Phase.STUBS, "agent_sequence": [], "current_agent_index": 0,
+        "agent_results": [],
+    }
+
+    async def fake_aget_state(config):
+        return _FakeSnapshot(dict(state))
+
+    async def fail_ainvoke(input_state, config):
+        raise AssertionError("ainvoke ne doit pas être appelé si la confirmation est refusée")
+
+    fake_graph = SimpleNamespace(
+        aget_state=fake_aget_state, ainvoke=fail_ainvoke, checkpointer=_fake_checkpointer(closed),
+    )
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["retry", "run-042", "--project", "demo"], input="n\n")
+
+    assert result.exit_code == 0
+    assert "annulé" in result.output
+    assert closed == [True]  # connexion fermée même en cas de refus
+
+
+def test_retry_confirmation_accepted_invokes_graph(monkeypatch: pytest.MonkeyPatch):
+    state = {
+        "awaiting_human_validation": False, "status": RunStatus.IN_PROGRESS,
+        "current_phase": Phase.STUBS, "agent_sequence": ["back"], "current_agent_index": 0,
+        "agent_results": [],
+    }
+    calls = []
+
+    async def fake_aget_state(config):
+        return _FakeSnapshot(dict(state))
+
+    async def fake_ainvoke(input_state, config):
+        calls.append(input_state)
+        assert input_state is None  # reprise : pas de nouvel état initial, comme resume
+        return {"status": RunStatus.COMPLETED}
+
+    fake_graph = SimpleNamespace(
+        aget_state=fake_aget_state, ainvoke=fake_ainvoke, checkpointer=_fake_checkpointer([]),
+    )
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["retry", "run-042", "--project", "demo"], input="y\n")
+
+    assert result.exit_code == 0
+    assert calls == [None]
+    assert "terminé" in result.output
+
+
+def test_retry_closes_checkpointer_connection_on_success(monkeypatch: pytest.MonkeyPatch):
+    closed = []
+    state = {
+        "awaiting_human_validation": False, "status": RunStatus.IN_PROGRESS,
+        "current_phase": Phase.STUBS, "agent_sequence": [], "current_agent_index": 0,
+        "agent_results": [],
+    }
+
+    async def fake_aget_state(config):
+        return _FakeSnapshot(dict(state))
+
+    async def fake_ainvoke(input_state, config):
+        return {"status": RunStatus.COMPLETED}
+
+    fake_graph = SimpleNamespace(
+        aget_state=fake_aget_state, ainvoke=fake_ainvoke, checkpointer=_fake_checkpointer(closed),
+    )
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["retry", "run-042", "--project", "demo"], input="y\n")
+
+    assert result.exit_code == 0
+    assert closed == [True]
+
+
+def test_retry_closes_checkpointer_connection_on_refusal(monkeypatch: pytest.MonkeyPatch):
+    closed = []
+
+    async def fake_aget_state(config):
+        return _FakeSnapshot({"awaiting_human_validation": False, "status": RunStatus.COMPLETED})
+
+    async def fail_ainvoke(state, config):
+        raise AssertionError("ainvoke ne doit pas être appelé, run déjà terminé")
+
+    fake_graph = SimpleNamespace(
+        aget_state=fake_aget_state, ainvoke=fail_ainvoke, checkpointer=_fake_checkpointer(closed),
+    )
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["retry", "run-042", "--project", "demo"])
+
+    assert result.exit_code == 0
+    assert closed == [True]  # fermée même dans un cas de refus d'éligibilité (pas seulement confirmation)
+
+
+def test_retry_shows_manual_intervention_reason(monkeypatch: pytest.MonkeyPatch):
+    state = {
+        "awaiting_human_validation": False, "status": RunStatus.IN_PROGRESS,
+        "current_phase": Phase.AUDIT_STUBS, "agent_sequence": ["back"], "current_agent_index": 0,
+        "agent_results": [],
+        "requires_manual_intervention": True,
+        "intervention_reason": "conflit de merge non résolu",
+    }
+
+    async def fake_aget_state(config):
+        return _FakeSnapshot(dict(state))
+
+    async def fail_ainvoke(input_state, config):
+        raise AssertionError("ainvoke ne doit pas être appelé sans confirmation")
+
+    fake_graph = SimpleNamespace(
+        aget_state=fake_aget_state, ainvoke=fail_ainvoke, checkpointer=_fake_checkpointer([]),
+    )
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["retry", "run-042", "--project", "demo"], input="\n")
+
+    assert result.exit_code == 0
+    assert "conflit de merge non résolu" in result.output
 
 
 # --- runs ---

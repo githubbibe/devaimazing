@@ -1,6 +1,6 @@
 # Feuille de route - Implémentation du runtime devaimazing
 
-**Dernière mise à jour** : 2026-07-14
+**Dernière mise à jour** : 2026-07-14 (ajout `devaimazing retry`)
 
 ## Priorité immédiate (ajouté 2026-07-14, avant tout le reste)
 
@@ -802,9 +802,32 @@ reprendre ce run précis sans repasser par le dialogue PM de la phase 1).
   2026-07-14) — il ne résout donc pas ce point, qui reste un chantier séparé si
   traité.
 - **Décision utilisateur (2026-07-14) : option B**, commande dédiée
-  `devaimazing retry <run-id>`. Reste dans le lot des chantiers reportés à une
-  session dédiée (voir Priorité immédiate en tête de document) — décidé
-  aujourd'hui, pas encore implémenté.
+  `devaimazing retry <run-id>`.
+
+**Livré (2026-07-14).** `devaimazing retry <run-id> --project <project>`
+(`cli.py::retry`/`_retry_async`) : cible spécifiquement un run `status ==
+RunStatus.IN_PROGRESS` avec `awaiting_human_validation == False` (le cas
+crash, distinct de `resume`). Refus avec message orienté dans les autres cas :
+`awaiting_human_validation == True` ou `status == WAITING_HUMAN` → invite à
+utiliser `resume` ; tout autre statut (`COMPLETED`/`FAILED`/`PARTIAL`/
+`PENDING`) → « rien à rejouer ». Si éligible, affiche un diagnostic à partir
+des champs déjà existants de `StudioState` (aucun champ ajouté, pas
+d'horodatage — décision actée avant implémentation, `AgentResult` n'a pas de
+timestamp) : phase courante, agent courant (`agent_sequence[current_agent_
+index]`, "inconnu" si l'index est hors bornes), statut, dernier
+`AgentResult`, et `intervention_reason` si `requires_manual_intervention` est
+vrai. Demande une confirmation interactive (`click.confirm`, défaut non)
+avant de rejouer — décision actée : contrairement à `resume`, le risque
+d'état incohérent après un crash (écriture de fichier interrompue, appel LLM
+coupé net) justifie un arrêt bloquant. Si confirmé : `graph.ainvoke(None,
+config=thread_config)` (pas d'`aupdate_state` préalable,
+`awaiting_human_validation` déjà `False`), même pattern que `resume` pour la
+fermeture de la connexion checkpointer (`finally` + `conn.close()`). 12 tests
+ajoutés (`test_cli.py`) : run introuvable, chacun des cas de refus (attente
+validation, `COMPLETED`, `FAILED`, `PENDING`), diagnostic affiché avant
+confirmation (cas normal + agent hors bornes), confirmation refusée/acceptée,
+fermeture de connexion sur les deux chemins, affichage de la raison
+d'intervention manuelle. **207/207 au total sur `runtime/tests/`** (était 195).
 
 **Décision prise (2026-07-10, hors code) — reportée en fin de projet (2026-07-14)** :
 la mise en production de devaimazing lui-même devra être conteneurisée Podman,

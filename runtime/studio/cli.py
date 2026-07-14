@@ -4,6 +4,7 @@ CLI devaimazing - Point d'entrée principal.
 Usage:
     devaimazing run <project>           Démarre un run
     devaimazing resume <run-id>         Reprend après checkpoint humain
+    devaimazing retry <run-id>          Rejoue un run interrompu en cours de nœud (crash)
     devaimazing runs <project>          Liste les runs d'un projet
     devaimazing metrics <run-id>        Affiche les métriques d'un run
     devaimazing projects                Liste les projets configurés
@@ -173,6 +174,83 @@ async def _resume_async(run_id: str, project: str) -> None:
             thread_config,
             {"status": RunStatus.IN_PROGRESS, "awaiting_human_validation": False},
         )
+        final_state = await graph.ainvoke(None, config=thread_config)
+        _print_run_outcome(run_id, final_state)
+    finally:
+        # Voir le commentaire équivalent dans _run_async.
+        await graph.checkpointer.conn.close()
+
+
+def _print_retry_diagnostic(run_id: str, state: dict) -> None:
+    """
+    Diagnostic affiché avant de rejouer un run planté — champs déjà
+    présents dans StudioState, aucun ajout de champ (pas d'horodatage,
+    décision actée dans docs/roadmap.md).
+    """
+    agent_sequence = state.get("agent_sequence") or []
+    current_agent_index = state.get("current_agent_index", 0)
+    if 0 <= current_agent_index < len(agent_sequence):
+        current_agent = agent_sequence[current_agent_index]
+    else:
+        current_agent = "inconnu"
+
+    console.print(f"[bold]Diagnostic — run {run_id}[/bold]")
+    console.print(f"  Phase courante : {state.get('current_phase')}")
+    console.print(f"  Agent courant : {current_agent}")
+    console.print(f"  Statut : {state.get('status')}")
+
+    agent_results = state.get("agent_results") or []
+    if agent_results:
+        last_result = agent_results[-1]
+        console.print(
+            f"  Dernier résultat : {last_result.agent} — {last_result.status} "
+            f"(itération {last_result.iteration})"
+        )
+
+    if state.get("requires_manual_intervention"):
+        console.print(
+            f"  [red]Intervention manuelle requise : {state.get('intervention_reason')}[/red]"
+        )
+
+
+@main.command()
+@click.argument("run_id")
+@click.option("--project", required=True, help="Projet du run (nécessaire pour charger sa config)")
+def retry(run_id: str, project: str):
+    """Rejoue un run interrompu en cours de nœud (crash), hors attente de validation humaine."""
+    asyncio.run(_retry_async(run_id, project))
+
+
+async def _retry_async(run_id: str, project: str) -> None:
+    _export_project_env(project)
+    config = _load_config(project)
+    graph = await build_graph(config)
+    try:
+        thread_config = _thread_config(run_id)
+
+        snapshot = await graph.aget_state(thread_config)
+        if not snapshot.values:
+            console.print(f"[red]Run {run_id} introuvable pour le projet {project}.[/red]")
+            return
+
+        state = snapshot.values
+        status = state.get("status")
+        if state.get("awaiting_human_validation") or status == RunStatus.WAITING_HUMAN:
+            console.print(
+                f"[yellow]Run {run_id} en attente de validation humaine — "
+                f"utiliser devaimazing resume à la place.[/yellow]"
+            )
+            return
+        if status != RunStatus.IN_PROGRESS:
+            console.print(f"[yellow]Run {run_id} au statut {status}, rien à rejouer.[/yellow]")
+            return
+
+        _print_retry_diagnostic(run_id, state)
+
+        if not click.confirm("Rejouer ce run ?", default=False):
+            console.print("[yellow]Retry annulé.[/yellow]")
+            return
+
         final_state = await graph.ainvoke(None, config=thread_config)
         _print_run_outcome(run_id, final_state)
     finally:
