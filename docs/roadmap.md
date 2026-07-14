@@ -788,9 +788,10 @@ reprendre ce run précis sans repasser par le dialogue PM de la phase 1).
   outil de test isolé qui ne touche jamais au checkpoint (décision du
   2026-07-14) — il ne résout donc pas ce point, qui reste un chantier séparé si
   traité.
-- **Pas de décision prise le 2026-07-14** — l'utilisateur a demandé le détail
-  des deux options sans trancher entre elles. Recommandation de Claude (pas une
-  décision) : option B, cohérente avec l'usage réel observé pendant la session.
+- **Décision utilisateur (2026-07-14) : option B**, commande dédiée
+  `devaimazing retry <run-id>`. Reste dans le lot des chantiers reportés à une
+  session dédiée (voir Priorité immédiate en tête de document) — décidé
+  aujourd'hui, pas encore implémenté.
 
 **Décision prise (2026-07-10, hors code) — reportée en fin de projet (2026-07-14)** :
 la mise en production de devaimazing lui-même devra être conteneurisée Podman,
