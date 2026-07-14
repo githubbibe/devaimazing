@@ -1,7 +1,7 @@
 # Feuille de route - Implémentation du runtime devaimazing
 
-**Dernière mise à jour** : 2026-07-14 (`devaimazing new-project` : initialisation
-automatisée d'un nouveau projet cible)
+**Dernière mise à jour** : 2026-07-14 (backlog : warning LangGraph msgpack non
+enregistré sur `studio.state.{Phase,RunStatus,AgentResult}`)
 
 ## `devaimazing new-project <nom>` (2026-07-14) : initialisation d'un nouveau projet cible
 
@@ -1061,6 +1061,29 @@ validation, `COMPLETED`, `FAILED`, `PENDING`), diagnostic affiché avant
 confirmation (cas normal + agent hors bornes), confirmation refusée/acceptée,
 fermeture de connexion sur les deux chemins, affichage de la raison
 d'intervention manuelle. **207/207 au total sur `runtime/tests/`** (était 195).
+
+**Backlog identifié en marge (2026-07-14, pas bloquant, pour plus tard)** :
+warning LangGraph à chaque `resume` (constaté sur `run-20260714-205712`, projet
+`todo-list`) :
+
+```
+Deserializing unregistered type studio.state.Phase from checkpoint. This will be
+blocked in a future version. Set LANGGRAPH_STRICT_MSGPACK=true to block now, or
+add to allowed_msgpack_modules to allow explicitly: [('studio.state', 'Phase')]
+Deserializing unregistered type studio.state.RunStatus from checkpoint. ...
+Deserializing unregistered type studio.state.AgentResult from checkpoint. ...
+```
+
+Cause probable : `Phase`, `RunStatus` (enums) et `AgentResult` (dataclass) de
+`studio.state` sont sérialisés tels quels par le checkpointer SQLite dans
+`state.db`, sans être déclarés dans la liste `allowed_msgpack_modules` de
+LangGraph — non bloquant aujourd'hui (avertissement seul), mais une version
+future de `langgraph-checkpoint-sqlite` bloquera la désérialisation par défaut.
+À traiter avant une mise à jour de cette dépendance : soit déclarer les trois
+types dans `allowed_msgpack_modules` (config du checkpointer dans `graph.py`),
+soit les rendre sérialisables nativement (ex. `Enum` → `str`, dataclass → dict)
+avant écriture dans le checkpoint — à trancher au moment de l'implémentation,
+pas avant.
 
 **Décision prise (2026-07-10, hors code) — reportée en fin de projet (2026-07-14)** :
 la mise en production de devaimazing lui-même devra être conteneurisée Podman,
