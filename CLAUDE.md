@@ -32,20 +32,23 @@ suit les conventions habituelles (résumé de l'intention, pas juste de la descr
 ## Qu'est-ce que ce dépôt ?
 
 devaimazing est un **studio de développement multi-agents local-first** : un orchestrateur
-LangGraph qui exécute un pipeline fixe de 6 agents spécialisés (PM, Architecte, Back, Front,
-Test, Sécu) à travers 10 phases pour concevoir, implémenter, tester, sécuriser et documenter une
-fonctionnalité dans un projet *cible* — pas dans ce dépôt. Ce dépôt est le studio/orchestrateur
-lui-même.
+LangGraph qui exécute un pipeline fixe de 6 nodes couvrant 8 rôles d'agent spécialisés (PM,
+Architecte, Back, Back-tu, Front, Front-tu, Test, Sécu — Back-tu/Front-tu partagent leur node
+et identité Git avec Back/Front, voir `docs/agents.md`) à travers 10 phases pour concevoir,
+implémenter, tester, sécuriser et documenter une fonctionnalité dans un projet *cible* — pas
+dans ce dépôt. Ce dépôt est le studio/orchestrateur lui-même.
 
-**État actuel : ce code est lui-même en phase stub-first.** Tous les fichiers sous
-`runtime/studio/` (`graph.py`, `config.py`, `cli.py`, tous les `nodes/*.py` et `tools/*.py`) ne
-contiennent que des signatures, des types et des docstrings complètes avec des corps de fonction
-`...` — aucune logique n'est encore implémentée. `runtime/tests/test_config.py` suit le même
-principe : des fonctions de test avec docstring mais sans assertion. Quand on te demande
-d'« implémenter » quelque chose ici, c'est normal — il faut remplir le stub selon le contrat de
-sa docstring, ne pas supposer que quelque chose est cassé parce que c'est un no-op. Voir
-`skills/stub-first.md` pour le format exact d'un stub (signatures + docstring complète avec
-Args/Returns/Raises/Side effects/Example, zéro logique de contrôle, zéro logique métier) — la
-même convention que l'orchestrateur impose à ses propres agents en aval s'applique aussi aux
-contributions manuelles à ce dépôt.
+**État actuel (mis à jour 2026-07-15) : le runtime est entièrement implémenté**, pas en phase
+stub-first. Tous les fichiers sous `runtime/studio/` (`graph.py`, `config.py`, `cli.py`,
+`routing.py`, tous les `nodes/*.py` et `tools/*.py`) contiennent une logique réelle — plus aucun
+corps de fonction `...`. `runtime/tests/` compte 256 tests, tous avec de vraies assertions (voir
+`docs/roadmap.md` pour le détail chronologique des chantiers). Quand on te demande
+d'« implémenter » ou de corriger quelque chose ici, il s'agit d'une évolution du code existant —
+vérifier l'état réel du fichier avant de supposer qu'il s'agit d'un stub à remplir.
+
+La convention stub-first (`skills/stub-first.md`, ADR 0002) reste en revanche activement
+appliquée par le pipeline **lui-même** sur les projets *cibles* qu'il pilote : les agents
+Back/Front y écrivent d'abord des stubs (phase 4, signatures/types/docstrings) avant
+l'implémentation (phase 6) — c'est un principe de méthode imposé en aval, indépendant de la
+maturité du code de ce dépôt.
 

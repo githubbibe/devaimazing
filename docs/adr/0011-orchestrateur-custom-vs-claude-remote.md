@@ -13,18 +13,18 @@ sur une tâche de développement).
 
 ## Décision
 
-devaimazing reste un orchestrateur custom (LangGraph, pipeline fixe de 6 agents sur
-10 phases), et n'est pas remplacé par une utilisation directe de Claude Code remote ou
-des subagents Claude pour l'ensemble du pipeline.
+devaimazing reste un orchestrateur custom (LangGraph, pipeline fixe de 6 nodes couvrant
+8 rôles d'agent sur 10 phases), et n'est pas remplacé par une utilisation directe de
+Claude Code remote ou des subagents Claude pour l'ensemble du pipeline.
 
 ## Raisons
 
-1. **Segmentation des coûts** : sur les 6 agents, seuls PM (phase 1, Opus), PM (phase 3),
-   Architecte et Sécu (Sonnet) passent par l'API Anthropic facturée. Back, Front et Test
-   tournent en local sur Qwen 2.5 via Ollama, à coût zéro token (voir `docs/llm-strategy.md`,
-   ADR 0006). Une exécution intégralement via Claude remote/subagents facturerait tous les
-   agents, y compris les tâches de production de code répétitives où un modèle local
-   suffit.
+1. **Segmentation des coûts** : sur les 8 rôles d'agent, seuls PM (phases 1 et 3, Opus/
+   Sonnet), Architecte et Sécu (Sonnet) passent par l'API Anthropic facturée. Back, Back-tu,
+   Front, Front-tu et Test tournent en local sur Qwen 2.5 via Ollama, à coût zéro token (voir
+   `docs/llm-strategy.md`, ADR 0006). Une exécution intégralement via Claude remote/subagents
+   facturerait tous les agents, y compris les tâches de production de code répétitives où un
+   modèle local suffit.
 2. **Couche SAST déterministe à coût zéro** : Semgrep et Bandit tournent avant l'audit
    Sonnet de la phase 8 pour ne pas payer de tokens sur ce qu'un outil déterministe détecte
    gratuitement (voir `prompts/security.md`).
@@ -42,9 +42,9 @@ des subagents Claude pour l'ensemble du pipeline.
 - Ce choix coûte du temps de développement : l'orchestrateur lui-même doit être construit et
   maintenu (au 2026-07-09, encore en phase stub-first, voir `docs/roadmap.md`), alors qu'un
   usage direct de Claude Code remote aurait été utilisable immédiatement.
-- En contrepartie, le coût en tokens API est maîtrisé (seuls 3 agents sur 6 y recourent) et
-  le process est reproductible et auditable (pipeline fixe, identités git séparées,
-  checkpoints).
+- En contrepartie, le coût en tokens API est maîtrisé (seuls 3 rôles sur 8 y recourent :
+  PM, Architecte, Sécu) et le process est reproductible et auditable (pipeline fixe,
+  identités git séparées, checkpoints).
 - Si le coût de développement de l'orchestrateur venait à dépasser l'économie de tokens
   attendue sur la durée, ce choix devrait être réévalué explicitement — pas par glissement.
 

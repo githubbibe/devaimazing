@@ -2,8 +2,9 @@
 
 ## Vue d'ensemble
 
-devaimazing orchestre 6 agents spécialisés. Chaque agent a un périmètre strict,
-un LLM assigné, et une identité Git propre. Tous sont stateless sauf le PM.
+devaimazing orchestre 8 rôles d'agent spécialisés (6 identités Git distinctes —
+Back-tu et Front-tu partagent celle de Back/Front, voir sections dédiées ci-dessous).
+Chaque agent a un périmètre strict et un LLM assigné. Tous sont stateless sauf le PM.
 
 **Principe auditeur/producteur** : un modèle ne peut pas auditer la dette qu'il a
 lui-même produite. Les agents producteurs (Back, Front, Test) tournent sur Qwen 2.5 7B.

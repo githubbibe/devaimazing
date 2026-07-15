@@ -6,8 +6,12 @@ dans `docs/infra-topology.md`.
 
 ## Vue d'ensemble
 
-devaimazing est un graphe LangGraph de 6 agents spécialisés orchestrés séquentiellement.
-Le runtime Python est le seul chef d'orchestre. Aucun agent ne pilote un autre agent.
+devaimazing est un graphe LangGraph de 6 nodes orchestrant 8 rôles d'agent spécialisés
+séquentiellement (Back-tu et Front-tu partagent le node et l'identité Git de Back/Front,
+mais interviennent comme des activations distinctes avec leur propre périmètre — voir
+`docs/agents.md`). Le runtime Python est le seul chef d'orchestre. Aucun agent ne pilote
+un autre agent. Choix d'un orchestrateur custom plutôt que Claude Code remote/subagents :
+voir ADR 0011.
 
 ## Principes fondamentaux
 
@@ -82,8 +86,8 @@ quand le projet dépasse ce stade. Voir ADR 0010.
 
 ## Composants externes
 
-devaimazing core est strictement le runtime LangGraph + ses 6 agents + ses outils
-locaux. Tout ce qui touche à l'interface utilisateur, aux notifications et à
+devaimazing core est strictement le runtime LangGraph + ses 6 nodes (8 rôles d'agent) +
+ses outils locaux. Tout ce qui touche à l'interface utilisateur, aux notifications et à
 l'observabilité est externe au core.
 
 **Notifications (ntfy)**
@@ -133,3 +137,4 @@ Voir `docs/adr/` pour le détail de chaque décision :
 - [0008 - Checklist d'intention produit en Phase 1](docs/adr/0008-checklist-intention-phase1.md)
 - [0009 - Pseudonymisation et traçabilité anti-fraude](docs/adr/0009-pseudonymisation-anti-fraude.md)
 - [0010 - Quatre piliers non-fonctionnels obligatoires et dette justifiée](docs/adr/0010-quatre-piliers-non-fonctionnels-dette-justifiee.md)
+- [0011 - Orchestrateur custom plutôt que Claude Code remote/subagents](docs/adr/0011-orchestrateur-custom-vs-claude-remote.md)

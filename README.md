@@ -13,7 +13,7 @@
 
 ## What is devaimazing?
 
-devaimazing is a **multi-agent development studio** : an orchestrated pipeline of 6 specialized AI agents that collaborates to design, implement, test, secure, and document software features autonomously, with progressive human validation checkpoints.
+devaimazing is a **multi-agent development studio** : an orchestrated pipeline of 8 specialized agent roles (across 6 LangGraph nodes — Back-tu and Front-tu run as distinct activations of Back/Front, sharing their node and Git identity) that collaborates to design, implement, test, secure, and document software features autonomously, with progressive human validation checkpoints.
 
 It is the development engine of the [*aimazing ecosystem](https://aimazing.fr) (webaimazing, shopaimazing, foodaimazing, and others), and can be pointed at any software project via configuration.
 
@@ -208,7 +208,9 @@ devaimazing/
 │   └── project-config.yml.template  # Squelette config/projects/<nom>.yml
 ├── runtime/                     # Code Python du studio
 │   ├── studio/
+│   │   ├── cli.py                # CLI (run, resume, retry, run-agent, new-project...)
 │   │   ├── graph.py             # Definition LangGraph
+│   │   ├── routing.py           # Routage phases/agents, checkpoints, max_iterations
 │   │   ├── state.py             # Schema etat
 │   │   ├── config.py            # Chargement projet cible, modeles
 │   │   ├── metrics.py           # Collecte + export Prometheus
@@ -230,7 +232,8 @@ devaimazing/
 │   ├── studio.yml               # Config globale (modeles, paths)
 │   └── projects/                # Config par projet cible
 │       ├── webaimazing-v2.yml   # repo_path, branche, params
-│       └── demo-todo-app.yml    # idem, pour le projet de demo
+│       ├── demo-todo-app.yml    # idem, pour le projet de demo
+│       └── todo-list.yml        # idem, premier run reel de bout en bout
 ├── interfaces/
 │   └── telegram-bridge/         # Configuration OpenClaw skills
 ├── infra/
@@ -329,7 +332,8 @@ devaimazing projects
 
 ## Identite Git des agents
 
-Chaque agent signe ses commits avec sa propre identite :
+Chaque agent signe ses commits avec sa propre identite (auteur/committer Git — pas de
+signature GPG : `sign_commits: false` par defaut dans `config/studio.yml`) :
 
 | Agent | Git identity |
 |---|---|

@@ -16,7 +16,10 @@ des branches doit être à la fois lisible et garanti unique.
 
 Un commit est réalisé à la fin de chaque tâche d'agent terminée (phases 4 à 9),
 pas uniquement en phase 10. Chaque commit est signé sous l'identité Git de l'agent
-qui l'a produit (voir `docs/agents.md`).
+qui l'a produit (voir `docs/agents.md`) — au sens auteur/committer Git
+(`GIT_AUTHOR_*`/`GIT_COMMITTER_*`), pas signature cryptographique GPG : la vraie
+signature GPG reste désactivée par défaut (`sign_commits: false` dans
+`config/studio.yml`), à activer séparément si une clé est disponible.
 
 La phase 10 ne committe plus en bloc. Elle se limite à la mise à jour du project-map,
 au merge de la branche vers `develop` après validation finale, et à la notification.
