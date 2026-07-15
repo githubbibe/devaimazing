@@ -22,6 +22,17 @@ Cette règle s'applique aux suppressions de fichiers explicitement demandées co
 « évidents » (fichiers jugés inutiles, obsolètes, ou générés) — le doute profite toujours au
 fichier, pas à la suppression.
 
+## Pull en début de session
+
+En début de session (avant la première action modifiant ce dépôt), Claude Code vérifie
+si la branche locale est en retard sur `origin` (`git fetch` puis comparaison, ex.
+`git status` ou `git log HEAD..@{u}`) et effectue un `git pull` si nécessaire, sans
+attendre une demande explicite — pour ne pas travailler sur un état local périmé (ex. si
+une autre session ou l'utilisateur a poussé des changements entre-temps). En cas de
+commits locaux non poussés en avance sur `origin`, ou de conflit potentiel, appliquer les
+règles de sécurité git habituelles (vérifier avant tout, demander confirmation en cas de
+doute) plutôt que de forcer.
+
 ## Commit et push
 
 À la fin de toute tâche ayant modifié des fichiers du dépôt, Claude Code commit et push
