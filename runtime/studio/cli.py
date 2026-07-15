@@ -145,6 +145,10 @@ def run(project: str, objective: Optional[str], dry_run: bool):
 async def _run_async(project: str, objective: Optional[str], dry_run: bool) -> None:
     _export_project_env(project)
     config = _load_config(project)
+
+    if not dry_run and not await _ensure_healthy_environment(config):
+        return
+
     if not objective:
         objective = click.prompt("Objectif du run")
 
@@ -194,6 +198,10 @@ def resume(run_id: str, project: str):
 async def _resume_async(run_id: str, project: str) -> None:
     _export_project_env(project)
     config = _load_config(project)
+
+    if not await _ensure_healthy_environment(config):
+        return
+
     graph = await build_graph(config)
     try:
         thread_config = _thread_config(run_id)
@@ -264,6 +272,10 @@ def retry(run_id: str, project: str):
 async def _retry_async(run_id: str, project: str) -> None:
     _export_project_env(project)
     config = _load_config(project)
+
+    if not await _ensure_healthy_environment(config):
+        return
+
     graph = await build_graph(config)
     try:
         thread_config = _thread_config(run_id)
@@ -747,6 +759,64 @@ async def _check_ollama_reachable(base_url: str) -> tuple[bool, str]:
         return False, f"{base_url} injoignable ({exc})"
 
 
+async def _project_health_checks(config: StudioConfig) -> list[tuple[str, bool, str]]:
+    """
+    Contrôles minimaux qu'un projet déjà chargé doit satisfaire pour qu'un
+    run ait une chance d'aboutir (Claude Code CLI, Git, Ollama, state.db/
+    metrics.db) — factorisé entre `doctor` et le préflight obligatoire de
+    `run`/`resume`/`retry` (voir _ensure_healthy_environment).
+    """
+    checks: list[tuple[str, bool, str]] = []
+
+    claude_path = shutil.which("claude")
+    checks.append(("Claude Code CLI", claude_path is not None, claude_path or "introuvable dans PATH"))
+
+    git_path = shutil.which("git")
+    checks.append(("Git", git_path is not None, git_path or "introuvable dans PATH"))
+
+    ollama_ok, ollama_detail = await _check_ollama_reachable(config.ollama_base_url)
+    checks.append(("Ollama", ollama_ok, ollama_detail))
+
+    try:
+        config.state_db_path.parent.mkdir(parents=True, exist_ok=True)
+        checks.append(("state.db (répertoire)", True, str(config.state_db_path)))
+    except OSError as exc:
+        checks.append(("state.db (répertoire)", False, str(exc)))
+    try:
+        MetricsCollector(config.metrics_db_path)
+        checks.append(("metrics.db", True, str(config.metrics_db_path)))
+    except OSError as exc:
+        checks.append(("metrics.db", False, str(exc)))
+
+    return checks
+
+
+async def _ensure_healthy_environment(config: StudioConfig) -> bool:
+    """
+    Préflight obligatoire avant tout `run`/`resume`/`retry` — remontée
+    utilisateur (2026-07-15) : un run peut consommer plusieurs phases de
+    dialogue/tokens (PM, Architecte) avant de crasher faute d'Ollama ou de
+    Claude Code CLI disponible ; ce garde-fou coupe court avant le moindre
+    appel au graphe, sur le même principe que `doctor` (voir
+    _project_health_checks) mais sans nécessiter de commande séparée.
+
+    Returns:
+        True si tous les contrôles passent. False sinon — affiche le détail
+        de chaque échec avant de retourner, à l'appelant de ne pas
+        continuer.
+    """
+    checks = await _project_health_checks(config)
+    failures = [(name, detail) for name, ok, detail in checks if not ok]
+    if not failures:
+        return True
+
+    console.print("[red]Environnement non prêt — run annulé avant tout appel au graphe :[/red]")
+    for name, detail in failures:
+        console.print(f"  [red]KO[/red] {name} — {detail}")
+    console.print("[yellow]Corrigez ces points (voir aussi `devaimazing doctor`) puis relancez.[/yellow]")
+    return False
+
+
 @main.command()
 @click.option(
     "--project", help="Projet à utiliser pour les vérifications SQLite/Prometheus (optionnel)"
@@ -766,38 +836,27 @@ def doctor(project: Optional[str]):
 
 
 async def _doctor_async(project: Optional[str]) -> None:
-    checks: list[tuple[str, bool, str]] = []
-
-    claude_path = shutil.which("claude")
-    checks.append(("Claude Code CLI", claude_path is not None, claude_path or "introuvable dans PATH"))
-
-    git_path = shutil.which("git")
-    checks.append(("Git", git_path is not None, git_path or "introuvable dans PATH"))
-
-    ollama_base_url = "http://localhost:11434"
     config = None
+    config_error: Optional[str] = None
     if project:
         try:
             config = _load_config(project)
-            ollama_base_url = config.ollama_base_url
         except (FileNotFoundError, ValueError) as exc:
-            checks.append((f"Config projet {project!r}", False, str(exc)))
-
-    ollama_ok, ollama_detail = await _check_ollama_reachable(ollama_base_url)
-    checks.append(("Ollama", ollama_ok, ollama_detail))
+            config_error = str(exc)
 
     if config is not None:
-        try:
-            config.state_db_path.parent.mkdir(parents=True, exist_ok=True)
-            checks.append(("state.db (répertoire)", True, str(config.state_db_path)))
-        except OSError as exc:
-            checks.append(("state.db (répertoire)", False, str(exc)))
-        try:
-            MetricsCollector(config.metrics_db_path)
-            checks.append(("metrics.db", True, str(config.metrics_db_path)))
-        except OSError as exc:
-            checks.append(("metrics.db", False, str(exc)))
+        checks = await _project_health_checks(config)
     else:
+        claude_path = shutil.which("claude")
+        git_path = shutil.which("git")
+        checks = [
+            ("Claude Code CLI", claude_path is not None, claude_path or "introuvable dans PATH"),
+            ("Git", git_path is not None, git_path or "introuvable dans PATH"),
+        ]
+        if config_error is not None:
+            checks.append((f"Config projet {project!r}", False, config_error))
+        ollama_ok, ollama_detail = await _check_ollama_reachable("http://localhost:11434")
+        checks.append(("Ollama", ollama_ok, ollama_detail))
         checks.append((
             "state.db / metrics.db", False,
             "non vérifié — passer --project pour ce diagnostic",

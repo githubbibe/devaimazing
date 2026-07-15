@@ -20,6 +20,14 @@ import studio.cli as cli_module
 from studio.cli import main
 from studio.state import AgentResult, Phase, RunStatus
 
+# Référence captée avant tout monkeypatch : l'fixture autouse _env remplace
+# cli_module._ensure_healthy_environment par un faux qui retourne toujours
+# True (pour ne pas bloquer les tests run/resume/retry existants sur un
+# vrai Ollama/Claude Code CLI) — les tests qui veulent exercer la vraie
+# implémentation appellent cette référence directement plutôt que
+# cli_module._ensure_healthy_environment.
+_real_ensure_healthy_environment = cli_module._ensure_healthy_environment
+
 
 def _write_yaml(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,6 +57,11 @@ def _env(tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch):
         pass
 
     monkeypatch.setattr(cli_module, "checkout_branch", fake_checkout_branch)
+
+    async def fake_ensure_healthy_environment(config):
+        return True
+
+    monkeypatch.setattr(cli_module, "_ensure_healthy_environment", fake_ensure_healthy_environment)
     return config_dir
 
 
@@ -261,6 +274,89 @@ def test_run_prompts_for_objective_when_missing(monkeypatch: pytest.MonkeyPatch)
     result = CliRunner().invoke(main, ["run", "demo"], input="objectif tapé au prompt\n")
 
     assert result.exit_code == 0
+
+
+# --- préflight environnement (run/resume/retry) ---
+
+def test_run_aborts_before_build_graph_if_environment_unhealthy(monkeypatch: pytest.MonkeyPatch):
+    async def fake_unhealthy(config):
+        return False
+
+    async def fail_build_graph(config):
+        raise AssertionError("build_graph ne doit pas être appelé si l'environnement n'est pas prêt")
+
+    monkeypatch.setattr(cli_module, "_ensure_healthy_environment", fake_unhealthy)
+    monkeypatch.setattr(cli_module, "build_graph", fail_build_graph)
+
+    result = CliRunner().invoke(main, ["run", "demo", "--objective", "x"])
+
+    assert result.exit_code == 0
+
+
+def test_run_dry_run_skips_environment_check(monkeypatch: pytest.MonkeyPatch):
+    async def fail_ensure_healthy(config):
+        raise AssertionError("--dry-run ne doit pas déclencher le préflight (aucun agent exécuté)")
+
+    monkeypatch.setattr(cli_module, "_ensure_healthy_environment", fail_ensure_healthy)
+
+    result = CliRunner().invoke(main, ["run", "demo", "--objective", "x", "--dry-run"])
+
+    assert result.exit_code == 0
+
+
+def test_resume_aborts_before_build_graph_if_environment_unhealthy(monkeypatch: pytest.MonkeyPatch):
+    async def fake_unhealthy(config):
+        return False
+
+    async def fail_build_graph(config):
+        raise AssertionError("build_graph ne doit pas être appelé si l'environnement n'est pas prêt")
+
+    monkeypatch.setattr(cli_module, "_ensure_healthy_environment", fake_unhealthy)
+    monkeypatch.setattr(cli_module, "build_graph", fail_build_graph)
+
+    result = CliRunner().invoke(main, ["resume", "run-042", "--project", "demo"])
+
+    assert result.exit_code == 0
+
+
+def test_retry_aborts_before_build_graph_if_environment_unhealthy(monkeypatch: pytest.MonkeyPatch):
+    async def fake_unhealthy(config):
+        return False
+
+    async def fail_build_graph(config):
+        raise AssertionError("build_graph ne doit pas être appelé si l'environnement n'est pas prêt")
+
+    monkeypatch.setattr(cli_module, "_ensure_healthy_environment", fake_unhealthy)
+    monkeypatch.setattr(cli_module, "build_graph", fail_build_graph)
+
+    result = CliRunner().invoke(main, ["retry", "run-042", "--project", "demo"])
+
+    assert result.exit_code == 0
+
+
+async def test_ensure_healthy_environment_true_when_all_checks_pass(monkeypatch: pytest.MonkeyPatch):
+    async def fake_checks(config):
+        return [("Claude Code CLI", True, "/usr/bin/claude"), ("Ollama", True, "http://localhost:11434")]
+
+    monkeypatch.setattr(cli_module, "_project_health_checks", fake_checks)
+
+    assert await _real_ensure_healthy_environment(config=SimpleNamespace()) is True
+
+
+async def test_ensure_healthy_environment_false_and_reports_each_failure(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def fake_checks(config):
+        return [
+            ("Claude Code CLI", True, "/usr/bin/claude"),
+            ("Ollama", False, "http://localhost:11434 injoignable"),
+        ]
+
+    monkeypatch.setattr(cli_module, "_project_health_checks", fake_checks)
+
+    result = await _real_ensure_healthy_environment(config=SimpleNamespace())
+
+    assert result is False
 
 
 # --- resume ---
