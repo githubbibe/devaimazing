@@ -189,7 +189,7 @@ async def test_fiches_first_pass_no_checkpoint_creates_branch(
 
     committed = {}
 
-    async def fake_commit_as_agent(repo_path, agent, message, files):
+    async def fake_commit_as_agent(repo_path, agent, message, files, tracer=None):
         committed.update(agent=agent, files=files)
         return "abc123"
 

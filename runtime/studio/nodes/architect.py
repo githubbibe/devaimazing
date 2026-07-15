@@ -33,6 +33,7 @@ from studio.tools.filesystem import (
     write_card,
 )
 from studio.tools.git import commit_as_agent
+from studio.tools.tracer import AgentTracer, RunTracer
 
 _DEVAIMAZING_ROOT = Path(__file__).resolve().parents[3]
 _PROMPT_PATH = _DEVAIMAZING_ROOT / "prompts" / "architect.md"
@@ -96,7 +97,9 @@ async def _build_system_prompt() -> str:
     )
 
 
-async def _call_architect(config: StudioConfig, user_prompt: str) -> dict:
+async def _call_architect(
+    config: StudioConfig, user_prompt: str, tracer: Optional[AgentTracer] = None
+) -> dict:
     system_prompt = await _build_system_prompt()
     claude_code_config = config.get("claude_code", {})
     return await run_claude_code(
@@ -105,6 +108,7 @@ async def _call_architect(config: StudioConfig, user_prompt: str) -> dict:
         cwd=config.repo_path,
         timeout_seconds=claude_code_config.get("timeout_seconds", 300),
         output_format=claude_code_config.get("output_format", "json"),
+        tracer=tracer,
     )
 
 
@@ -136,9 +140,9 @@ def _with_checkpoint(state: StudioState, updates: dict) -> dict:
     return updates
 
 
-async def _run_audit_amont(state: StudioState, config: StudioConfig) -> dict:
+async def _run_audit_amont(state: StudioState, config: StudioConfig, tracer: AgentTracer) -> dict:
     reference_files = config.get("reference_files", {})
-    card_root_content = await read_card(config.repo_path / state.card_root_path)
+    card_root_content = await read_card(config.repo_path / state.card_root_path, tracer=tracer)
     project_map_content = await _read_optional(
         config.repo_path / reference_files.get("project_map", "specs/project-map.md")
     )
@@ -152,15 +156,16 @@ async def _run_audit_amont(state: StudioState, config: StudioConfig) -> dict:
         f"## project-map.md\n\n{project_map_content or '(absent — premier run du projet)'}\n\n"
         f"## architect-map.md\n\n{architect_map_content or '(absent — premier run du projet)'}"
     )
-    result = await _call_architect(config, user_prompt)
+    result = await _call_architect(config, user_prompt, tracer=tracer)
 
     brief_relative = str(Path(_specs_dir(config)) / state.run_id / "architect-brief.md")
-    await write_card(config.repo_path / brief_relative, result["content"])
+    await write_card(config.repo_path / brief_relative, result["content"], tracer=tracer)
     await commit_as_agent(
         repo_path=config.repo_path,
         agent="architect",
         message="docs: architect brief",
         files=[brief_relative],
+        tracer=tracer,
     )
 
     usage = result.get("usage", {})
@@ -173,11 +178,14 @@ async def _run_audit_amont(state: StudioState, config: StudioConfig) -> dict:
             state.total_tokens_sonnet + usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
         ),
     }
+    tracer.emit("node_exit", status="success", output_files=[brief_relative])
     return _with_checkpoint(state, updates)
 
 
-async def _run_audit_stubs(state: StudioState, config: StudioConfig) -> dict:
-    architect_brief_content = await read_card(config.repo_path / state.architect_brief_path)
+async def _run_audit_stubs(state: StudioState, config: StudioConfig, tracer: AgentTracer) -> dict:
+    architect_brief_content = await read_card(
+        config.repo_path / state.architect_brief_path, tracer=tracer
+    )
 
     stub_agents = [a for a in state.agent_sequence if a in PHASE_AGENT_ROLES[Phase.STUBS]]
     cards_parts = []
@@ -191,7 +199,7 @@ async def _run_audit_stubs(state: StudioState, config: StudioConfig) -> dict:
         + "\n\n".join(cards_parts)
         + "\n\nLes stubs eux-mêmes sont dans le repo (accès direct depuis ton cwd)."
     )
-    result = await _call_architect(config, user_prompt)
+    result = await _call_architect(config, user_prompt, tracer=tracer)
     conforme, faulty_agent, feedback = _parse_audit_decision(result["content"])
 
     usage = result.get("usage", {})
@@ -206,6 +214,7 @@ async def _run_audit_stubs(state: StudioState, config: StudioConfig) -> dict:
     if conforme:
         updates["current_phase"] = Phase.IMPLEMENTATION
         updates["current_agent_index"] = 0
+        tracer.emit("node_exit", status="success", conforme=True)
     else:
         faulty_card_path = config.repo_path / state.agent_cards[faulty_agent]
         await append_feedback(faulty_card_path, agent_source="architect", feedback=feedback)
@@ -213,11 +222,12 @@ async def _run_audit_stubs(state: StudioState, config: StudioConfig) -> dict:
         updates["current_phase"] = Phase.STUBS
         updates["current_agent_index"] = stubs_sequence.index(faulty_agent)
         updates["failed_agents"] = state.failed_agents + [faulty_agent]
+        tracer.emit("node_exit", status="success", conforme=False, faulty_agent=faulty_agent)
 
     return _with_checkpoint(state, updates)
 
 
-async def _run_audit_aval(state: StudioState, config: StudioConfig) -> dict:
+async def _run_audit_aval(state: StudioState, config: StudioConfig, tracer: AgentTracer) -> dict:
     specs_dir = _specs_dir(config)
     security_report_content = await _read_optional(
         config.repo_path / specs_dir / state.run_id / "security-report.md"
@@ -234,16 +244,17 @@ async def _run_audit_aval(state: StudioState, config: StudioConfig) -> dict:
         + "\n\n".join(cards_parts)
         + "\n\nLe code complet est dans le repo (accès direct depuis ton cwd)."
     )
-    result = await _call_architect(config, user_prompt)
-    files = parse_agent_file_blocks(result["content"])
+    result = await _call_architect(config, user_prompt, tracer=tracer)
+    files = parse_agent_file_blocks(result["content"], tracer=tracer)
 
     for relative_path, content in files.items():
-        await write_card(config.repo_path / relative_path, content)
+        await write_card(config.repo_path / relative_path, content, tracer=tracer)
     await commit_as_agent(
         repo_path=config.repo_path,
         agent="architect",
         message=f"docs: audit aval - {', '.join(sorted(files))}",
         files=sorted(files.keys()),
+        tracer=tracer,
     )
 
     usage = result.get("usage", {})
@@ -255,6 +266,7 @@ async def _run_audit_aval(state: StudioState, config: StudioConfig) -> dict:
             state.total_tokens_sonnet + usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
         ),
     }
+    tracer.emit("node_exit", status="success", output_files=sorted(files.keys()))
     return _with_checkpoint(state, updates)
 
 
@@ -360,4 +372,6 @@ async def run(state: StudioState) -> StudioState:
             f"Phase non gérée par le node Architecte : {state.current_phase!r} "
             f"(attendu AUDIT_AMONT, AUDIT_STUBS ou AUDIT_AVAL)"
         )
-    return await handler(state, config)
+    tracer = RunTracer.for_run(config, state.run_id).for_agent("architect", state.current_phase)
+    tracer.emit("node_enter")
+    return await handler(state, config, tracer)

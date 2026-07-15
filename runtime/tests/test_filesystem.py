@@ -2,6 +2,7 @@
 Tests des opérations filesystem devaimazing.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,11 @@ from studio.tools.filesystem import (
     read_files,
     write_card,
 )
+from studio.tools.tracer import RunTracer
+
+
+def _events(trace_path: Path) -> list[dict]:
+    return [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
 
 CARD_WITH_FEEDBACK = """# Fiche agent - back - Run run-001
 
@@ -45,6 +51,18 @@ async def test_read_card_missing_raises(tmp_path: Path):
         await read_card(tmp_path / "absent.md")
 
 
+async def test_read_card_emits_card_read(tmp_path: Path):
+    card_path = tmp_path / "card.md"
+    card_path.write_text("contenu", encoding="utf-8")
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
+
+    await read_card(card_path, tracer=tracer)
+
+    events = _events(tracer._tracer.trace_path)
+    assert events[0]["event"] == "card_read"
+    assert events[0]["path"] == str(card_path)
+
+
 async def test_write_card_creates_parent_dirs(tmp_path: Path):
     card_path = tmp_path / "specs" / "run-001" / "back.md"
 
@@ -52,6 +70,17 @@ async def test_write_card_creates_parent_dirs(tmp_path: Path):
 
     assert card_path.is_file()
     assert card_path.read_text(encoding="utf-8") == "# Fiche back"
+
+
+async def test_write_card_emits_card_written(tmp_path: Path):
+    card_path = tmp_path / "specs" / "run-001" / "back.md"
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
+
+    await write_card(card_path, "# Fiche back", tracer=tracer)
+
+    events = _events(tracer._tracer.trace_path)
+    assert events[0]["event"] == "card_written"
+    assert events[0]["path"] == str(card_path)
 
 
 async def test_write_card_overwrites(tmp_path: Path):
@@ -129,6 +158,34 @@ async def test_read_files_missing_path_raises_file_not_found_error(tmp_path: Pat
         await read_files(repo, ["backend/absent.py"])
 
 
+async def test_read_files_emits_referenced_files_resolved(tmp_path: Path):
+    repo = tmp_path / "project"
+    (repo / "backend").mkdir(parents=True)
+    (repo / "backend" / "main.py").write_text("x = 1\n", encoding="utf-8")
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
+
+    await read_files(repo, ["backend/main.py"], tracer=tracer)
+
+    events = _events(tracer._tracer.trace_path)
+    resolved = [e for e in events if e["event"] == "referenced_files_resolved"]
+    assert len(resolved) == 1
+    assert resolved[0]["requested"] == ["backend/main.py"]
+    assert resolved[0]["found"] == ["backend/main.py"]
+
+
+async def test_read_files_missing_path_emits_error_with_missing_field(tmp_path: Path):
+    repo = tmp_path / "project"
+    repo.mkdir()
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
+
+    with pytest.raises(FileNotFoundError):
+        await read_files(repo, ["backend/absent.py"], tracer=tracer)
+
+    events = _events(tracer._tracer.trace_path)
+    assert events[-1]["event"] == "error"
+    assert events[-1]["missing"] == "backend/absent.py"
+
+
 async def test_inject_skills_appends_skill_content(tmp_path: Path):
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()
@@ -190,6 +247,34 @@ def test_parse_agent_file_blocks_multiple_files():
 def test_parse_agent_file_blocks_no_block_raises_value_error():
     with pytest.raises(ValueError):
         parse_agent_file_blocks("Je ne peux pas produire ce fichier, contradiction détectée.")
+
+
+def test_parse_agent_file_blocks_emits_parse_output_success(tmp_path: Path):
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("pm", "FICHES")
+    text = (
+        '<<<DEVAIMAZING_FILE path="backend/a.py">>>\n'
+        'contenu a\n'
+        '<<<DEVAIMAZING_END>>>'
+    )
+
+    parse_agent_file_blocks(text, tracer=tracer)
+
+    events = _events(tracer._tracer.trace_path)
+    assert events[0]["event"] == "parse_output"
+    assert events[0]["outcome"] == "success"
+    assert events[0]["files"] == ["backend/a.py"]
+
+
+def test_parse_agent_file_blocks_no_block_emits_parse_output_error(tmp_path: Path):
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("pm", "FICHES")
+
+    with pytest.raises(ValueError):
+        parse_agent_file_blocks("contradiction détectée", tracer=tracer)
+
+    events = _events(tracer._tracer.trace_path)
+    assert events[0]["event"] == "parse_output"
+    assert events[0]["outcome"] == "error"
+    assert events[0]["raw_output_head"] == "contradiction détectée"
 
 
 def test_parse_agent_file_blocks_last_duplicate_wins():
@@ -370,6 +455,32 @@ def test_parse_structured_file_output_blocked():
 def test_parse_structured_file_output_invalid_json_raises():
     with pytest.raises(ValueError):
         parse_structured_file_output("pas du json")
+
+
+def test_parse_structured_file_output_invalid_json_emits_parse_output_error(tmp_path: Path):
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
+
+    with pytest.raises(ValueError):
+        parse_structured_file_output("pas du json", tracer=tracer)
+
+    events = _events(tracer._tracer.trace_path)
+    assert events[0]["event"] == "parse_output"
+    assert events[0]["outcome"] == "error"
+    assert events[0]["raw_output_head"] == "pas du json"
+
+
+def test_parse_structured_file_output_success_emits_parse_output_success(tmp_path: Path):
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
+
+    parse_structured_file_output(
+        '{"files": [{"path": "backend/a.py", "content": "x = 1"}], "blocked_reason": ""}',
+        tracer=tracer,
+    )
+
+    events = _events(tracer._tracer.trace_path)
+    assert events[0]["event"] == "parse_output"
+    assert events[0]["outcome"] == "success"
+    assert events[0]["files"] == ["backend/a.py"]
 
 
 def test_parse_structured_file_output_missing_fields_raises():

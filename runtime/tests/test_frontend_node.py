@@ -65,16 +65,16 @@ def _card_metadata(**overrides) -> dict:
 async def test_frontend_stub_phase_writes_files_and_commits(monkeypatch: pytest.MonkeyPatch):
     committed = {}
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche front"
 
     async def fake_run_ollama(**kwargs):
         return _fake_ollama_result(FILE_OUTPUT)
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
-    async def fake_commit_as_agent(repo_path, agent, message, files):
+    async def fake_commit_as_agent(repo_path, agent, message, files, tracer=None):
         committed.update(agent=agent, message=message, files=files)
         return "abc123"
 
@@ -107,14 +107,14 @@ async def test_frontend_stub_phase_writes_files_and_commits(monkeypatch: pytest.
 async def test_frontend_calls_ollama_with_structured_output_schema(monkeypatch: pytest.MonkeyPatch):
     captured = {}
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche front"
 
     async def fake_run_ollama(**kwargs):
         captured["response_format"] = kwargs.get("response_format")
         return _fake_ollama_result(FILE_OUTPUT)
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
     async def fake_commit_as_agent(**kwargs):
@@ -148,7 +148,7 @@ async def test_frontend_includes_existing_file_content_in_prompt(
         "export const LoginForm = () => <form />;\n", encoding="utf-8"
     )
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "Modifier `frontend/components/LoginForm.tsx` pour ajouter un champ."
 
     captured = {}
@@ -157,7 +157,7 @@ async def test_frontend_includes_existing_file_content_in_prompt(
         captured["user_prompt"] = kwargs["user_prompt"]
         return _fake_ollama_result(FILE_OUTPUT)
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
     async def fake_commit_as_agent(**kwargs):
@@ -191,7 +191,7 @@ async def test_frontend_tu_role_uses_test_commit_prefix(monkeypatch: pytest.Monk
     captured_skills = {}
     committed = {}
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche front-tu"
 
     async def fake_inject_skills(base_prompt, skill_names, skills_dir):
@@ -201,10 +201,10 @@ async def test_frontend_tu_role_uses_test_commit_prefix(monkeypatch: pytest.Monk
     async def fake_run_ollama(**kwargs):
         return _fake_ollama_result(FILE_OUTPUT)
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
-    async def fake_commit_as_agent(repo_path, agent, message, files):
+    async def fake_commit_as_agent(repo_path, agent, message, files, tracer=None):
         committed.update(agent=agent, message=message)
         return "abc123"
 
@@ -235,7 +235,7 @@ async def test_frontend_blocked_reason_appends_feedback_and_waits_for_human(
 ):
     feedback_calls = []
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche front"
 
     async def fake_run_ollama(**kwargs):
@@ -297,13 +297,13 @@ async def test_frontend_max_iterations_exceeded_fails_without_calling_ollama(
 
 
 async def test_frontend_records_metrics_on_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche front"
 
     async def fake_run_ollama(**kwargs):
         return _fake_ollama_result(FILE_OUTPUT)
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
     async def fake_commit_as_agent(**kwargs):

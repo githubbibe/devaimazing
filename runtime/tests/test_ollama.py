@@ -5,6 +5,8 @@ N'appelle jamais un vrai serveur Ollama : le client ollama.AsyncClient est
 remplacé par un faux client scripté (succès/erreurs programmés par appel).
 """
 
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -13,6 +15,11 @@ from ollama import RequestError, ResponseError
 
 import studio.tools.ollama as ollama_tool
 from studio.tools.ollama import ExternalServiceError, run_ollama
+from studio.tools.tracer import RunTracer
+
+
+def _events(trace_path: Path) -> list[dict]:
+    return [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
 
 
 class _FakeResponse:
@@ -183,3 +190,75 @@ async def test_run_ollama_request_error_is_retried_then_raises(monkeypatch: pyte
         await run_ollama(system_prompt="sys", user_prompt="user", model="qwen2.5:7b-instruct")
 
     assert fake_cls.state["calls"] == ollama_tool.MAX_ATTEMPTS
+
+
+async def test_run_ollama_success_emits_llm_call_start_and_end(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    fake_cls = _make_fake_client_cls([_FakeResponse("réponse générée", 42, 7)])
+    monkeypatch.setattr(ollama_tool, "AsyncClient", fake_cls)
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
+
+    await run_ollama(
+        system_prompt="sys", user_prompt="user", model="qwen2.5:7b-instruct", tracer=tracer,
+    )
+
+    events = _events(tracer._tracer.trace_path)
+    assert [e["event"] for e in events] == ["llm_call_start", "llm_call_end"]
+    assert events[1]["tokens_prompt"] == 42
+    assert events[1]["tokens_completion"] == 7
+    assert all(e["agent"] == "back" and e["phase"] == "STUBS" for e in events)
+
+
+async def test_run_ollama_retries_emit_retry_events(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    fake_cls = _make_fake_client_cls([
+        ConnectionError("Failed to connect to Ollama"),
+        _FakeResponse("ça marche au 2e essai", 10, 5),
+    ])
+    monkeypatch.setattr(ollama_tool, "AsyncClient", fake_cls)
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
+
+    await run_ollama(
+        system_prompt="sys", user_prompt="user", model="qwen2.5:7b-instruct", tracer=tracer,
+    )
+
+    events = _events(tracer._tracer.trace_path)
+    retry_events = [e for e in events if e["event"] == "retry"]
+    assert len(retry_events) == 1
+    assert retry_events[0]["attempt"] == 1
+    assert retry_events[0]["max_attempts"] == ollama_tool.MAX_ATTEMPTS
+
+
+async def test_run_ollama_exhausted_retries_emits_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    fake_cls = _make_fake_client_cls([
+        ConnectionError("down"), ConnectionError("down"), ConnectionError("down"),
+    ])
+    monkeypatch.setattr(ollama_tool, "AsyncClient", fake_cls)
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
+
+    with pytest.raises(ExternalServiceError):
+        await run_ollama(
+            system_prompt="sys", user_prompt="user", model="qwen2.5:7b-instruct", tracer=tracer,
+        )
+
+    events = _events(tracer._tracer.trace_path)
+    assert events[-1]["event"] == "error"
+    retry_events = [e for e in events if e["event"] == "retry"]
+    assert len(retry_events) == ollama_tool.MAX_ATTEMPTS - 1
+
+
+async def test_run_ollama_timeout_emits_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    fake_cls = _make_fake_client_cls([httpx.ReadTimeout("timed out")])
+    monkeypatch.setattr(ollama_tool, "AsyncClient", fake_cls)
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
+
+    with pytest.raises(TimeoutError):
+        await run_ollama(
+            system_prompt="sys", user_prompt="user", model="qwen2.5:7b-instruct",
+            timeout_seconds=1, tracer=tracer,
+        )
+
+    events = _events(tracer._tracer.trace_path)
+    assert events[-1]["event"] == "error"

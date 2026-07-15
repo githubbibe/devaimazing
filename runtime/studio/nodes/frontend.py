@@ -39,6 +39,7 @@ from studio.tools.filesystem import (
 )
 from studio.tools.git import commit_as_agent
 from studio.tools.ollama import FILE_OUTPUT_SCHEMA, run_ollama
+from studio.tools.tracer import RunTracer
 
 _DEVAIMAZING_ROOT = Path(__file__).resolve().parents[3]
 _PROMPT_PATH = _DEVAIMAZING_ROOT / "prompts" / "frontend.md"
@@ -133,9 +134,12 @@ async def run(state: StudioState) -> StudioState:
     """
     config = StudioConfig.from_env()
     role = state.agent_sequence[state.current_agent_index]
+    tracer = RunTracer.for_run(config, state.run_id).for_agent(role, state.current_phase)
+    tracer.emit("node_enter", card=state.agent_cards.get(role))
 
     if max_iterations_exceeded(state, config, role):
         max_iterations = config.get("agents", {}).get("max_iterations", 3)
+        tracer.emit("node_exit", status="failed", reason="max_iterations_exceeded")
         return {
             "status": RunStatus.FAILED,
             "requires_manual_intervention": True,
@@ -150,9 +154,9 @@ async def run(state: StudioState) -> StudioState:
         }
 
     card_path = config.repo_path / state.agent_cards[role]
-    card_content = await read_card(card_path)
+    card_content = await read_card(card_path, tracer=tracer)
     existing_files_context = await read_files(
-        config.repo_path, state.agent_card_metadata[role]["existing_files_to_read"]
+        config.repo_path, state.agent_card_metadata[role]["existing_files_to_read"], tracer=tracer
     )
     user_prompt = (
         f"{existing_files_context}\n\n---\n\n{card_content}" if existing_files_context else card_content
@@ -176,12 +180,13 @@ async def run(state: StudioState) -> StudioState:
         base_url=config.ollama_base_url,
         timeout_seconds=ollama_config.get("timeout_seconds", 120),
         response_format=FILE_OUTPUT_SCHEMA,
+        tracer=tracer,
     )
 
     iteration = agent_iteration_count(state, role) + 1
 
     try:
-        files, blocked_reason = parse_structured_file_output(result["content"])
+        files, blocked_reason = parse_structured_file_output(result["content"], tracer=tracer)
     except ValueError:
         files, blocked_reason = {}, ""
 
@@ -199,6 +204,7 @@ async def run(state: StudioState) -> StudioState:
             duration_ms=result["duration_ms"],
         )
         await record_agent_result(config, state, agent_result, model=config.models["agents_local"])
+        tracer.emit("node_exit", status="feedback_sent")
         return {
             "agent_results": state.agent_results + [agent_result],
             "status": RunStatus.WAITING_HUMAN,
@@ -207,7 +213,7 @@ async def run(state: StudioState) -> StudioState:
         }
 
     for relative_path, content in files.items():
-        await write_card(config.repo_path / relative_path, content)
+        await write_card(config.repo_path / relative_path, content, tracer=tracer)
 
     is_implementation = state.current_phase == Phase.IMPLEMENTATION
     if role == "front-tu":
@@ -222,6 +228,7 @@ async def run(state: StudioState) -> StudioState:
         agent=_GIT_IDENTITY_AGENT,
         message=message,
         files=sorted(files.keys()),
+        tracer=tracer,
     )
 
     agent_result = AgentResult(
@@ -235,6 +242,7 @@ async def run(state: StudioState) -> StudioState:
         duration_ms=result["duration_ms"],
     )
     await record_agent_result(config, state, agent_result, model=config.models["agents_local"])
+    tracer.emit("node_exit", status="success", output_files=sorted(files.keys()))
 
     updates: dict = {
         "agent_results": state.agent_results + [agent_result],

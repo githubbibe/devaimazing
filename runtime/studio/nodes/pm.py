@@ -20,6 +20,7 @@ studio.nodes.closer, Python pur sans appel LLM.
 import json
 import re
 from pathlib import Path
+from typing import Optional
 
 from studio.config import StudioConfig
 from studio.metrics import record_agent_result
@@ -35,6 +36,7 @@ from studio.tools.filesystem import (
     write_card,
 )
 from studio.tools.git import commit_as_agent, create_run_branch
+from studio.tools.tracer import AgentTracer, RunTracer
 
 _DEVAIMAZING_ROOT = Path(__file__).resolve().parents[3]
 _PROMPT_PATH = _DEVAIMAZING_ROOT / "prompts" / "pm.md"
@@ -101,6 +103,9 @@ async def _run_cadrage(state: StudioState, config: StudioConfig) -> dict:
     duration_total_ms = 0
     claude_code_calls = 0
 
+    tracer = RunTracer.for_run(config, state.run_id).for_agent("pm", state.current_phase)
+    tracer.emit("node_enter")
+
     while True:
         claude_code_calls += 1
         result = await run_claude_code(
@@ -109,6 +114,7 @@ async def _run_cadrage(state: StudioState, config: StudioConfig) -> dict:
             cwd=config.repo_path,
             timeout_seconds=claude_code_config.get("timeout_seconds", 300),
             output_format=claude_code_config.get("output_format", "json"),
+            tracer=tracer,
         )
         usage = result.get("usage", {})
         tokens_prompt_total += usage.get("input_tokens", 0)
@@ -123,7 +129,7 @@ async def _run_cadrage(state: StudioState, config: StudioConfig) -> dict:
             confirmation = input("Valider cette fiche racine ? [oui/non] : ").strip().lower()
             if confirmation in _AFFIRMATIVE_REPLIES:
                 card_root_relative = str(Path(_specs_dir(config)) / state.run_id / "card-root.md")
-                await write_card(config.repo_path / card_root_relative, draft)
+                await write_card(config.repo_path / card_root_relative, draft, tracer=tracer)
 
                 agent_result = AgentResult(
                     agent="pm",
@@ -138,6 +144,7 @@ async def _run_cadrage(state: StudioState, config: StudioConfig) -> dict:
                     config, state, agent_result, model=config.models["pm_opus"],
                     claude_code_calls=claude_code_calls,
                 )
+                tracer.emit("node_exit", status="success", output_files=[card_root_relative])
                 return {
                     "agent_results": state.agent_results + [agent_result],
                     "card_root_path": card_root_relative,
@@ -160,7 +167,8 @@ async def _run_cadrage(state: StudioState, config: StudioConfig) -> dict:
 
 
 async def _create_branch_and_advance(
-    state: StudioState, config: StudioConfig, feature_name: str, agent_cards: dict
+    state: StudioState, config: StudioConfig, feature_name: str, agent_cards: dict,
+    tracer: Optional[AgentTracer] = None,
 ) -> dict:
     """Crée la branche du run et commit les fiches (fin de phase 3, voir ADR 0007)."""
     branch_name = await create_run_branch(
@@ -173,6 +181,7 @@ async def _create_branch_and_advance(
         agent="pm",
         message=f"docs: fiches dependantes - {feature_name}",
         files=commit_files,
+        tracer=tracer,
     )
     return {
         "branch_name": branch_name,
@@ -221,14 +230,22 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
     (y compris en cas de reprise après un feedback_sent) — pas de mémorisation
     intermédiaire du premier appel, décision actée pour garder l'état simple.
     """
-    card_root_content = await read_card(config.repo_path / state.card_root_path)
+    tracer = RunTracer.for_run(config, state.run_id).for_agent("pm", state.current_phase)
+    tracer.emit("node_enter", card=state.card_root_path)
+
+    card_root_content = await read_card(config.repo_path / state.card_root_path, tracer=tracer)
     feature_name = _extract_feature_name(card_root_content)
 
     if state.agent_cards:
-        return await _create_branch_and_advance(state, config, feature_name, state.agent_cards)
+        updates = await _create_branch_and_advance(
+            state, config, feature_name, state.agent_cards, tracer=tracer
+        )
+        tracer.emit("node_exit", status="success", branch_name=updates.get("branch_name"))
+        return updates
 
     if max_iterations_exceeded(state, config, "pm"):
         max_iterations = config.get("agents", {}).get("max_iterations", 3)
+        tracer.emit("node_exit", status="failed", reason="max_iterations_exceeded")
         return {
             "status": RunStatus.FAILED,
             "requires_manual_intervention": True,
@@ -242,7 +259,9 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
             ),
         }
 
-    architect_brief_content = await read_card(config.repo_path / state.architect_brief_path)
+    architect_brief_content = await read_card(
+        config.repo_path / state.architect_brief_path, tracer=tracer
+    )
 
     system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
     claude_code_config = config.get("claude_code", {})
@@ -264,6 +283,7 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
         timeout_seconds=claude_code_config.get("timeout_seconds", 300),
         output_format=claude_code_config.get("output_format", "json"),
         response_schema=PM_FICHES_SCHEMA,
+        tracer=tracer,
     )
 
     try:
@@ -292,6 +312,7 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
         cwd=config.repo_path,
         timeout_seconds=claude_code_config.get("timeout_seconds", 300),
         output_format=claude_code_config.get("output_format", "json"),
+        tracer=tracer,
     )
     content = result["content"]
 
@@ -306,7 +327,7 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
     combined_duration_ms = metadata_result.get("duration_ms", 0) + result.get("duration_ms", 0)
 
     try:
-        files = parse_agent_file_blocks(content)
+        files = parse_agent_file_blocks(content, tracer=tracer)
         agent_cards = {}
         for agent in agent_sequence:
             expected_path = str(Path(_specs_dir(config)) / state.run_id / f"{agent}.md")
@@ -358,6 +379,7 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
         await record_agent_result(
             config, state, agent_result, model=config.models["pm_sonnet"], claude_code_calls=2
         )
+        tracer.emit("node_exit", status="feedback_sent")
         return {
             "agent_results": state.agent_results + [agent_result],
             "status": RunStatus.WAITING_HUMAN,
@@ -368,7 +390,7 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
         }
 
     for relative_path, file_content in files.items():
-        await write_card(config.repo_path / relative_path, file_content)
+        await write_card(config.repo_path / relative_path, file_content, tracer=tracer)
 
     agent_result = AgentResult(
         agent="pm",
@@ -395,11 +417,15 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
     if should_checkpoint(state):
         updates["status"] = RunStatus.WAITING_HUMAN
         updates["awaiting_human_validation"] = True
+        tracer.emit("node_exit", status="waiting_human", output_files=sorted(files.keys()))
         return updates
 
     # Pas de checkpoint configuré pour cette phase : la branche est créée
     # immédiatement, sans attendre une reprise.
-    branch_updates = await _create_branch_and_advance(state, config, feature_name, agent_cards)
+    branch_updates = await _create_branch_and_advance(
+        state, config, feature_name, agent_cards, tracer=tracer
+    )
+    tracer.emit("node_exit", status="success", output_files=sorted(files.keys()))
     return {**updates, **branch_updates}
 
 

@@ -43,6 +43,7 @@ from studio.tools.git import (
     init_repo,
     push_branch,
 )
+from studio.tools.tracer import RunTracer
 
 console = Console()
 
@@ -157,6 +158,9 @@ async def _run_async(project: str, objective: Optional[str], dry_run: bool) -> N
     base_branch = config.get("git", {}).get("base_branch", "develop")
     await checkout_branch(config.repo_path, base_branch)
 
+    tracer = RunTracer.for_run(config, run_id)
+    tracer.emit("run_start", command="run", project=project, objective=objective)
+
     graph = await build_graph(config)
     try:
         initial_state = StudioState(
@@ -169,6 +173,7 @@ async def _run_async(project: str, objective: Optional[str], dry_run: bool) -> N
         )
         final_state = await graph.ainvoke(initial_state, config=_thread_config(run_id))
         _print_run_outcome(run_id, final_state)
+        tracer.emit("run_end", status=str(final_state.get("status")))
     finally:
         # build_graph() laisse la connexion SQLite du checkpointer ouverte
         # par conception (voir sa docstring) : sans cette fermeture, le
@@ -201,12 +206,16 @@ async def _resume_async(run_id: str, project: str) -> None:
             console.print(f"[yellow]Run {run_id} n'est pas en attente de validation.[/yellow]")
             return
 
+        tracer = RunTracer.for_run(config, run_id)
+        tracer.emit("run_start", command="resume", project=project)
+
         await graph.aupdate_state(
             thread_config,
             {"status": RunStatus.IN_PROGRESS, "awaiting_human_validation": False},
         )
         final_state = await graph.ainvoke(None, config=thread_config)
         _print_run_outcome(run_id, final_state)
+        tracer.emit("run_end", status=str(final_state.get("status")))
     finally:
         # Voir le commentaire équivalent dans _run_async.
         await graph.checkpointer.conn.close()
@@ -282,8 +291,12 @@ async def _retry_async(run_id: str, project: str) -> None:
             console.print("[yellow]Retry annulé.[/yellow]")
             return
 
+        tracer = RunTracer.for_run(config, run_id)
+        tracer.emit("run_start", command="retry", project=project)
+
         final_state = await graph.ainvoke(None, config=thread_config)
         _print_run_outcome(run_id, final_state)
+        tracer.emit("run_end", status=str(final_state.get("status")))
     finally:
         # Voir le commentaire équivalent dans _run_async.
         await graph.checkpointer.conn.close()

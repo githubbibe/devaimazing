@@ -1,7 +1,7 @@
 # Feuille de route - Implémentation du runtime devaimazing
 
-**Dernière mise à jour** : 2026-07-15 (backlog : visibilité sur l'avancement
-d'un run et sur le texte brut généré par les agents)
+**Dernière mise à jour** : 2026-07-15 (traçabilité d'exécution — trace.jsonl
+par run, livrée)
 
 ## Backlog (2026-07-15, pas encore cadré) : visibilité sur l'avancement d'un
 run et sur le texte brut généré
@@ -1362,4 +1362,43 @@ Implémentation estimée : un module tools/tracer.py (classe RunTracer, méthode
 
 Lien avec le chantier précédent : le structured output (côté Ollama, implémenté) réduit la fréquence des erreurs de parsing mais ne les élimine pas (le verdict des recherches du 2026-07-11 dit explicitement "pas supposé à 100%"). Le tracer capture les cas résiduels et donne le contexte pour diagnostiquer tout autre type d'échec (retry silencieux, fichier référencé introuvable, état inattendu).
 
-Statut : non commencé. Priorité à évaluer par rapport au chantier Claude Code CLI (--json-schema pour PM/Architecte).
+**Livré (2026-07-15).** `tools/tracer.py` (nouveau, ~120 lignes) : `RunTracer` (construit via
+`RunTracer.for_run(config, run_id)`, écrit `specs/<specs_dir>/<run_id>/trace.jsonl` en append
+JSONL, une ouverture/fermeture de fichier par `emit()` — pas de handle tenu ouvert entre deux
+appels, cohérent avec le fait que les nodes sont stateless, ADR 0001) et `AgentTracer` (vue
+liée à un `(agent, phase)`, retournée par `RunTracer.for_agent`, passée aux tools pour qu'ils
+n'aient pas à connaître le contexte du node appelant). Écart volontaire par rapport à la
+proposition initiale : pas d'injection via `StudioState` (aurait fallu l'exclure de la
+sérialisation msgpack du checkpointer LangGraph, voir la section Checkpointer plus haut dans ce
+fichier) — chaque node reconstruit son `RunTracer` à partir de `config` + `state.run_id`, même
+pattern que `StudioConfig.from_env()` déjà répété dans chaque `nodes/*.py`.
+
+Les 6 points d'instrumentation prévus sont câblés, avec un paramètre `tracer` optionnel
+(`None` par défaut, donc rétrocompatible avec tout appelant existant) :
+- `tools/claude_code.py::run_claude_code` : `llm_call_start`/`llm_call_end` (tokens, durée),
+  `warning` (refus d'outil récupéré), `error` (timeout, code non nul, JSON invalide, refus
+  fatal).
+- `tools/ollama.py::run_ollama` : idem + `retry` à chaque tentative infructueuse avant nouvel
+  essai (les retries étaient jusqu'ici invisibles, constat d'audit initial).
+- `tools/filesystem.py` : `read_card`/`write_card` (`card_read`/`card_written`), `read_files`
+  (`referenced_files_resolved` avec `requested`/`found`, `error` avec `missing` — remplace
+  l'intention initiale sur `read_referenced_files`, déjà supprimée par le chantier "Fiches PM
+  en sortie structurée" du 2026-07-14, cf. plus haut dans ce fichier), `parse_agent_file_blocks`
+  et `parse_structured_file_output` (`parse_output`, `outcome` success/error,
+  `raw_output_head` tronqué à 500 caractères en cas d'erreur).
+- `tools/git.py::commit_as_agent` : `commit` (hash, `git_identity`, fichiers).
+- Les 7 `nodes/*.py` : `node_enter` (fiche lue) et `node_exit` (status, fichiers produits) à
+  chaque branche de retour ; PM et Architecte (plusieurs activations/phases par node) et Closer
+  (Python pur, pas de LLM) instrumentés aussi.
+- `cli.py` : `run_start`/`run_end` en bracket autour de `graph.ainvoke` dans `_run_async`,
+  `_resume_async`, `_retry_async` (statut final inclus dans `run_end`) — pas dans `run-agent`
+  (outil de test isolé, hors périmètre de ce chantier).
+
+38 tests ajoutés (`test_tracer.py` : 10 tests unitaires du module ; le reste réparti dans
+`test_claude_code.py`, `test_ollama.py`, `test_git.py`, `test_filesystem.py` — événements émis
+sur les chemins succès/erreur/retry — et un test d'intégration dans `test_backend_node.py`
+vérifiant qu'un run réel de node écrit bien `node_enter`/`node_exit` sur disque). Tous les
+tests de nodes existants dont les fixtures mockaient `read_card`/`write_card`/
+`commit_as_agent` avec une signature positionnelle stricte ont dû accepter un paramètre
+`tracer=None` supplémentaire (mécanique, aucun changement de comportement testé).
+**284/284 au total sur `runtime/tests/`** (était 256).

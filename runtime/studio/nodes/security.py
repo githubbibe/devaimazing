@@ -28,6 +28,7 @@ from studio.state import AgentResult, Phase, RunStatus, StudioState
 from studio.tools.claude_code import run_claude_code
 from studio.tools.filesystem import inject_skills, read_card, write_card
 from studio.tools.git import commit_as_agent
+from studio.tools.tracer import RunTracer
 
 _DEVAIMAZING_ROOT = Path(__file__).resolve().parents[3]
 _PROMPT_PATH = _DEVAIMAZING_ROOT / "prompts" / "security.md"
@@ -176,9 +177,12 @@ async def run(state: StudioState) -> StudioState:
     """
     config = StudioConfig.from_env()
     role = state.agent_sequence[state.current_agent_index]
+    tracer = RunTracer.for_run(config, state.run_id).for_agent(role, state.current_phase)
+    tracer.emit("node_enter", card=state.agent_cards.get(role))
 
     if max_iterations_exceeded(state, config, role):
         max_iterations = config.get("agents", {}).get("max_iterations", 3)
+        tracer.emit("node_exit", status="failed", reason="max_iterations_exceeded")
         return {
             "status": RunStatus.FAILED,
             "requires_manual_intervention": True,
@@ -193,7 +197,7 @@ async def run(state: StudioState) -> StudioState:
         }
 
     card_path = config.repo_path / state.agent_cards[role]
-    card_content = await read_card(card_path)
+    card_content = await read_card(card_path, tracer=tracer)
 
     sast_config = config.get("sast", {})
     sast_reports: dict[str, Any] = {}
@@ -228,11 +232,12 @@ async def run(state: StudioState) -> StudioState:
         cwd=config.repo_path,
         timeout_seconds=claude_code_config.get("timeout_seconds", 300),
         output_format=claude_code_config.get("output_format", "json"),
+        tracer=tracer,
     )
 
     specs_dir = config.get("structure", {}).get("specs_dir", "specs/")
     report_path = config.repo_path / specs_dir / state.run_id / "security-report.md"
-    await write_card(report_path, result["content"])
+    await write_card(report_path, result["content"], tracer=tracer)
 
     report_relative = str(Path(specs_dir) / state.run_id / "security-report.md")
     await commit_as_agent(
@@ -240,6 +245,7 @@ async def run(state: StudioState) -> StudioState:
         agent="security",
         message=f"docs: security report ({'blocking findings' if has_blocking_findings else 'clean'})",
         files=[report_relative],
+        tracer=tracer,
     )
 
     usage = result.get("usage", {})
@@ -266,7 +272,9 @@ async def run(state: StudioState) -> StudioState:
     if has_blocking_findings:
         updates["status"] = RunStatus.WAITING_HUMAN
         updates["awaiting_human_validation"] = True
+        tracer.emit("node_exit", status="waiting_human", output_files=[report_relative])
     else:
         updates["current_phase"] = Phase.AUDIT_AVAL
+        tracer.emit("node_exit", status="success", output_files=[report_relative])
 
     return updates

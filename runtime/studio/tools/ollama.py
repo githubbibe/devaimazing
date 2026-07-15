@@ -12,6 +12,8 @@ from typing import Optional
 import httpx
 from ollama import AsyncClient, RequestError, ResponseError
 
+from studio.tools.tracer import AgentTracer
+
 # Alignés sur la section `ollama` de config/studio.yml (max_retries: 3) et sur le
 # pattern de backoff exponentiel de skills/retry-patterns.md.
 MAX_ATTEMPTS = 3
@@ -62,6 +64,7 @@ async def run_ollama(
     base_url: str = "http://localhost:11434",
     timeout_seconds: int = 120,
     response_format: Optional[dict] = None,
+    tracer: Optional[AgentTracer] = None,
 ) -> dict:
     """
     Appelle le modèle Ollama local.
@@ -78,6 +81,11 @@ async def run_ollama(
             JSON conforme au schéma, à parser (voir
             tools.filesystem.parse_structured_file_output). Si `None` (défaut),
             sortie texte libre inchangée.
+        tracer: AgentTracer optionnel (voir tools.tracer) — émet
+            llm_call_start/llm_call_end autour de l'appel, un événement
+            retry à chaque tentative infructueuse avant nouvel essai
+            (jusqu'ici invisibles, voir docs/roadmap.md), error si toutes
+            les tentatives échouent. `None` (défaut) : aucune trace émise.
 
     Returns:
         Dictionnaire avec : content (texte généré, JSON si response_format
@@ -112,6 +120,12 @@ async def run_ollama(
         {"role": "user", "content": user_prompt},
     ]
 
+    if tracer is not None:
+        tracer.emit(
+            "llm_call_start", backend="ollama", model=model,
+            prompt_chars=len(system_prompt) + len(user_prompt),
+        )
+
     last_error: Optional[Exception] = None
     for attempt in range(MAX_ATTEMPTS):
         started_at = time.monotonic()
@@ -121,12 +135,22 @@ async def run_ollama(
                     model=model, messages=messages, format=response_format, stream=False,
                 )
         except httpx.TimeoutException as exc:
+            if tracer is not None:
+                tracer.emit(
+                    "error", backend="ollama", model=model,
+                    message=f"timeout après {timeout_seconds}s",
+                )
             raise TimeoutError(
                 f"Ollama n'a pas répondu dans le délai imparti ({timeout_seconds}s) "
                 f"pour le modèle {model!r}"
             ) from exc
         except ResponseError as exc:
             if exc.status_code in NON_RETRYABLE_STATUS_CODES:
+                if tracer is not None:
+                    tracer.emit(
+                        "error", backend="ollama", model=model,
+                        message=f"requête rejetée (code {exc.status_code}) : {exc.error}",
+                    )
                 raise ExternalServiceError(
                     f"Ollama a rejeté la requête (code {exc.status_code}) : {exc.error}"
                 ) from exc
@@ -135,6 +159,13 @@ async def run_ollama(
             last_error = exc
         else:
             duration_ms = int((time.monotonic() - started_at) * 1000)
+            if tracer is not None:
+                tracer.emit(
+                    "llm_call_end", backend="ollama", model=model,
+                    tokens_prompt=response.prompt_eval_count or 0,
+                    tokens_completion=response.eval_count or 0,
+                    duration_ms=duration_ms,
+                )
             return {
                 "content": response.message.content or "",
                 "tokens_prompt": response.prompt_eval_count or 0,
@@ -143,8 +174,18 @@ async def run_ollama(
             }
 
         if attempt < MAX_ATTEMPTS - 1:
+            if tracer is not None:
+                tracer.emit(
+                    "retry", backend="ollama", model=model,
+                    attempt=attempt + 1, max_attempts=MAX_ATTEMPTS, error=str(last_error),
+                )
             await asyncio.sleep(BASE_DELAY_SECONDS * (2 ** attempt))
 
+    if tracer is not None:
+        tracer.emit(
+            "error", backend="ollama", model=model,
+            message=f"injoignable après {MAX_ATTEMPTS} tentatives",
+        )
     raise ExternalServiceError(
         f"Ollama injoignable après {MAX_ATTEMPTS} tentatives (modèle {model!r}, {base_url})"
     ) from last_error

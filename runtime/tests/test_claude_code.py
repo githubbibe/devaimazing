@@ -13,6 +13,11 @@ import pytest
 
 import studio.tools.claude_code as claude_code_tool
 from studio.tools.claude_code import run_claude_code
+from studio.tools.tracer import RunTracer
+
+
+def _events(trace_path: Path) -> list[dict]:
+    return [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
 
 
 class _FakeProcess:
@@ -216,3 +221,75 @@ async def test_run_claude_code_timeout_kills_process_and_raises(
         )
 
     assert fake_process.killed is True
+
+
+async def test_run_claude_code_success_emits_llm_call_start_and_end(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    fake_process = _FakeProcess(stdout=_success_payload(), stderr=b"", returncode=0)
+    monkeypatch.setattr(
+        claude_code_tool.asyncio, "create_subprocess_exec", _fake_subprocess_exec(fake_process)
+    )
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("pm", "FICHES")
+
+    await run_claude_code(prompt="x", model="claude-opus-4-8", cwd=tmp_path, tracer=tracer)
+
+    events = _events(tracer._tracer.trace_path)
+    assert [e["event"] for e in events] == ["llm_call_start", "llm_call_end"]
+    assert events[0]["backend"] == "claude_code"
+    assert events[1]["tokens_prompt"] == 10
+    assert events[1]["tokens_completion"] == 71
+    assert all(e["agent"] == "pm" and e["phase"] == "FICHES" for e in events)
+
+
+async def test_run_claude_code_timeout_emits_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    fake_process = _FakeProcess(stdout=b"", stderr=b"", returncode=0, hang=True)
+    monkeypatch.setattr(
+        claude_code_tool.asyncio, "create_subprocess_exec", _fake_subprocess_exec(fake_process)
+    )
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("pm", "FICHES")
+
+    with pytest.raises(TimeoutError):
+        await run_claude_code(
+            prompt="x", model="claude-opus-4-8", cwd=tmp_path, timeout_seconds=0.05, tracer=tracer,
+        )
+
+    events = _events(tracer._tracer.trace_path)
+    assert events[-1]["event"] == "error"
+
+
+async def test_run_claude_code_nonzero_exit_emits_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    fake_process = _FakeProcess(stdout=b"", stderr=b"erreur fatale", returncode=1)
+    monkeypatch.setattr(
+        claude_code_tool.asyncio, "create_subprocess_exec", _fake_subprocess_exec(fake_process)
+    )
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("pm", "FICHES")
+
+    with pytest.raises(RuntimeError):
+        await run_claude_code(prompt="x", model="claude-opus-4-8", cwd=tmp_path, tracer=tracer)
+
+    events = _events(tracer._tracer.trace_path)
+    assert events[-1]["event"] == "error"
+    assert "erreur fatale" in events[-1]["message"]
+
+
+async def test_run_claude_code_permission_denial_with_content_emits_warning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    fake_process = _FakeProcess(
+        stdout=_success_payload(permission_denials=[
+            {"tool_name": "Write", "tool_use_id": "t1", "tool_input": {}}
+        ]),
+        stderr=b"", returncode=0,
+    )
+    monkeypatch.setattr(
+        claude_code_tool.asyncio, "create_subprocess_exec", _fake_subprocess_exec(fake_process)
+    )
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("pm", "FICHES")
+
+    await run_claude_code(prompt="x", model="claude-opus-4-8", cwd=tmp_path, tracer=tracer)
+
+    events = _events(tracer._tracer.trace_path)
+    assert "warning" in [e["event"] for e in events]

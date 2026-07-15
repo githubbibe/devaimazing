@@ -71,7 +71,7 @@ def _fake_claude_result(content="# Rapport sécurité\n\nAucun problème."):
 async def test_security_no_blocking_findings_advances_to_audit_aval(
     monkeypatch: pytest.MonkeyPatch, repo: Path
 ):
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche secu"
 
     async def fake_run_sast_tool(command, target_dir):
@@ -82,12 +82,12 @@ async def test_security_no_blocking_findings_advances_to_audit_aval(
 
     written = {}
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         written[str(path)] = content
 
     committed = {}
 
-    async def fake_commit_as_agent(repo_path, agent, message, files):
+    async def fake_commit_as_agent(repo_path, agent, message, files, tracer=None):
         committed.update(agent=agent, message=message, files=files)
         return "abc123"
 
@@ -110,7 +110,7 @@ async def test_security_no_blocking_findings_advances_to_audit_aval(
 async def test_security_high_severity_finding_waits_for_human(
     monkeypatch: pytest.MonkeyPatch, repo: Path
 ):
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche secu"
 
     async def fake_run_sast_tool(command, target_dir):
@@ -121,7 +121,7 @@ async def test_security_high_severity_finding_waits_for_human(
     async def fake_run_claude_code(**kwargs):
         return _fake_claude_result("# Rapport sécurité\n\nProblème critique trouvé.")
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
     async def fake_commit_as_agent(**kwargs):
@@ -145,7 +145,7 @@ async def test_security_high_severity_finding_waits_for_human(
 async def test_security_semgrep_error_severity_normalizes_to_high(
     monkeypatch: pytest.MonkeyPatch, repo: Path
 ):
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche secu"
 
     async def fake_run_sast_tool(command, target_dir):
@@ -156,7 +156,7 @@ async def test_security_semgrep_error_severity_normalizes_to_high(
     async def fake_run_claude_code(**kwargs):
         return _fake_claude_result()
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
     async def fake_commit_as_agent(**kwargs):
@@ -196,7 +196,7 @@ async def test_security_max_iterations_exceeded_fails_without_calling_claude_cod
 
 
 async def test_security_records_metrics_on_success(monkeypatch: pytest.MonkeyPatch, repo: Path, tmp_path: Path):
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche secu"
 
     async def fake_run_sast_tool(command, target_dir):
@@ -205,7 +205,7 @@ async def test_security_records_metrics_on_success(monkeypatch: pytest.MonkeyPat
     async def fake_run_claude_code(**kwargs):
         return _fake_claude_result()
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
     async def fake_commit_as_agent(**kwargs):

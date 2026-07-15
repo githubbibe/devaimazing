@@ -8,6 +8,7 @@ binaire `gh` et créerait un repo GitHub réel — sous-process scripté à la
 place (même pattern que test_claude_code.py).
 """
 
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -27,6 +28,7 @@ from studio.tools.git import (
     push_branch,
     slugify_feature_name,
 )
+from studio.tools.tracer import RunTracer
 
 
 def _git(repo_path: Path, *args: str) -> str:
@@ -99,6 +101,27 @@ async def test_commit_as_agent_creates_commit_with_identity(repo: Path):
     name, email = AGENT_GIT_IDENTITIES["back"]
     assert author == f"{name} <{email}>"
     assert _git(repo, "log", "-1", "--format=%s") == "feat: add login endpoint stub"
+
+
+async def test_commit_as_agent_emits_commit_event(repo: Path, tmp_path: Path):
+    (repo / "backend").mkdir()
+    (repo / "backend" / "endpoint.py").write_text("# stub\n", encoding="utf-8")
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
+
+    commit_hash = await commit_as_agent(
+        repo_path=repo,
+        agent="back",
+        message="feat: add login endpoint stub",
+        files=["backend/endpoint.py"],
+        tracer=tracer,
+    )
+
+    events = [json.loads(l) for l in tracer._tracer.trace_path.read_text(encoding="utf-8").splitlines()]
+    assert len(events) == 1
+    assert events[0]["event"] == "commit"
+    assert events[0]["hash"] == commit_hash
+    assert events[0]["git_identity"] == "back"
+    assert events[0]["files"] == ["backend/endpoint.py"]
 
 
 async def test_commit_as_agent_unknown_agent_raises(repo: Path):

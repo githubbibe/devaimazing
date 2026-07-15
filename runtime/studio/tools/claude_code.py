@@ -11,6 +11,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from studio.tools.tracer import AgentTracer
+
 _logger = logging.getLogger(__name__)
 
 
@@ -21,6 +23,7 @@ async def run_claude_code(
     timeout_seconds: int = 300,
     output_format: str = "json",
     response_schema: Optional[dict] = None,
+    tracer: Optional[AgentTracer] = None,
 ) -> dict:
     """
     Lance Claude Code CLI en sous-process.
@@ -41,6 +44,10 @@ async def run_claude_code(
             un canal structuré parallèle au texte prose de `content` — ne
             remplace pas le contrat de sortie textuel existant. `None` (par
             défaut) : pas de flag ajouté, comportement inchangé.
+        tracer: AgentTracer optionnel (voir tools.tracer) — émet
+            llm_call_start/llm_call_end autour de l'appel, warning sur un
+            refus d'outil non fatal, error sur timeout/échec/refus fatal.
+            `None` (défaut) : aucune trace émise, comportement inchangé.
 
     Returns:
         Dictionnaire avec les champs : content, usage (tokens), duration_ms,
@@ -97,6 +104,9 @@ async def run_claude_code(
     if response_schema is not None:
         command += ["--json-schema", json.dumps(response_schema)]
 
+    if tracer is not None:
+        tracer.emit("llm_call_start", backend="claude_code", model=model, prompt_chars=len(prompt))
+
     process = await asyncio.create_subprocess_exec(
         *command,
         cwd=str(cwd),
@@ -113,44 +123,76 @@ async def run_claude_code(
     except asyncio.TimeoutError as exc:
         process.kill()
         await process.wait()
+        if tracer is not None:
+            tracer.emit(
+                "error", backend="claude_code", model=model,
+                message=f"timeout après {timeout_seconds}s",
+            )
         raise TimeoutError(
             f"Claude Code CLI a dépassé le délai imparti ({timeout_seconds}s) "
             f"pour le modèle {model!r}"
         ) from exc
 
     if process.returncode != 0:
-        raise RuntimeError(
+        message = (
             f"Claude Code CLI a échoué (code {process.returncode}) : "
             f"{stderr.decode('utf-8', errors='replace').strip()}"
         )
+        if tracer is not None:
+            tracer.emit("error", backend="claude_code", model=model, message=message)
+        raise RuntimeError(message)
 
     raw_output = stdout.decode("utf-8", errors="replace")
     try:
         payload = json.loads(raw_output)
     except json.JSONDecodeError as exc:
+        if tracer is not None:
+            tracer.emit(
+                "error", backend="claude_code", model=model,
+                message=f"sortie JSON invalide : {exc}",
+                raw_output_head=raw_output[:500],
+            )
         raise ValueError(f"Sortie JSON invalide de Claude Code CLI : {exc}") from exc
 
     if payload.get("is_error"):
-        raise RuntimeError(
-            f"Claude Code CLI a retourné une erreur : {payload.get('result') or payload}"
-        )
+        message = f"Claude Code CLI a retourné une erreur : {payload.get('result') or payload}"
+        if tracer is not None:
+            tracer.emit("error", backend="claude_code", model=model, message=message)
+        raise RuntimeError(message)
 
     content = payload.get("result", "")
     denials = payload.get("permission_denials") or []
     if denials:
         denied_tools = ", ".join(sorted({d.get("tool_name", "?") for d in denials}))
         if not content.strip():
-            raise RuntimeError(
+            message = (
                 f"Claude Code CLI s'est vu refuser l'accès à un outil ({denied_tools}) "
                 f"et n'a produit aucun contenu exploitable — le design actuel des "
                 f"agents devaimazing ne doit jamais avoir besoin d'écrire via Claude "
                 f"Code (voir Notes de run_claude_code)."
             )
+            if tracer is not None:
+                tracer.emit("error", backend="claude_code", model=model, message=message)
+            raise RuntimeError(message)
         _logger.warning(
             "Claude Code CLI a tenté d'utiliser un outil refusé (%s) mais a quand "
             "même produit un contenu exploitable — refus non fatal (voir Notes de "
             "run_claude_code).",
             denied_tools,
+        )
+        if tracer is not None:
+            tracer.emit(
+                "warning", backend="claude_code", model=model,
+                message=f"outil(s) refusé(s) mais contenu exploitable : {denied_tools}",
+            )
+
+    if tracer is not None:
+        usage = payload.get("usage", {})
+        tracer.emit(
+            "llm_call_end", backend="claude_code", model=model,
+            tokens_prompt=usage.get("input_tokens", 0),
+            tokens_completion=usage.get("output_tokens", 0),
+            duration_ms=payload.get("duration_ms", 0),
         )
 
     return {

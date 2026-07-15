@@ -74,16 +74,16 @@ async def test_backend_stub_phase_writes_files_and_commits(monkeypatch: pytest.M
     written = {}
     committed = {}
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche back"
 
     async def fake_run_ollama(**kwargs):
         return _fake_ollama_result(FILE_OUTPUT)
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         written[str(path)] = content
 
-    async def fake_commit_as_agent(repo_path, agent, message, files):
+    async def fake_commit_as_agent(repo_path, agent, message, files, tracer=None):
         committed.update(repo_path=repo_path, agent=agent, message=message, files=files)
         return "abc123"
 
@@ -120,14 +120,14 @@ async def test_backend_stub_phase_writes_files_and_commits(monkeypatch: pytest.M
 async def test_backend_calls_ollama_with_structured_output_schema(monkeypatch: pytest.MonkeyPatch):
     captured = {}
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche back"
 
     async def fake_run_ollama(**kwargs):
         captured["response_format"] = kwargs.get("response_format")
         return _fake_ollama_result(FILE_OUTPUT)
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
     async def fake_commit_as_agent(**kwargs):
@@ -160,7 +160,7 @@ async def test_backend_includes_existing_file_content_in_prompt(
         "from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8"
     )
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "Modifier `backend/main.py` pour ajouter un handler."
 
     captured = {}
@@ -169,7 +169,7 @@ async def test_backend_includes_existing_file_content_in_prompt(
         captured["user_prompt"] = kwargs["user_prompt"]
         return _fake_ollama_result(FILE_OUTPUT)
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
     async def fake_commit_as_agent(**kwargs):
@@ -198,13 +198,13 @@ async def test_backend_includes_existing_file_content_in_prompt(
 
 
 async def test_backend_last_agent_of_stubs_advances_phase(monkeypatch: pytest.MonkeyPatch):
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche back"
 
     async def fake_run_ollama(**kwargs):
         return _fake_ollama_result(FILE_OUTPUT)
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
     async def fake_commit_as_agent(**kwargs):
@@ -234,7 +234,7 @@ async def test_backend_last_agent_of_stubs_advances_phase(monkeypatch: pytest.Mo
 async def test_backend_tu_role_uses_test_commit_prefix_and_extra_skill(monkeypatch: pytest.MonkeyPatch):
     captured_skills = {}
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche back-tu"
 
     async def fake_inject_skills(base_prompt, skill_names, skills_dir):
@@ -244,12 +244,12 @@ async def test_backend_tu_role_uses_test_commit_prefix_and_extra_skill(monkeypat
     async def fake_run_ollama(**kwargs):
         return _fake_ollama_result(FILE_OUTPUT)
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
     committed = {}
 
-    async def fake_commit_as_agent(repo_path, agent, message, files):
+    async def fake_commit_as_agent(repo_path, agent, message, files, tracer=None):
         committed.update(agent=agent, message=message)
         return "abc123"
 
@@ -280,7 +280,7 @@ async def test_backend_blocked_reason_appends_feedback_and_waits_for_human(
 ):
     feedback_calls = []
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche back"
 
     async def fake_run_ollama(**kwargs):
@@ -323,7 +323,7 @@ async def test_backend_malformed_json_output_appends_feedback_and_waits_for_huma
     """
     feedback_calls = []
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche back"
 
     async def fake_run_ollama(**kwargs):
@@ -367,7 +367,7 @@ async def test_backend_absolute_path_output_appends_feedback_and_waits_for_human
     """
     feedback_calls = []
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche back"
 
     async def fake_run_ollama(**kwargs):
@@ -428,13 +428,13 @@ async def test_backend_max_iterations_exceeded_fails_without_calling_ollama(
 
 
 async def test_backend_records_metrics_on_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche back"
 
     async def fake_run_ollama(**kwargs):
         return _fake_ollama_result(FILE_OUTPUT)
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
     async def fake_commit_as_agent(**kwargs):
@@ -460,3 +460,44 @@ async def test_backend_records_metrics_on_success(monkeypatch: pytest.MonkeyPatc
     collector = MetricsCollector(tmp_path / "metrics.db")
     summary = await collector.get_run_summary("run-042")
     assert summary["by_agent"]["back"]["task_count"] == 1
+
+
+async def test_backend_writes_trace_events_for_run(
+    monkeypatch: pytest.MonkeyPatch, project_repo: Path
+):
+    async def fake_read_card(path, tracer=None):
+        return "fiche back"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(FILE_OUTPUT)
+
+    async def fake_write_card(path, content, tracer=None):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(backend_node, "commit_as_agent", fake_commit_as_agent)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
+    )
+
+    await backend_node.run(state)
+
+    import json
+    trace_path = project_repo / "specs" / "run-042" / "trace.jsonl"
+    events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    assert events[0]["event"] == "node_enter"
+    assert events[0]["agent"] == "back"
+    assert events[0]["phase"] == "STUBS"
+    assert events[-1]["event"] == "node_exit"
+    assert events[-1]["status"] == "success"

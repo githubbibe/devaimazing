@@ -9,6 +9,7 @@ config/studio.yml) ; ce node ne committe plus en bloc.
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import httpx
 
@@ -17,6 +18,7 @@ from studio.metrics import MetricsCollector, record_agent_result
 from studio.state import AgentResult, RunStatus, StudioState
 from studio.tools.filesystem import read_card, write_card
 from studio.tools.git import merge_run_branch
+from studio.tools.tracer import AgentTracer, RunTracer
 
 _DEVAIMAZING_ROOT = Path(__file__).resolve().parents[3]
 _PROJECT_MAP_TEMPLATE_PATH = _DEVAIMAZING_ROOT / "templates" / "project-map.md.template"
@@ -35,7 +37,9 @@ def _insert_table_rows(content: str, section_heading: str, rows: list[str]) -> s
     return content[:line_end] + "\n" + "\n".join(rows) + content[line_end:]
 
 
-async def _update_project_map(config: StudioConfig, state: StudioState) -> None:
+async def _update_project_map(
+    config: StudioConfig, state: StudioState, tracer: Optional[AgentTracer] = None
+) -> None:
     """
     Met à jour project-map.md : une ligne par fichier produit dans la
     section "Carte des fichiers", une ligne de résumé dans "Historique des
@@ -70,7 +74,7 @@ async def _update_project_map(config: StudioConfig, state: StudioState) -> None:
     )
     content = _insert_table_rows(content, "## Historique des runs", [history_row])
 
-    await write_card(project_map_path, content)
+    await write_card(project_map_path, content, tracer=tracer)
 
 
 async def _notify(config: StudioConfig, message: str) -> None:
@@ -149,6 +153,8 @@ async def run(state: StudioState) -> StudioState:
         pour que metrics.db reflète l'intégralité du run, closer compris.
     """
     config = StudioConfig.from_env()
+    tracer = RunTracer.for_run(config, state.run_id).for_agent("closer", state.current_phase)
+    tracer.emit("node_enter", branch_name=state.branch_name)
 
     if state.branch_name is None:
         raise ValueError(
@@ -166,13 +172,14 @@ async def run(state: StudioState) -> StudioState:
             f"⏸ Checkpoint clôture — merge {state.branch_name} vers {base_branch} échoué, "
             f"validation requise",
         )
+        tracer.emit("node_exit", status="waiting_human", reason="merge_failed")
         return {
             "status": RunStatus.WAITING_HUMAN,
             "requires_manual_intervention": True,
             "intervention_reason": f"Merge de {state.branch_name} vers {base_branch} a échoué : {exc}",
         }
 
-    await _update_project_map(config, state)
+    await _update_project_map(config, state, tracer=tracer)
 
     metrics = MetricsCollector(config.metrics_db_path)
     try:
@@ -187,6 +194,7 @@ async def run(state: StudioState) -> StudioState:
 
     agent_result = AgentResult(agent="closer", phase=state.current_phase, status="success")
     await record_agent_result(config, state, agent_result, model="n/a")
+    tracer.emit("node_exit", status="success")
 
     return {
         "agent_results": state.agent_results + [agent_result],

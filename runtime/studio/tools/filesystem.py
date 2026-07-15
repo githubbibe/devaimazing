@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from studio.routing import AGENT_TO_NODE
+from studio.tools.tracer import AgentTracer, RAW_OUTPUT_HEAD_CHARS
 
 FEEDBACK_HEADING = "## Feedback"
 EMPTY_FEEDBACK_MARKER = "_Aucun feedback pour l'instant._"
@@ -111,12 +112,15 @@ def _validate_relative_path(path: str) -> None:
         )
 
 
-async def read_card(card_path: Path) -> str:
+async def read_card(card_path: Path, tracer: Optional[AgentTracer] = None) -> str:
     """
     Lit une fiche .md.
 
     Args:
         card_path: Chemin absolu vers la fiche.
+        tracer: AgentTracer optionnel (voir tools.tracer) — émet
+            "card_read" en cas de succès, "error" si le fichier est
+            introuvable. `None` (défaut) : aucune trace émise.
 
     Returns:
         Contenu de la fiche en texte.
@@ -125,23 +129,33 @@ async def read_card(card_path: Path) -> str:
         FileNotFoundError: Si la fiche n'existe pas.
     """
     if not card_path.is_file():
+        if tracer is not None:
+            tracer.emit("error", event_source="read_card", path=str(card_path))
         raise FileNotFoundError(f"Fiche introuvable : {card_path}")
-    return card_path.read_text(encoding="utf-8")
+    content = card_path.read_text(encoding="utf-8")
+    if tracer is not None:
+        tracer.emit("card_read", path=str(card_path), chars=len(content))
+    return content
 
 
-async def write_card(card_path: Path, content: str) -> None:
+async def write_card(card_path: Path, content: str, tracer: Optional[AgentTracer] = None) -> None:
     """
     Écrit ou écrase une fiche .md.
 
     Args:
         card_path: Chemin absolu vers la fiche.
         content: Contenu Markdown à écrire.
+        tracer: AgentTracer optionnel (voir tools.tracer) — émet
+            "card_written" une fois l'écriture faite. `None` (défaut) :
+            aucune trace émise.
 
     Side effects:
         Crée ou écrase le fichier. Crée les répertoires parents si nécessaire.
     """
     card_path.parent.mkdir(parents=True, exist_ok=True)
     card_path.write_text(content, encoding="utf-8")
+    if tracer is not None:
+        tracer.emit("card_written", path=str(card_path), chars=len(content))
 
 
 async def append_feedback(card_path: Path, agent_source: str, feedback: str) -> None:
@@ -186,7 +200,9 @@ async def append_feedback(card_path: Path, agent_source: str, feedback: str) -> 
     card_path.write_text(new_content, encoding="utf-8")
 
 
-async def read_files(repo_path: Path, paths: list[str]) -> str:
+async def read_files(
+    repo_path: Path, paths: list[str], tracer: Optional[AgentTracer] = None
+) -> str:
     """
     Lit le contenu de fichiers existants du repo cible, chemins donnés
     explicitement (typiquement state.agent_card_metadata[role]
@@ -196,6 +212,11 @@ async def read_files(repo_path: Path, paths: list[str]) -> str:
         repo_path: Racine du repo projet cible.
         paths: Chemins relatifs à lire, dans l'ordre où ils doivent apparaître
             dans le contexte retourné.
+        tracer: AgentTracer optionnel (voir tools.tracer) — émet
+            "referenced_files_resolved" (requested/found) si `paths` est non
+            vide et que tous les chemins sont lus avec succès, "error"
+            (requested/found/missing) si un chemin est introuvable. `None`
+            (défaut) : aucune trace émise.
 
     Returns:
         Contenu concaténé des fichiers, chacun précédé d'un titre indiquant
@@ -226,9 +247,21 @@ async def read_files(repo_path: Path, paths: list[str]) -> str:
         ... )
     """
     parts = []
+    found: list[str] = []
     for relative_path in paths:
-        content = await read_card(repo_path / relative_path)
+        try:
+            content = await read_card(repo_path / relative_path)
+        except FileNotFoundError:
+            if tracer is not None:
+                tracer.emit(
+                    "error", event_source="read_files",
+                    requested=paths, found=found, missing=relative_path,
+                )
+            raise
+        found.append(relative_path)
         parts.append(f"### Contenu actuel de `{relative_path}`\n\n```\n{content}\n```")
+    if tracer is not None and paths:
+        tracer.emit("referenced_files_resolved", requested=paths, found=found)
     return "\n\n".join(parts)
 
 
@@ -360,7 +393,9 @@ async def inject_skills(base_prompt: str, skill_names: list[str], skills_dir: Pa
     return "".join(parts)
 
 
-def parse_agent_file_blocks(text: str, fallback_path: Optional[str] = None) -> dict[str, str]:
+def parse_agent_file_blocks(
+    text: str, fallback_path: Optional[str] = None, tracer: Optional[AgentTracer] = None
+) -> dict[str, str]:
     """
     Extrait les blocs de fichiers du contrat de sortie des agents
     producteurs de code (voir prompts/backend.md, prompts/frontend.md,
@@ -378,6 +413,9 @@ def parse_agent_file_blocks(text: str, fallback_path: Optional[str] = None) -> d
             n'est trouvé, mais que `text` contient un unique bloc de code
             balisé ``` (markdown standard), ce bloc est associé à
             fallback_path plutôt que de lever ValueError (voir Notes).
+        tracer: AgentTracer optionnel (voir tools.tracer) — émet
+            "parse_output" (outcome success/error), avec raw_output_head en
+            cas d'erreur. `None` (défaut) : aucune trace émise.
 
     Returns:
         Mapping chemin relatif -> contenu du fichier, dans l'ordre
@@ -411,6 +449,24 @@ def parse_agent_file_blocks(text: str, fallback_path: Optional[str] = None) -> d
         ... )
         {'backend/a.py': 'print(1)'}
     """
+    try:
+        files = _parse_agent_file_blocks(text, fallback_path)
+    except ValueError:
+        if tracer is not None:
+            tracer.emit(
+                "parse_output", parser="parse_agent_file_blocks", outcome="error",
+                raw_output_head=text[:RAW_OUTPUT_HEAD_CHARS],
+            )
+        raise
+    if tracer is not None:
+        tracer.emit(
+            "parse_output", parser="parse_agent_file_blocks", outcome="success",
+            files=sorted(files),
+        )
+    return files
+
+
+def _parse_agent_file_blocks(text: str, fallback_path: Optional[str]) -> dict[str, str]:
     matches = _FILE_BLOCK_PATTERN.findall(text)
     if matches:
         for path, _content in matches:
@@ -429,7 +485,9 @@ def parse_agent_file_blocks(text: str, fallback_path: Optional[str] = None) -> d
     )
 
 
-def parse_structured_file_output(content: str) -> tuple[dict[str, str], str]:
+def parse_structured_file_output(
+    content: str, tracer: Optional[AgentTracer] = None
+) -> tuple[dict[str, str], str]:
     """
     Parse la sortie structurée d'un agent producteur (Back/Front/Test) appelé
     avec tools.ollama.FILE_OUTPUT_SCHEMA (voir docs/roadmap.md, chantier
@@ -441,6 +499,9 @@ def parse_structured_file_output(content: str) -> tuple[dict[str, str], str]:
         content: Sortie JSON brute générée par l'agent (champ "content" du
             retour de tools.ollama.run_ollama, appelé avec
             response_format=FILE_OUTPUT_SCHEMA).
+        tracer: AgentTracer optionnel (voir tools.tracer) — émet
+            "parse_output" (outcome success/error), avec raw_output_head en
+            cas d'erreur. `None` (défaut) : aucune trace émise.
 
     Returns:
         (files, blocked_reason). `files` : mapping chemin relatif -> contenu
@@ -466,6 +527,24 @@ def parse_structured_file_output(content: str) -> tuple[dict[str, str], str]:
         ... )
         ({'backend/a.py': 'x = 1'}, '')
     """
+    try:
+        files, blocked_reason = _parse_structured_file_output(content)
+    except ValueError:
+        if tracer is not None:
+            tracer.emit(
+                "parse_output", parser="parse_structured_file_output", outcome="error",
+                raw_output_head=content[:RAW_OUTPUT_HEAD_CHARS],
+            )
+        raise
+    if tracer is not None:
+        tracer.emit(
+            "parse_output", parser="parse_structured_file_output", outcome="success",
+            files=sorted(files), blocked=bool(blocked_reason),
+        )
+    return files, blocked_reason
+
+
+def _parse_structured_file_output(content: str) -> tuple[dict[str, str], str]:
     try:
         data = json.loads(content)
     except json.JSONDecodeError as exc:

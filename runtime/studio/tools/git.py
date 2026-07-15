@@ -14,6 +14,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from studio.tools.tracer import AgentTracer
+
 AGENT_GIT_IDENTITIES = {
     "pm":        ("pm-aimazing",        "pm@aimazing.fr"),
     "architect": ("architect-aimazing", "architect@aimazing.fr"),
@@ -153,6 +155,7 @@ async def commit_as_agent(
     agent: str,
     message: str,
     files: list[str],
+    tracer: Optional[AgentTracer] = None,
 ) -> str:
     """
     Crée un commit dans le repo projet au nom d'un agent, à la fin de sa tâche.
@@ -166,6 +169,9 @@ async def commit_as_agent(
         agent: Nom de l'agent (doit être dans AGENT_GIT_IDENTITIES).
         message: Message de commit (format conventional commits).
         files: Liste des fichiers à inclure dans le commit (chemins relatifs au repo).
+        tracer: AgentTracer optionnel (voir tools.tracer) — émet un
+            événement "commit" (hash, identité git, fichiers) une fois le
+            commit créé. `None` (défaut) : aucune trace émise.
 
     Returns:
         Hash du commit créé.
@@ -203,7 +209,10 @@ async def commit_as_agent(
 
     await _run_git(repo_path, "add", "--", *files)
     await _run_git(repo_path, "commit", "-m", message, env=env)
-    return await _run_git(repo_path, "rev-parse", "HEAD")
+    commit_hash = await _run_git(repo_path, "rev-parse", "HEAD")
+    if tracer is not None:
+        tracer.emit("commit", hash=commit_hash, git_identity=agent, files=files)
+    return commit_hash
 
 
 async def merge_run_branch(repo_path: Path, branch_name: str, target_branch: str = "develop") -> str:

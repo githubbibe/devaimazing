@@ -84,13 +84,13 @@ async def test_test_node_no_command_configured_writes_and_advances(
 ):
     _configure_env(tmp_path, repo, monkeypatch, test_command=None)
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche test"
 
     async def fake_run_ollama(**kwargs):
         return _fake_ollama_result(FILE_OUTPUT)
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
     async def fake_commit_as_agent(**kwargs):
@@ -115,14 +115,14 @@ async def test_test_node_calls_ollama_with_structured_output_schema(
     _configure_env(tmp_path, repo, monkeypatch, test_command=None)
     captured = {}
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche test"
 
     async def fake_run_ollama(**kwargs):
         captured["response_format"] = kwargs.get("response_format")
         return _fake_ollama_result(FILE_OUTPUT)
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
     async def fake_commit_as_agent(**kwargs):
@@ -147,7 +147,7 @@ async def test_test_node_includes_existing_file_content_in_prompt(
         "def complete_todo(todo_id: int):\n    ...\n", encoding="utf-8"
     )
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "Écrire un test d'intégration pour le handler dans `backend/main.py`."
 
     captured = {}
@@ -156,7 +156,7 @@ async def test_test_node_includes_existing_file_content_in_prompt(
         captured["user_prompt"] = kwargs["user_prompt"]
         return _fake_ollama_result(FILE_OUTPUT)
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
     async def fake_commit_as_agent(**kwargs):
@@ -178,13 +178,13 @@ async def test_test_node_command_passes_advances_to_securite(
 ):
     _configure_env(tmp_path, repo, monkeypatch, test_command="python3 -c \"exit(0)\"")
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche test"
 
     async def fake_run_ollama(**kwargs):
         return _fake_ollama_result(FILE_OUTPUT)
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
     async def fake_commit_as_agent(**kwargs):
@@ -211,13 +211,13 @@ async def test_test_node_command_fails_appends_feedback_and_waits_for_human(
 
     feedback_calls = []
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche test"
 
     async def fake_run_ollama(**kwargs):
         return _fake_ollama_result(FILE_OUTPUT)
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
     async def fake_commit_as_agent(**kwargs):
@@ -248,7 +248,7 @@ async def test_test_node_blocked_reason_appends_feedback(
 
     feedback_calls = []
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche test"
 
     async def fake_run_ollama(**kwargs):
@@ -300,13 +300,13 @@ async def test_test_node_records_metrics_on_success(
 ):
     _configure_env(tmp_path, repo, monkeypatch, test_command=None)
 
-    async def fake_read_card(path):
+    async def fake_read_card(path, tracer=None):
         return "fiche test"
 
     async def fake_run_ollama(**kwargs):
         return _fake_ollama_result(FILE_OUTPUT)
 
-    async def fake_write_card(path, content):
+    async def fake_write_card(path, content, tracer=None):
         pass
 
     async def fake_commit_as_agent(**kwargs):

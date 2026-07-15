@@ -74,7 +74,7 @@ async def test_audit_amont_writes_brief_and_advances_to_fiches(monkeypatch: pyte
     async def fake_run_claude_code(**kwargs):
         return _fake_claude_result("# Brief architectural\n\nContenu du brief.")
 
-    async def fake_commit_as_agent(repo_path, agent, message, files):
+    async def fake_commit_as_agent(repo_path, agent, message, files, tracer=None):
         committed.update(agent=agent, message=message, files=files)
         return "abc123"
 
@@ -196,7 +196,7 @@ async def test_audit_aval_writes_multiple_files_and_advances_to_cloture(
     async def fake_run_claude_code(**kwargs):
         return _fake_claude_result(content)
 
-    async def fake_commit_as_agent(repo_path, agent, message, files):
+    async def fake_commit_as_agent(repo_path, agent, message, files, tracer=None):
         committed.update(agent=agent, files=files)
         return "abc123"
 
