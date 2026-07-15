@@ -1,7 +1,40 @@
 # Feuille de route - Implémentation du runtime devaimazing
 
-**Dernière mise à jour** : 2026-07-15 (checkpointer LangGraph : types
-studio.state déclarés dans allowed_msgpack_modules, warning résolu)
+**Dernière mise à jour** : 2026-07-15 (premier run réel de bout en bout,
+`run-20260714-205712` projet `todo-list` — mis en pause volontairement à la
+phase Stubs, voir section ci-dessous)
+
+## Premier run réel de bout en bout (2026-07-15) : run-20260714-205712,
+projet `todo-list` — mis en pause volontairement
+
+**Bilan** : premier test complet du pipeline sur un projet cible créé de
+zéro (`devaimazing new-project todo-list`, stack FastAPI/React/SQLite). A
+permis de trouver et corriger 3 bugs réels du runtime (voir les 3 sections
+ci-dessous, toutes du 2026-07-15) : dégradation gracieuse de PM phase Fiches,
+scission en deux appels métadonnées/prose, tolérance de existing_files_to_read
+aux fichiers d'un agent antérieur. Phase 1 (cadrage), phase 2 (audit amont),
+phase 3 (fiches) et le début de la phase 4 (stubs, agent Back) ont réussi ;
+`back` a committé ses stubs (`d8d956b`, branche `studio/todo-list-01a64`).
+
+**État où le run est laissé** : bloqué sur `back-tu` (tests unitaires,
+`qwen2.5:7b-instruct` local sur cette machine sans GPU) — l'agent signale à
+deux reprises un `blocked_reason` (« ajouter pytest/httpx à
+backend/requirements.txt ») **factuellement faux** : ce fichier contient déjà
+ces deux dépendances depuis le premier commit de `back`, et fait bien partie
+du `existing_files_to_read` de `back-tu` (donc son contenu réel est fourni
+dans le prompt). Pas un bug devaimazing identifié — limite de fiabilité du
+modèle local sur cette machine (cohérent avec la note d'environnement du
+2026-07-14 : `qwen2.5:7b-instruct` tourne à ~5 tokens/s sans GPU ici). Un
+3ᵉ échec identique ferait basculer l'agent en `RunStatus.FAILED`
+(`agents.max_iterations=3`).
+
+**Décision utilisateur (2026-07-15)** : arrêt volontaire ici pour ce premier
+test — pas d'investigation plus poussée du modèle local pour l'instant. Pour
+reprendre plus tard : `devaimazing retry run-20260714-205712 --project
+todo-list` (répondra probablement `FAILED` si le 3ᵉ essai échoue pareil —
+dans ce cas, il faudra soit éditer manuellement `back-tu.md`/le repo cible
+pour débloquer, soit changer `models.agents_local` pour ce projet, voir
+`config/projects/todo-list.yml`).
 
 ## Checkpointer LangGraph (2026-07-15) : types studio.state déclarés dans
 allowed_msgpack_modules
