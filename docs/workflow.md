@@ -206,9 +206,9 @@ Les commits ont déjà été réalisés au fil des phases 4 à 9 (un commit par 
 d'agent terminée). La phase 10 ne committe plus en bloc. Elle se limite à :
 
 ```python
-# Pseudo-code de la phase 10
-pm.update_project_map(run)
-pm.update_run_history(run)
+# Pseudo-code de la phase 10 (nodes/closer.py, distinct du node PM)
+closer.update_project_map(run)
+closer.update_run_history(run)
 git.merge_branch_to_develop(run.branch_name)  # après validation finale
 notify_success(f"✅ {run.feature_name} terminé")
 metrics.finalize(run)
