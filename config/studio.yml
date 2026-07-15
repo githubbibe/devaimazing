@@ -10,7 +10,7 @@ models:
 # Ollama
 ollama:
   base_url: http://localhost:11434
-  timeout_seconds: 120
+  timeout_seconds: 600
   max_retries: 3
 
 # Claude Code CLI
