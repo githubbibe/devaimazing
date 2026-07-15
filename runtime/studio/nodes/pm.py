@@ -22,6 +22,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from rich.console import Console
+
 from studio.config import StudioConfig
 from studio.metrics import record_agent_result
 from studio.routing import agent_iteration_count, max_iterations_exceeded, should_checkpoint
@@ -46,6 +48,14 @@ _FICHE_VALIDEE_PATTERN = re.compile(r"FICHE_VALIDEE:\s*\n(.*)", re.DOTALL)
 _FEATURE_NAME_PATTERN = re.compile(r"\*\*Nom de la feature\*\*\s*:\s*(.+)")
 
 _AFFIRMATIVE_REPLIES = {"oui", "o", "yes", "y"}
+
+# Console dédiée au dialogue de cadrage (phase 1) — appels lents (Opus), sans
+# retour visuel entre deux tours autrement (voir docs/roadmap.md, remontée
+# utilisateur 2026-07-15) : chaque tour est visuellement délimité par
+# _TURN_SEPARATOR, la question du PM et la réponse de l'utilisateur affichées
+# dans des couleurs distinctes pour ne pas se perdre en scrollant en arrière.
+_cadrage_console = Console()
+_TURN_SEPARATOR = "-" * 60
 
 
 def _specs_dir(config: StudioConfig) -> str:
@@ -125,8 +135,11 @@ async def _run_cadrage(state: StudioState, config: StudioConfig) -> dict:
         fiche_match = _FICHE_VALIDEE_PATTERN.search(content)
         if fiche_match:
             draft = fiche_match.group(1).strip()
-            print(f"\n{draft}\n")
-            confirmation = input("Valider cette fiche racine ? [oui/non] : ").strip().lower()
+            _cadrage_console.print(_TURN_SEPARATOR, style="dim")
+            _cadrage_console.print("[bold cyan]PM (proposition de fiche racine)[/bold cyan] :")
+            _cadrage_console.print(draft)
+            confirmation = input("\nValider cette fiche racine ? [oui/non] : ").strip().lower()
+            _cadrage_console.print(f"[green]Vous :[/green] {confirmation or '(aucune précision)'}")
             if confirmation in _AFFIRMATIVE_REPLIES:
                 card_root_relative = str(Path(_specs_dir(config)) / state.run_id / "card-root.md")
                 await write_card(config.repo_path / card_root_relative, draft, tracer=tracer)
@@ -160,8 +173,10 @@ async def _run_cadrage(state: StudioState, config: StudioConfig) -> dict:
 
         question_match = _QUESTION_PATTERN.search(content)
         question = question_match.group(1).strip() if question_match else content.strip()
-        print(f"\nPM : {question}")
+        _cadrage_console.print(_TURN_SEPARATOR, style="dim")
+        _cadrage_console.print(f"[bold cyan]PM :[/bold cyan] {question}")
         reply = input("> ").strip()
+        _cadrage_console.print(f"[green]Vous :[/green] {reply}")
         transcript.append(f"PM : {question}")
         transcript.append(f"Utilisateur : {reply}")
 

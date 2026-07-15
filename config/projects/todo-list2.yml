@@ -1,0 +1,49 @@
+# Configuration projet todo-list2
+
+name: todo-list2
+description: "TODO : décrire todo-list2"
+
+# Localisation du repo projet (absolu ou ~ expansé)
+repo_path: /home/sgraebli/todo-list2
+
+# Git
+git:
+  base_branch: develop
+  branch_prefix: studio/     # Format studio/<slug-feature>-<hash5> (ADR 0007)
+  remote: origin
+
+# Structure du projet cible
+structure:
+  backend_dir: backend/
+  frontend_dir: frontend/
+  tests_dir: tests/
+  specs_dir: specs/          # Fiches devaimazing dans le repo projet
+  docs_dir: docs/
+
+# Fichiers de référence projet (lus par le PM et l'Architecte)
+reference_files:
+  project_map: specs/project-map.md
+  architect_map: specs/architect-map.md
+
+# Overrides de modèles (optionnel, hérite de studio.yml si non défini)
+# models:
+#   agents_local: qwen2.5:14b-instruct  # si assez de RAM
+
+# Commande de test du projet cible (phase 7, agent Test). Placeholder
+# {target_dir} substitué par repo_path à l'exécution. À décommenter et
+# adapter une fois la stack du projet connue.
+# test:
+#   command: "pytest {target_dir} -q"
+
+# Overrides de checkpoints (optionnel)
+# checkpoints:
+#   phase_9_audit_aval: false
+
+# Contraintes projet spécifiques (transmises à l'Architecte) — à compléter,
+# volontairement vide : pas de valeurs par défaut pertinentes pour un
+# nouveau projet dont la stack n'est pas encore connue.
+# project_constraints:
+#   language:
+#   framework_backend:
+#   framework_frontend:
+#   database:
