@@ -1336,3 +1336,30 @@ joindre `dataimazing-ramiris`/son remplaçant via `dataimazing-network`), montag
 repo projet cible en volume, persistance de `state.db`/`metrics.db`. **Décision
 explicite de l'utilisateur (2026-07-14) : traiter ce point en toute fin de projet**,
 pas avant — aucun travail à engager dessus tant que le reste n'est pas stabilisé.
+
+## Chantier identifié (2026-07-15) : traçabilité d'exécution (run trace)
+
+Constat d'audit (2026-07-15) : le runtime n'a aucune trace diagnostique exploitable entre les métriques quantitatives (metrics.py, tokens/durée/itérations) et la sortie terminal éphémère (console.print, perdue après le run). Quand une erreur apparaît en phase N, il n'y a aucun moyen de remonter à sa cause en phase N-2 sans relancer le run. Exemples concrets identifiés dans le code :
+- tools/ollama.py : les retries (backoff exponentiel, 3 tentatives) sont silencieux, aucune trace si la 2e tentative réussit.
+- tools/filesystem.py : read_referenced_files renvoie "" silencieusement si aucun chemin ne matche la regex (cause racine du point 7 de la roadmap, découverte tardivement).
+- tools/claude_code.py : un seul _logger.warning (refus d'outil), jamais appelé ailleurs dans le runtime.
+- nodes/*.py : console.print (rich) pour l'affichage terminal, rien de persisté.
+
+**Proposition** : un fichier de trace structuré par run, specs/run-NNN/trace.jsonl (JSON Lines, une ligne par événement), écrit au fil de l'eau par chaque node et chaque tool. Pas d'OpenTelemetry (surdimensionné pour un process local solo), juste un append JSONL avec un schéma minimal :
+
+Schéma d'événement :
+- ts (ISO 8601), run_id, agent, phase, event (enum : llm_call_start, llm_call_end, card_written, card_read, referenced_files_resolved, parse_output, commit, warning, error), puis champs libres selon l'event (model, tokens, duration_ms, path, requested/found/missing, raw_output_head pour les erreurs de parsing).
+
+Points d'instrumentation (6 fichiers) :
+1. tools/claude_code.py : avant/après chaque appel (prompt tronqué, tokens, durée, refus éventuels)
+2. tools/ollama.py : idem + log des retries (aujourd'hui invisibles)
+3. tools/filesystem.py : dans read_referenced_files quand des chemins ne matchent pas, dans parse_structured_file_output/parse_agent_file_blocks quand le parsing échoue (avec les 500 premiers chars de la sortie brute)
+4. tools/git.py : chaque commit (hash, agent, fichiers)
+5. nodes/*.py (7 fichiers) : log d'entrée (fiche lue, phase) et de sortie (status, fichiers produits)
+6. cli.py : ouverture/fermeture du tracer au début/fin du run
+
+Implémentation estimée : un module tools/tracer.py (classe RunTracer, méthode emit(event, **kwargs) qui fait un append dans le JSONL), injecté via StudioState ou en paramètre des tools. Le fichier trace.jsonl vit dans specs/run-NNN/, donc commité avec le run (cohérent avec ADR 0007). Environ 150-200 lignes de code, zéro dépendance externe.
+
+Lien avec le chantier précédent : le structured output (côté Ollama, implémenté) réduit la fréquence des erreurs de parsing mais ne les élimine pas (le verdict des recherches du 2026-07-11 dit explicitement "pas supposé à 100%"). Le tracer capture les cas résiduels et donne le contexte pour diagnostiquer tout autre type d'échec (retry silencieux, fichier référencé introuvable, état inattendu).
+
+Statut : non commencé. Priorité à évaluer par rapport au chantier Claude Code CLI (--json-schema pour PM/Architecte).
