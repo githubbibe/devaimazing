@@ -1,8 +1,40 @@
 # Feuille de route - Implémentation du runtime devaimazing
 
-**Dernière mise à jour** : 2026-07-15 (premier run réel de bout en bout,
-`run-20260714-205712` projet `todo-list` — mis en pause volontairement à la
-phase Stubs, voir section ci-dessous)
+**Dernière mise à jour** : 2026-07-15 (backlog : visibilité sur l'avancement
+d'un run et sur le texte brut généré par les agents)
+
+## Backlog (2026-07-15, pas encore cadré) : visibilité sur l'avancement d'un
+run et sur le texte brut généré
+
+**Besoin exprimé par l'utilisateur** : plus de visibilité dans l'avancement
+du projet — pouvoir voir le texte généré par les agents pour comprendre les
+problématiques, pas seulement un statut final (succès/échec/en attente).
+
+**Contexte** : besoin ressenti à plusieurs reprises pendant le premier run
+réel de bout en bout (`run-20260714-205712`, voir section ci-dessous) —
+diagnostiquer un blocage a demandé, à chaque fois, une inspection manuelle
+(`git log`/`git diff` du repo cible, requêtes SQL directes sur
+`metrics.db`, lecture du contenu brut affiché seulement après le fix du
+2026-07-15 sur PM phase Fiches). Ce fix-là a ajouté de la visibilité
+ponctuelle (le `feedback` d'un `AgentResult` PM est maintenant affiché par
+`cli.py::_print_run_outcome`), mais seulement pour ce cas précis (PM,
+`feedback_sent`) — rien d'équivalent pour un succès, ni pour les autres
+agents (Back/Front/Test stockent leur feedback dans la fiche sur disque,
+consultable seulement en allant lire le fichier soi-même).
+
+**Non cadré à ce stade** — questions à trancher avant d'implémenter :
+- Visibilité en direct (streaming pendant l'appel LLM) ou a posteriori
+  (consultable après coup, ex. nouvelle commande `devaimazing show
+  <run-id>` ou `--verbose` sur `run`/`resume`/`retry`) ?
+- Le texte brut de **tous** les agents (pas seulement PM), y compris en cas
+  de succès (pas seulement `feedback_sent`) ?
+- Où le stocker pour qu'il reste consultable après coup : `AgentResult` n'a
+  qu'un seul champ `feedback` (texte libre, actuellement réservé à
+  PM/feedback_sent) — persister aussi le contenu brut d'un succès change la
+  volumétrie de `state.db`/`metrics.db`, à évaluer.
+
+Pas de décision de conception prise — à cadrer (fiche besoin + fiche test)
+avant tout code, comme d'habitude sur ce dépôt.
 
 ## Premier run réel de bout en bout (2026-07-15) : run-20260714-205712,
 projet `todo-list` — mis en pause volontairement
