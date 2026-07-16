@@ -547,6 +547,7 @@ async def _run_agent_async(
     )
 
     node = _node_for_agent(agent)
+    _print_execution_started(RunTracer.for_run(config, run_id))
     try:
         updates = await node.run(state)
     except (
@@ -757,6 +758,7 @@ async def _new_project_async(name: str, private: bool, skip_github: bool) -> Non
         console.print(f"[cyan]{target} existe déjà, réutilisation (pas de git init/GitHub).[/cyan]")
     else:
         target.mkdir(parents=True)
+        console.print(f"[dim]Initialisation du repo Git dans {target}...[/dim]")
         await init_repo(target, initial_branch="develop")
         await create_initial_commit(target, name)
         console.print(f"[green]Repo Git initialisé dans {target}[/green]")
@@ -775,6 +777,7 @@ async def _new_project_async(name: str, private: bool, skip_github: bool) -> Non
                 "et y pousser la branche develop ?"
             )
             if click.confirm(confirm_message, default=False):
+                console.print("[dim]Création du repo GitHub et push en cours...[/dim]")
                 await create_github_remote(target, name, private=private)
                 await push_branch(target, "develop")
                 console.print("[green]Repo GitHub créé et branche develop poussée.[/green]")

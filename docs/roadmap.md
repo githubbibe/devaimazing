@@ -91,7 +91,11 @@ message est maintenant affiché juste avant `graph.ainvoke(...)` :
 Couvre la partie "est-ce vivant / comment suivre" du point 4 (visibilité
 d'avancement) — reste ouvert : une vraie commande `devaimazing show
 <run-id>` qui formaterait ce trace.jsonl plutôt que de le laisser à `tail`
-brut.
+brut. Étendu le même jour à `run-agent` (appelle aussi Ollama/Claude Code
+CLI, même silence possible) et `new-project` (message avant `git init` et
+avant la création/push GitHub via `gh`, réseau). Délibérément pas appliqué à
+`runs`/`metrics`/`projects`/`doctor` : lecture seule ou vérifications
+bornées, pas de trou de silence à combler.
 
 **Run laissé en pause volontaire** : `run-20260714-205712` (projet `todo-list`)
 est arrêté sur `back-tu`, qui signale un `blocked_reason` factuellement faux —

@@ -1209,6 +1209,11 @@ def test_run_agent_prints_updates_returned_by_node(monkeypatch: pytest.MonkeyPat
     assert result.exit_code == 0
     assert "current_phase" in result.output
     assert "AUDIT_STUBS" in result.output
+    # Même message que run/resume/retry (voir
+    # test_run_prints_execution_started_before_invoking_graph) : node.run
+    # peut appeler Ollama/Claude Code CLI, tout aussi silencieux sinon.
+    assert "Exécution en cours" in result.output
+    assert "trace.jsonl" in result.output
 
 
 def test_run_agent_reports_node_exception_without_traceback(repo: Path):
@@ -1420,6 +1425,11 @@ def test_new_project_creates_repo_and_config(
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert config["name"] == "mon-projet"
     assert config["repo_path"] == str(target)
+    # Même logique que run/resume/retry/run-agent : un message avant toute
+    # opération qui pourrait sembler figée (ici git init, rapide en
+    # pratique, mais le silence total avant "Repo Git initialisé" restait
+    # ambigu — voir test_run_prints_execution_started_before_invoking_graph).
+    assert "Initialisation du repo Git" in result.output
 
 
 def test_new_project_config_already_exists_is_noop(
@@ -1511,6 +1521,7 @@ def test_new_project_confirmation_accepted_creates_remote_and_pushes(
     target = fake_studio_root.parent / "mon-projet"
     assert calls[0] == ("create", target, "mon-projet", True)
     assert calls[1] == ("push", target, "develop", "origin")
+    assert "Création du repo GitHub et push en cours" in result.output
 
 
 def test_new_project_public_flag_passed_through(
