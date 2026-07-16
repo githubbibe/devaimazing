@@ -193,6 +193,7 @@ async def run(state: StudioState) -> StudioState:
         model=config.models["agents_local"],
         base_url=config.ollama_base_url,
         timeout_seconds=ollama_config.get("timeout_seconds", 120),
+        num_ctx=ollama_config.get("num_ctx", 16384),
         response_format=FILE_OUTPUT_SCHEMA,
         tracer=tracer,
     )

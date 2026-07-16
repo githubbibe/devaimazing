@@ -63,6 +63,7 @@ async def run_ollama(
     model: str,
     base_url: str = "http://localhost:11434",
     timeout_seconds: int = 120,
+    num_ctx: int = 16384,
     response_format: Optional[dict] = None,
     tracer: Optional[AgentTracer] = None,
 ) -> dict:
@@ -75,6 +76,13 @@ async def run_ollama(
         model: Identifiant du modèle Ollama (ex: qwen2.5:7b-instruct).
         base_url: URL de l'API Ollama.
         timeout_seconds: Timeout en secondes.
+        num_ctx: Taille de la fenêtre de contexte (en tokens) demandée à Ollama
+            via `options`. Sans ce paramètre, Ollama retombe sur son défaut de
+            2048 tokens et tronque silencieusement le début du prompt (system
+            prompt + brief + feedback cumulé) dès qu'il dépasse cette taille —
+            bug diagnostiqué le 2026-07-16 sur le run todo-list2 (voir
+            docs/roadmap.md) : le feedback grossissait à chaque itération mais
+            le modèle ne le voyait jamais en entier.
         response_format: Schéma JSON optionnel (voir FILE_OUTPUT_SCHEMA) pour
             contraindre la sortie par grammaire (grammar-constrained decoding,
             Ollama ≥0.5). Si fourni, `content` dans le retour est du texte
@@ -133,6 +141,7 @@ async def run_ollama(
             async with AsyncClient(host=base_url, timeout=timeout_seconds) as client:
                 response = await client.chat(
                     model=model, messages=messages, format=response_format, stream=False,
+                    options={"num_ctx": num_ctx},
                 )
         except httpx.TimeoutException as exc:
             if tracer is not None:

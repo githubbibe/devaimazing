@@ -1,6 +1,6 @@
 # Feuille de route - devaimazing
 
-**Dernière mise à jour** : 2026-07-15
+**Dernière mise à jour** : 2026-07-16
 
 ## État actuel
 
@@ -10,13 +10,32 @@ Le runtime devaimazing est **fonctionnellement complet et testé de bout en bout
 closer), `metrics.py` et `cli.py` (`run`, `resume`, `retry`, `run-agent`, `runs`,
 `metrics`, `new-project`, `projects`, `doctor`) sont tous implémentés — voir
 `CLAUDE.md` pour la convention (stub-first reste appliquée par le pipeline aux
-projets *cibles*, pas à ce dépôt). **284/284 tests verts** sur `runtime/tests/`.
+projets *cibles*, pas à ce dépôt). **292/292 tests verts** sur `runtime/tests/`.
 
 Deux runs réels de bout en bout ont été menés sur des projets cibles distincts
 (`demo-todo-app`, `todo-list`) et ont permis de trouver/corriger plusieurs bugs
 réels (validation de chemins absolus, connexion SQLite du checkpointer jamais
 fermée, dégradation gracieuse du PM en phase Fiches, etc.) — tous résolus (voir
 Historique ci-dessous pour le détail).
+
+**2026-07-16 — bug de troncature de contexte Ollama corrigé.** Le run
+`run-20260716-095240` (projet `todo-list2`) échouait en boucle sur l'agent
+Back avec le même défaut (mauvais formatter de logging JSON) malgré un
+feedback de plus en plus détaillé à chaque itération, sur `qwen2.5:7b-instruct`
+et `qwen2.5:14b-instruct`. Diagnostic : `tokens_prompt` restait figé à ~2050
+alors que `prompt_chars` grossissait à chaque itération (15989 → 23472
+caractères) — `runtime/studio/tools/ollama.py` n'appelait jamais
+`client.chat(...)` avec `options={"num_ctx": ...}`, donc Ollama retombait sur
+son défaut de 2048 tokens et tronquait silencieusement le début du prompt
+(system prompt + brief + feedback cumulé). Corrigé : `run_ollama` prend
+maintenant un paramètre `num_ctx` (défaut **16384**, transmis via
+`options={"num_ctx": ...}`), configurable par `ollama.num_ctx` dans
+`config/studio.yml` ; câblé dans les 3 appelants (`backend.py`, `frontend.py`,
+`test.py`). 8192 avait été envisagé puis écarté (marge insuffisante : un run
+réel a déjà atteint ~6000-6700 tokens de prompt hors complétion). Pas encore
+revérifié par un run réel de bout en bout sur `todo-list2` (reste à relancer,
+et la lenteur CPU/Ollama qui avait motivé la pause initiale du run reste un
+facteur séparé, non résolu par ce correctif).
 
 **Run laissé en pause volontaire** : `run-20260714-205712` (projet `todo-list`)
 est arrêté sur `back-tu`, qui signale un `blocked_reason` factuellement faux —

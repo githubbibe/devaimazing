@@ -12,6 +12,13 @@ ollama:
   base_url: http://localhost:11434
   timeout_seconds: 600
   max_retries: 3
+  # Fenêtre de contexte (tokens) passée à Ollama via options.num_ctx. Sans ce
+  # réglage, Ollama tronque silencieusement à son défaut (2048) — augmenter si
+  # les logs de trace montrent tokens_prompt collé à num_ctx alors que
+  # prompt_chars grossit (feedback tronqué, voir docs/roadmap.md 2026-07-16).
+  # 16384 laisse une vraie marge : un run réel a déjà atteint 23472 caractères
+  # de prompt (~6000-6700 tokens) avant même de compter la complétion JSON.
+  num_ctx: 16384
 
 # Claude Code CLI
 claude_code:
