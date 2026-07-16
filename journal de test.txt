@@ -351,49 +351,129 @@ remplacer le message d'erreur par "timeout - limite de temps depacee"
 ////////////////////////////////////////////////////////////
 TimeoutError: Ollama n'a pas répondu dans le délai imparti (600s) pour le modèle 'qwen2.5:7b-instruct'
 During task with name 'backend' and id 'ca195a18-7899-91cf-9442-a70cfb2bb94e'
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 ////////////////////////////////////////////////////////////
+Diagnostic clair, dans specs/run-20260715-175442/back.md (section Feedback) et trace.jsonl :
+
+3 itérations de l'agent back en phase STUBS, toutes rejetées par l'audit Architecte :
+
+1. Itération 1 — a produit main.py/requirements.txt mais oublié README.md. L'Architecte relève aussi un bug : _counter est affecté à l'id avant incrément → le premier todo reçoit id=0 au lieu de 1 (viole les critères d'acceptation 2/3).
+2. Itération 2 — corrige partiellement (README ajouté), mais le logging reste faux : le modèle a mis extra={'formatter': 'json'} dans l'appel logging.info(...), ce qui n'active aucun formatter JSON (juste un champ de LogRecord ignoré) — pas la classe JsonFormatter attendue par le skill logging.md. Le README manque aussi la commande pytest.
+3. Itération 3 — au lieu de corriger le code, le modèle a répondu en prose ("l'application est maintenant complète, voici les points à corriger...") sans réécrire les fichiers. Le parseur (parse_structured_file_output) a donc marqué la sortie blocked: true — pas de fichier produit, feedback renvoyé, mais plus d'itération disponible → max_iterations_exceeded.
+
+Cause racine probable : qwen2.5:7b-instruct ne comprend pas correctement comment configurer un formatter de logging JSON (confusion entre extra= et un vrai logging.Formatter), et à la 3ᵉ tentative il "abandonne" en décrivant le problème plutôt qu'en le corrigeant — plus un problème de capacité/compréhension du modèle local qu'un problème d'infra cette fois.
+
+Tu veux que je regarde une option (ex. simplifier la contrainte JSON logging dans le skill, ou passer sur un modèle plus capable pour ce run) ou tu gères la suite ?
+
+changement de model
+////////////////////////////////////////////////////////////
+devaimazing run todo-list3
+Traceback (most recent call last):
+  File "/home/sgraebli/devaimazing/.venv/bin/devaimazing", line 10, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/home/sgraebli/devaimazing/.venv/lib64/python3.13/site-packages/click/core.py", line 1569, in __call__
+    return self.main(*args, **kwargs)
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/home/sgraebli/devaimazing/.venv/lib64/python3.13/site-packages/click/core.py", line 1490, in main
+    rv = self.invoke(ctx)
+  File "/home/sgraebli/devaimazing/.venv/lib64/python3.13/site-packages/click/core.py", line 1970, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/home/sgraebli/devaimazing/.venv/lib64/python3.13/site-packages/click/core.py", line 1353, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sgraebli/devaimazing/.venv/lib64/python3.13/site-packages/click/core.py", line 907, in invoke
+    return callback(*args, **kwargs)
+  File "/home/sgraebli/devaimazing/runtime/studio/cli.py", line 142, in run
+    asyncio.run(_run_async(project, objective, dry_run))
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib64/python3.13/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/usr/lib64/python3.13/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib64/python3.13/asyncio/base_events.py", line 725, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/home/sgraebli/devaimazing/runtime/studio/cli.py", line 147, in _run_async
+    config = _load_config(project)
+  File "/home/sgraebli/devaimazing/runtime/studio/cli.py", line 76, in _load_config
+    return StudioConfig(project_name=project, config_dir=_resolve_config_dir())
+  File "/home/sgraebli/devaimazing/runtime/studio/config.py", line 64, in __init__
+    raise FileNotFoundError(f"Configuration projet introuvable : {project_yml_path}")
+FileNotFoundError: Configuration projet introuvable : /home/sgraebli/devaimazing/config/projects/todo-list3.yml
+////////////////////////////////////////////////////////////
+revoir la sortie d'erreur
+////////////////////////////////////////////////////////////
+Le nouveau run essaie de faire git checkout develop dans le repo todo-list2, mais ça échoue : la branche courante (studio/todo-list2-f71ea, celle du run raté) a des modifications non commitées sur specs/run-20260715-175442/back.md et trace.jsonl (probablement les dernières entrées de trace/feedback écrites après le dernier commit, avant l'échec max_iterations_exceeded). Rien n'est perdu, juste pas encore commité.
+
+Cette branche est aussi 2 commits en avance sur son remote (pas encore pushés) — donc pas de risque de suppression, juste un working tree sale qui bloque le changement de branche.
+
+Comment tu veux que je débloque ça : je commite ces 2 fichiers modifiés sur studio/todo-list2-f71ea (garde une trace complète et honnête du run raté), ou je les stash ?
+////////////////////////////////////////////////////////////
+devaimazing run todo-list2
 ------------------------------------------------------------
+> Backend FastAPI minimal avec une route GET retourne la liste courante, initialement vide, et une route POST /todos qui ajoute une tâche en mémoire (pas de base de données). Pas de frontend.
+------------------------------------------------------------
+> todo-list2
+------------------------------------------------------------
+> 1. Pas d'état fait/à faire — uniquement text, hors périmètre pour ce run.
+> 2. GET /todos renvoie un id (entier, attribué par le serveur, pas par le client).
+> 3. Texte vide → rejeté (422, via min_length=1 sur le schéma Pydantic).
+------------------------------------------------------------
+PM : Noté : texte vide (`""`) rejeté en 422 via `min_length=1` sur le schéma Pydantic. Attention, 
+`min_length=1` rejette `""` mais **accepte** un texte composé uniquement d'espaces (`"   "`). Il reste 
+donc quatre points à trancher explicitement (je n'en comble aucun par défaut) :
+
+3b. **Texte espaces-seuls** (`"   "`) : accepté tel quel, ou rejeté aussi (via un `.strip()` non vide) ?
+Et si accepté/rejeté après strip : stocke-t-on le texte **brut** ou **strippé** ?
+
+4. **Attribution de l'`id`** : compteur incrémental jamais réutilisé (`1, 2, 3…`, même logique si des 
+suppressions existaient un jour), ou index de position dans la liste ?
+
+5. **Doublons** : deux tâches au texte identique sont-elles **acceptées** (doublons permis) ou 
+**rejetées** ?
+
+6. **Format de réponse du `POST /todos`** : renvoie-t-il la tâche créée avec son id (`{"id": 1, "text": 
+"..."}`, code 201) ou juste un statut (200/204 sans corps) ?
+
+Réponds point par point ; après ça je pense pouvoir figer la fiche.
+------------------------------------------------------------
+> 3b. Accepté tel quel (pas de .strip())
+> 4. Compteur incrémental jamais réutilisé (1, 2, 3…), pas un index de position
+> 5. Doublons acceptés
+> 6. POST /todos renvoie la tâche créée ({"id": 1, "text": "..."}, code 201)
+------------------------------------------------------------
+PM : Deux derniers points, désolé — ils ont surgi en figeant la fiche :
+
+**7. Longueur maximale du `text`** : faut-il une **borne supérieure** (ex. `max_length=200` sur le 
+schéma Pydantic → 422 au-delà) ou le texte est-il **non borné** (un POST avec un texte de plusieurs Mo 
+est accepté) ? C'est un vrai trou d'intention : rien dans l'objectif ne le tranche, et le laisser non 
+borné est un choix aux conséquences réelles (payload arbitrairement gros accepté). À toi de décider.
+
+**8. Ordre de `GET /todos`** — simple confirmation : la liste est renvoyée dans l'**ordre d'insertion** 
+(la tâche postée en premier apparaît en premier), ce qui est la lecture directe de « la route GET 
+retourne la liste » + « POST ajoute une tâche ». Je le confirme plutôt que de le supposer. OK, ou tu 
+veux un autre ordre ?
+------------------------------------------------------------
+> 7. Non borné, pas de max_length.
+> 8. OK, ordre d'insertion.
+> oui
+////////////////////////////////////////////////////////////
+3 x devaimazing resume run-20260716-095240 --project todo-list2 laisse presage une erreur, seul une exploration de trace.jsonl pour en etre certain.
+Changer les commandes ou ajouter de linformation (etape terminee, passer a la suivante (y/n)
+////////////////////////////////////////////////////////////
+une fois un resume lance, impossible de savoir si le run est en execussion, le curseur est en debut dune nouvelle ligne puis rien (un message serait le bien venue (le resume est encours dexecussion ..)
+
+
+------------------------------------------------------------
+
+Trouvé le vrai problème, et ce n'est pas la taille du modèle : tokens_prompt vaut systématiquement ~2050 dans tous les appels, avec le 7B et le 14B, alors que prompt_chars grossit à chaque itération (15989 → 18730 → 21019 → 21850 → 23472 caractères). runtime/studio/tools/ollama.py:139 appelle client.chat(...) sans jamais fixer options={"num_ctx": ...} — Ollama retombe alors sur son défaut de 2048 tokens de contexte. Le prompt réel (fiche + brief + feedback cumulé) est donc tronqué silencieusement à chaque appel : le modèle ne voit jamais l'intégralité des instructions/feedback, quelle que soit sa taille (7B ou 14B).
+
+Ça explique exactement le symptôme : le même problème (formatter JSON logging) revient à chaque itération malgré un feedback de plus en plus détaillé — le feedback grossit, mais dépasse la fenêtre de contexte et une partie (probablement le début : le prompt système + les contraintes du brief) sort de la fenêtre.
+
+C'est un vrai bug du studio (pas de la config projet), corrigible dans runtime/studio/tools/ollama.py. Tu veux que je l'corrige (ajouter options={"num_ctx": <valeur suffisante>} à l'appel) ?
 
 
 

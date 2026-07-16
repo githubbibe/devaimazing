@@ -26,8 +26,8 @@ reference_files:
   architect_map: specs/architect-map.md
 
 # Overrides de modèles (optionnel, hérite de studio.yml si non défini)
-# models:
-#   agents_local: qwen2.5:14b-instruct  # si assez de RAM
+models:
+  agents_local: qwen2.5:14b-instruct  # si assez de RAM
 
 # Commande de test du projet cible (phase 7, agent Test). Placeholder
 # {target_dir} substitué par repo_path à l'exécution. À décommenter et
