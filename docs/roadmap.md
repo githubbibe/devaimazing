@@ -10,7 +10,7 @@ Le runtime devaimazing est **fonctionnellement complet et testé de bout en bout
 closer), `metrics.py` et `cli.py` (`run`, `resume`, `retry`, `run-agent`, `runs`,
 `metrics`, `new-project`, `projects`, `doctor`) sont tous implémentés — voir
 `CLAUDE.md` pour la convention (stub-first reste appliquée par le pipeline aux
-projets *cibles*, pas à ce dépôt). **302/302 tests verts** sur `runtime/tests/`.
+projets *cibles*, pas à ce dépôt). **303/303 tests verts** sur `runtime/tests/`.
 
 Deux runs réels de bout en bout ont été menés sur des projets cibles distincts
 (`demo-todo-app`, `todo-list`) et ont permis de trouver/corriger plusieurs bugs
@@ -80,6 +80,19 @@ avalé silencieusement (exit 0) au lieu de remonter ; à surveiller si ça
 devient un problème. `run-agent` avait déjà ce garde-fou (trouvé en le
 consultant) mais sans `ExternalServiceError` dans sa liste — ajouté aussi.
 
+**2026-07-16 — message "exécution en cours" avant graph.ainvoke (ferme
+partiellement le point 4 ci-dessous).** Une fois `run`/`resume`/`retry`
+lancé, le terminal restait silencieux (curseur en début de ligne, aucun
+retour) tant qu'un agent n'avait pas terminé — plusieurs minutes possible
+sur un modèle local en CPU, facilement confondu avec un process figé. Un
+message est maintenant affiché juste avant `graph.ainvoke(...)` :
+"Exécution en cours... — suivre en direct : tail -f
+<repo>/specs/<run-id>/trace.jsonl" (le chemin exact de `tracer.trace_path`).
+Couvre la partie "est-ce vivant / comment suivre" du point 4 (visibilité
+d'avancement) — reste ouvert : une vraie commande `devaimazing show
+<run-id>` qui formaterait ce trace.jsonl plutôt que de le laisser à `tail`
+brut.
+
 **Run laissé en pause volontaire** : `run-20260714-205712` (projet `todo-list`)
 est arrêté sur `back-tu`, qui signale un `blocked_reason` factuellement faux —
 limite de fiabilité de `qwen2.5:7b-instruct` sans GPU sur cette machine, pas un
@@ -106,13 +119,13 @@ todo-list` (peut échouer une 3ᵉ fois et basculer en `FAILED`).
    (le mécanisme d'override local `config/local.yml` existe déjà, mais l'appel
    n'est fait nulle part sur un échec de non-régression).
 4. **Visibilité sur l'avancement d'un run / texte brut généré par les agents**
-   — besoin exprimé le 2026-07-15, **pas encore cadré**. Questions à trancher
-   avant tout code : streaming en direct vs consultation a posteriori (ex.
-   nouvelle commande `devaimazing show <run-id>` ou `--verbose`) ; tous les
-   agents ou seulement PM ; cas de succès inclus (pas seulement
-   `feedback_sent`) ; où stocker ce contenu (le tracer livré le 2026-07-15,
-   `specs/<run-id>/trace.jsonl`, couvre déjà une partie du besoin diagnostic —
-   à évaluer si ça suffit avant de coder autre chose).
+   — besoin exprimé le 2026-07-15. Partiellement couvert le 2026-07-16 : un
+   message "exécution en cours" + pointeur `tail -f trace.jsonl` répond à
+   "est-ce vivant / comment suivre en direct" (voir entrée du même jour
+   ci-dessus). Reste ouvert : une vraie commande `devaimazing show <run-id>`
+   qui formaterait trace.jsonl (au lieu de le laisser en JSONL brut à lire
+   via `tail`) ; tous les agents ou seulement PM ; cas de succès inclus (pas
+   seulement `feedback_sent`).
 5. **Conteneurisation de devaimazing lui-même (Podman)** — décidée mais
    explicitement reportée à la toute fin du projet (2026-07-14), aucun travail
    à engager avant. Implications non câblées : Claude Code CLI (sous-process

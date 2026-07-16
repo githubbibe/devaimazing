@@ -63,6 +63,20 @@ def _print_node_failure(run_id: str, exc: Exception, tracer: RunTracer) -> None:
     tracer.emit("run_end", status="interrupted", error=str(exc))
 
 
+def _print_execution_started(tracer: RunTracer) -> None:
+    """
+    Message affiché juste avant graph.ainvoke() : sans lui, le terminal
+    reste silencieux (aucun retour tant qu'un agent n'a pas terminé, ce qui
+    peut prendre plusieurs minutes sur un modèle local en CPU) — trouvé en
+    usage réel (2026-07-16, voir docs/roadmap.md), à distinguer d'un
+    process figé.
+    """
+    console.print(
+        "[dim]Exécution en cours (peut prendre plusieurs minutes selon les "
+        f"agents/modèles) — suivre en direct : tail -f {tracer.trace_path}[/dim]"
+    )
+
+
 def _devaimazing_root() -> Path:
     """Racine du repo studio (parent de runtime/studio/cli.py)."""
     return Path(__file__).resolve().parents[2]
@@ -197,6 +211,7 @@ async def _run_async(project: str, objective: Optional[str], dry_run: bool) -> N
             status=RunStatus.IN_PROGRESS,
             started_at=datetime.now(timezone.utc),
         )
+        _print_execution_started(tracer)
         try:
             final_state = await graph.ainvoke(initial_state, config=_thread_config(run_id))
         except _EXTERNAL_SERVICE_ERRORS as exc:
@@ -247,6 +262,7 @@ async def _resume_async(run_id: str, project: str) -> None:
             thread_config,
             {"status": RunStatus.IN_PROGRESS, "awaiting_human_validation": False},
         )
+        _print_execution_started(tracer)
         try:
             final_state = await graph.ainvoke(None, config=thread_config)
         except _EXTERNAL_SERVICE_ERRORS as exc:
@@ -336,6 +352,7 @@ async def _retry_async(run_id: str, project: str) -> None:
         tracer = RunTracer.for_run(config, run_id)
         tracer.emit("run_start", command="retry", project=project)
 
+        _print_execution_started(tracer)
         try:
             final_state = await graph.ainvoke(None, config=thread_config)
         except _EXTERNAL_SERVICE_ERRORS as exc:

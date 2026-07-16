@@ -163,6 +163,28 @@ def test_run_completed_prints_success(monkeypatch: pytest.MonkeyPatch):
     assert closed == [True]  # connexion checkpointer fermée aussi sur le chemin nominal
 
 
+def test_run_prints_execution_started_before_invoking_graph(monkeypatch: pytest.MonkeyPatch):
+    # Sans ce message, le terminal reste silencieux (aucun retour tant
+    # qu'un agent n'a pas terminé, plusieurs minutes possible sur un modèle
+    # local en CPU) — trouvé en usage réel (2026-07-16, voir
+    # docs/roadmap.md), confondu avec un process figé.
+    async def fake_ainvoke(state, config):
+        return {"status": RunStatus.COMPLETED}
+
+    fake_graph = SimpleNamespace(ainvoke=fake_ainvoke, checkpointer=_fake_checkpointer([]))
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["run", "demo", "--objective", "x"])
+
+    assert result.exit_code == 0
+    assert "Exécution en cours" in result.output
+    assert "trace.jsonl" in result.output
+
+
 def test_run_waiting_human_prints_resume_hint(monkeypatch: pytest.MonkeyPatch):
     async def fake_ainvoke(state, config):
         return {"status": RunStatus.WAITING_HUMAN, "current_phase": Phase.FICHES}
@@ -465,6 +487,7 @@ def test_resume_success_clears_flag_and_continues(monkeypatch: pytest.MonkeyPatc
     assert updated["awaiting_human_validation"] is False
     assert "terminé" in result.output
     assert closed == [True]  # régression : voir test_run_closes_checkpointer_connection_even_on_error
+    assert "Exécution en cours" in result.output  # voir test_run_prints_execution_started_...
 
 
 def test_resume_external_service_error_prints_clean_message_and_closes(
@@ -761,6 +784,7 @@ def test_retry_confirmation_accepted_invokes_graph(monkeypatch: pytest.MonkeyPat
     assert result.exit_code == 0
     assert calls == [None]
     assert "terminé" in result.output
+    assert "Exécution en cours" in result.output  # voir test_run_prints_execution_started_...
 
 
 def test_retry_external_service_error_prints_clean_message_and_closes(
