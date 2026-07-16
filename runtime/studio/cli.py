@@ -178,8 +178,21 @@ async def _run_async(project: str, objective: Optional[str], dry_run: bool) -> N
     if not dry_run and not await _ensure_healthy_environment(config):
         return
 
+    imported_brief_content: Optional[str] = None
     if not objective:
-        objective = click.prompt("Objectif du run")
+        import_reply = click.prompt(
+            "Importer une fiche projet existante ? [o/N]", default="n", show_default=False,
+        ).strip().lower()
+        if import_reply in {"o", "oui", "y", "yes"}:
+            brief_path = Path(click.prompt("Chemin du fichier à importer")).expanduser()
+            try:
+                imported_brief_content = brief_path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                console.print(f"[red]Fichier introuvable : {brief_path}[/red]")
+                return
+            objective = f"(import de brief existant : {brief_path.name})"
+        else:
+            objective = click.prompt("Objectif du run")
 
     run_id = _generate_run_id()
     console.print(f"[bold]Run {run_id}[/bold] — projet {project}")
@@ -207,6 +220,7 @@ async def _run_async(project: str, objective: Optional[str], dry_run: bool) -> N
             run_id=run_id,
             project_name=project,
             objective_raw=objective,
+            imported_brief_content=imported_brief_content,
             current_phase=Phase.RECEPTION,
             status=RunStatus.IN_PROGRESS,
             started_at=datetime.now(timezone.utc),

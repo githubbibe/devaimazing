@@ -148,6 +148,161 @@ async def test_reception_phase_also_runs_cadrage_dialogue(monkeypatch: pytest.Mo
     assert updates["current_phase"] == Phase.AUDIT_AMONT
 
 
+# --- Raccourci import de brief existant ---
+
+VALID_IMPORTED_BRIEF = (
+    "**Nom de la feature** : import-panier\n"
+    "## Cartographie des fichiers\n...\n"
+)
+
+
+async def test_brief_import_completes_on_first_pass(monkeypatch: pytest.MonkeyPatch, repo: Path):
+    async def fake_run_claude_code(**kwargs):
+        return _fake_claude_result(f"FICHE_VALIDEE:\n{VALID_IMPORTED_BRIEF}")
+
+    committed = {}
+
+    async def fake_commit_as_agent(repo_path, agent, message, files, tracer=None):
+        committed.update(agent=agent, files=files)
+        return "abc123"
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    monkeypatch.setattr(pm_node, "commit_as_agent", fake_commit_as_agent)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "oui")
+
+    state = StudioState(
+        run_id="run-042", project_name="demo", current_phase=Phase.RECEPTION,
+        imported_brief_content="mon brief tout rédigé",
+    )
+    updates = await pm_node.run(state)
+
+    assert updates["current_phase"] == Phase.FICHES
+    assert updates["agent_cards"] == {}
+    assert updates["card_root_path"] == "specs/run-042/card-root.md"
+    assert updates["architect_brief_path"] == "specs/run-042/architect-brief.md"
+
+    brief_content = (repo / "specs" / "run-042" / "architect-brief.md").read_text(encoding="utf-8")
+    assert brief_content == VALID_IMPORTED_BRIEF.strip()
+
+    card_root_content = (repo / "specs" / "run-042" / "card-root.md").read_text(encoding="utf-8")
+    assert "**Nom de la feature** : import-panier" in card_root_content
+
+    # commit_as_agent appelé une seule fois, pour architect-brief.md sous
+    # l'identité pm — card-root.md n'est PAS committé ici (comme dans le
+    # flux normal, il l'est plus tard par _create_branch_and_advance).
+    assert committed["agent"] == "pm"
+    assert committed["files"] == ["specs/run-042/architect-brief.md"]
+
+
+async def test_brief_import_asks_questions_before_validating(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    responses = [
+        _fake_claude_result("QUESTION: quelles sont les contraintes non-fonctionnelles ?"),
+        _fake_claude_result(f"FICHE_VALIDEE:\n{VALID_IMPORTED_BRIEF}"),
+    ]
+
+    async def fake_run_claude_code(**kwargs):
+        return responses.pop(0)
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    inputs = iter(["aucune contrainte particulière", "oui"])
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    monkeypatch.setattr(pm_node, "commit_as_agent", fake_commit_as_agent)
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
+
+    state = StudioState(
+        run_id="run-042", current_phase=Phase.RECEPTION, imported_brief_content="mon brief",
+    )
+    updates = await pm_node.run(state)
+
+    assert updates["current_phase"] == Phase.FICHES
+    assert not responses  # les deux réponses scriptées ont bien été consommées
+
+
+async def test_brief_import_missing_feature_name_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    async def fake_run_claude_code(**kwargs):
+        return _fake_claude_result("FICHE_VALIDEE:\n## Pas de nom de feature ici\n")
+
+    async def fake_commit_as_agent(**kwargs):
+        raise AssertionError("commit_as_agent ne doit pas être appelé sans nom de feature valide")
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    monkeypatch.setattr(pm_node, "commit_as_agent", fake_commit_as_agent)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "oui")
+
+    state = StudioState(
+        run_id="run-042", current_phase=Phase.RECEPTION, imported_brief_content="mon brief",
+    )
+    with pytest.raises(RuntimeError):
+        await pm_node.run(state)
+
+
+async def test_brief_import_reads_optional_project_and_architect_maps(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    (repo / "specs").mkdir(parents=True)
+    (repo / "specs" / "project-map.md").write_text("contenu project-map", encoding="utf-8")
+    (repo / "specs" / "architect-map.md").write_text("contenu architect-map", encoding="utf-8")
+
+    calls = []
+
+    async def fake_run_claude_code(**kwargs):
+        calls.append(kwargs)
+        return _fake_claude_result(f"FICHE_VALIDEE:\n{VALID_IMPORTED_BRIEF}")
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    monkeypatch.setattr(pm_node, "commit_as_agent", fake_commit_as_agent)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "oui")
+
+    state = StudioState(
+        run_id="run-042", current_phase=Phase.RECEPTION, imported_brief_content="mon brief",
+    )
+    await pm_node.run(state)
+
+    assert "contenu project-map" in calls[0]["prompt"]
+    assert "contenu architect-map" in calls[0]["prompt"]
+
+
+async def test_brief_import_dispatch_does_not_call_cadrage(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    async def fake_cadrage(state, config):
+        raise AssertionError("_run_cadrage ne doit pas être appelé quand imported_brief_content est renseigné")
+
+    sentinel = {"current_phase": Phase.FICHES}
+
+    async def fake_brief_import(state, config):
+        return sentinel
+
+    monkeypatch.setattr(pm_node, "_run_cadrage", fake_cadrage)
+    monkeypatch.setattr(pm_node, "_run_brief_import", fake_brief_import)
+
+    state = StudioState(
+        run_id="run-042", current_phase=Phase.RECEPTION, imported_brief_content="mon brief",
+    )
+    updates = await pm_node.run(state)
+
+    assert updates is sentinel
+
+
+def test_render_imported_card_root_contains_feature_name_and_run_id():
+    content = pm_node._render_imported_card_root(
+        run_id="run-042", project_name="demo", feature_name="import-panier",
+        objective_raw="",
+    )
+    assert "**Nom de la feature** : import-panier" in content
+    assert "run-042" in content
+    assert "demo" in content
+
+
 # --- Phase FICHES ---
 
 FICHES_RESPONSE = (

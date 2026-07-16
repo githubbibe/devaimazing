@@ -10,7 +10,7 @@ Le runtime devaimazing est **fonctionnellement complet et testé de bout en bout
 closer), `metrics.py` et `cli.py` (`run`, `resume`, `retry`, `run-agent`, `runs`,
 `metrics`, `new-project`, `projects`, `doctor`) sont tous implémentés — voir
 `CLAUDE.md` pour la convention (stub-first reste appliquée par le pipeline aux
-projets *cibles*, pas à ce dépôt). **303/303 tests verts** sur `runtime/tests/`.
+projets *cibles*, pas à ce dépôt). **312/312 tests verts** sur `runtime/tests/`.
 
 Deux runs réels de bout en bout ont été menés sur des projets cibles distincts
 (`demo-todo-app`, `todo-list`) et ont permis de trouver/corriger plusieurs bugs
@@ -96,6 +96,39 @@ CLI, même silence possible) et `new-project` (message avant `git init` et
 avant la création/push GitHub via `gh`, réseau). Délibérément pas appliqué à
 `runs`/`metrics`/`projects`/`doctor` : lecture seule ou vérifications
 bornées, pas de trou de silence à combler.
+
+**2026-07-16 — raccourci "import de brief existant" (`devaimazing run`).**
+Nouveau : au lancement d'un run, si `--objective` n'est pas fourni, un prompt
+propose d'importer un document existant plutôt que de refaire le dialogue de
+cadrage (phase 1) depuis zéro. Si accepté, le PM (pas l'Architecte) relit le
+document directement dans `nodes/pm.py::_run_brief_import` (même contrat de
+sortie `QUESTION:`/`FICHE_VALIDEE:` que le dialogue normal, boucle extraite
+dans un helper partagé `_run_validation_dialogue` — refactor
+comportement-préservant, confirmé par les 22 tests PM existants inchangés).
+Décision actée explicitement avec l'utilisateur : le document importé
+devient `architect-brief.md` **tel quel** et le run saute **à la fois**
+la phase 1 (cadrage PM) et la phase 2 (audit amont Architecte) — pas
+seulement le dialogue. Un `card-root.md` minimal est synthétisé en Python
+déterministe (`_render_imported_card_root`, nouveau template
+`templates/card-root-import.md.template`) pour satisfaire la seule
+exigence codée sur ce fichier (`**Nom de la feature**`, requis par
+`_extract_feature_name`, utilisé par `_run_fiches`/`_create_branch_and_advance`).
+Commit d'`architect-brief.md` sous l'identité `pm` (pas `architect`, qui n'a
+jamais tourné dans ce raccourci) — décision assumée, réversible en un mot
+si l'usage réel suggère l'inverse.
+
+**Point de vigilance non couvert par les tests** : toute la logique
+ci-dessus n'est validée que par des tests avec `run_claude_code` mocké — la
+vraie question (est-ce que le PM respecte fidèlement la consigne "commence
+ta réponse validée par `**Nom de la feature** : ...`", ajoutée dans
+`prompts/pm.md`) ne sera testée que par un run réel. Si le PM omet cette
+ligne, `_extract_feature_name` lève une `RuntimeError` **après** que
+l'utilisateur ait déjà tapé "oui" pour valider — affiché proprement (pas de
+traceback, voir le correctif `_EXTERNAL_SERVICE_ERRORS` du même jour), mais
+au pire moment de l'interaction. Pas encore corrigé délibérément (la
+solution simple si ça arrive en pratique : redemander le nom via `input()`
+au lieu d'échouer dur) — à surveiller au premier usage réel plutôt qu'à
+anticiper.
 
 **Run laissé en pause volontaire** : `run-20260714-205712` (projet `todo-list`)
 est arrêté sur `back-tu`, qui signale un `blocked_reason` factuellement faux —

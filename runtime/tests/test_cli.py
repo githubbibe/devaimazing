@@ -332,6 +332,7 @@ def test_run_external_service_error_prints_clean_message_and_closes(
 def test_run_prompts_for_objective_when_missing(monkeypatch: pytest.MonkeyPatch):
     async def fake_ainvoke(state, config):
         assert state.objective_raw == "objectif tapé au prompt"
+        assert state.imported_brief_content is None
         return {"status": RunStatus.COMPLETED}
 
     fake_graph = SimpleNamespace(ainvoke=fake_ainvoke, checkpointer=_fake_checkpointer([]))
@@ -341,9 +342,64 @@ def test_run_prompts_for_objective_when_missing(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
 
-    result = CliRunner().invoke(main, ["run", "demo"], input="objectif tapé au prompt\n")
+    # Ligne vide en premier : réponse par défaut ("non") au nouveau prompt
+    # d'import de fiche projet, avant l'objectif.
+    result = CliRunner().invoke(main, ["run", "demo"], input="\nobjectif tapé au prompt\n")
 
     assert result.exit_code == 0
+
+
+def test_run_import_declined_falls_through_to_objective_prompt(monkeypatch: pytest.MonkeyPatch):
+    async def fake_ainvoke(state, config):
+        assert state.objective_raw == "objectif tapé au prompt"
+        assert state.imported_brief_content is None
+        return {"status": RunStatus.COMPLETED}
+
+    fake_graph = SimpleNamespace(ainvoke=fake_ainvoke, checkpointer=_fake_checkpointer([]))
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["run", "demo"], input="n\nobjectif tapé au prompt\n")
+
+    assert result.exit_code == 0
+
+
+def test_run_import_accepted_reads_file_and_passes_content_into_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    brief_file = tmp_path / "brief.md"
+    brief_file.write_text("**Nom de la feature** : import-panier\n## Contexte\n...\n", encoding="utf-8")
+
+    async def fake_ainvoke(state, config):
+        assert state.imported_brief_content == brief_file.read_text(encoding="utf-8")
+        return {"status": RunStatus.COMPLETED}
+
+    fake_graph = SimpleNamespace(ainvoke=fake_ainvoke, checkpointer=_fake_checkpointer([]))
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["run", "demo"], input=f"o\n{brief_file}\n")
+
+    assert result.exit_code == 0
+
+
+def test_run_import_missing_file_aborts_cleanly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    async def fail_build_graph(config):
+        raise AssertionError("build_graph ne doit pas être appelé si le fichier importé est introuvable")
+
+    monkeypatch.setattr(cli_module, "build_graph", fail_build_graph)
+
+    missing_path = tmp_path / "inexistant.md"
+    result = CliRunner().invoke(main, ["run", "demo"], input=f"o\n{missing_path}\n")
+
+    assert result.exit_code == 0
+    assert "introuvable" in result.output
 
 
 # --- préflight environnement (run/resume/retry) ---

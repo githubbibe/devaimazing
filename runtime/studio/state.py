@@ -63,6 +63,14 @@ class StudioState:
     project_name: str = ""
     objective_raw: str = ""
 
+    # Contenu brut d'une fiche projet existante importée par l'utilisateur au
+    # lancement du run (CLI, prompt "Importer une fiche projet existante ?")
+    # — None dans le flux normal. Si renseigné, pm.run() (Phase.RECEPTION/
+    # CADRAGE) bascule sur _run_brief_import au lieu de _run_cadrage : le
+    # document devient directement architect_brief_path, phase 1 (cadrage)
+    # et phase 2 (audit amont Architecte) sont sautées, voir nodes/pm.py.
+    imported_brief_content: Optional[str] = None
+
     # Phase courante
     current_phase: Phase = Phase.RECEPTION
     status: RunStatus = RunStatus.PENDING

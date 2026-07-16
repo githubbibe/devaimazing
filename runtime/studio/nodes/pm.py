@@ -8,7 +8,12 @@ distinctes du même agent, distinguées par state.current_phase :
 - Phase.RECEPTION / Phase.CADRAGE (phases 0-1, modèle models.pm_opus) :
   dialogue de raffinement itératif avec l'utilisateur jusqu'à validation
   de la fiche racine (voir docs/workflow.md phase 1, checklist d'intention,
-  ADR 0008).
+  ADR 0008). Si state.imported_brief_content est renseigné (raccourci
+  "import de brief existant", voir cli.py::_run_async), ce dialogue est
+  remplacé par une revue directe du document importé (_run_brief_import) :
+  le document devient architect_brief_path tel quel et la phase 2 (audit
+  amont Architecte) est sautée — décision actée avec l'utilisateur, voir
+  docs/roadmap.md.
 - Phase.FICHES (phase 3, modèle models.pm_sonnet) : définition de la
   séquence d'agents et écriture d'une fiche par agent, puis création de
   la branche du run (premier commit-point, voir ADR 0007).
@@ -19,6 +24,7 @@ studio.nodes.closer, Python pur sans appel LLM.
 
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -42,6 +48,7 @@ from studio.tools.tracer import AgentTracer, RunTracer
 
 _DEVAIMAZING_ROOT = Path(__file__).resolve().parents[3]
 _PROMPT_PATH = _DEVAIMAZING_ROOT / "prompts" / "pm.md"
+_CARD_ROOT_IMPORT_TEMPLATE_PATH = _DEVAIMAZING_ROOT / "templates" / "card-root-import.md.template"
 
 _QUESTION_PATTERN = re.compile(r"QUESTION:\s*(.+)", re.DOTALL)
 _FICHE_VALIDEE_PATTERN = re.compile(r"FICHE_VALIDEE:\s*\n(.*)", re.DOTALL)
@@ -60,6 +67,14 @@ _TURN_SEPARATOR = "-" * 60
 
 def _specs_dir(config: StudioConfig) -> str:
     return config.get("structure", {}).get("specs_dir", "specs/")
+
+
+async def _read_optional(path: Path) -> str:
+    """Lit un fichier, retourne une chaîne vide s'il n'existe pas (contexte optionnel)."""
+    try:
+        return await read_card(path)
+    except FileNotFoundError:
+        return ""
 
 
 def _will_be_created_by_earlier_agent(
@@ -94,33 +109,73 @@ def _extract_feature_name(card_root_content: str) -> str:
     return match.group(1).strip()
 
 
-async def _run_cadrage(state: StudioState, config: StudioConfig) -> dict:
+def _render_imported_card_root(
+    run_id: str, project_name: str, feature_name: str, objective_raw: str,
+) -> str:
     """
-    Dialogue de cadrage synchrone (terminal input()/print()) jusqu'à
-    validation explicite de la fiche racine par l'utilisateur — voir
-    prompts/pm.md, section Format de sortie (phase 1).
+    Synthétise un card-root.md minimal pour le raccourci "import de brief
+    existant" (voir _run_brief_import) — pas écrit par le LLM, templating
+    Python déterministe (même mécanisme que cli.py::_write_project_config),
+    garantissant le champ **Nom de la feature** requis par
+    _extract_feature_name (contrat lu ensuite par _run_fiches).
+    """
+    content = _CARD_ROOT_IMPORT_TEMPLATE_PATH.read_text(encoding="utf-8")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return (
+        content.replace("{{RUN_ID}}", run_id)
+        .replace("{{DATE}}", today)
+        .replace("{{PROJECT_NAME}}", project_name)
+        .replace("{{FEATURE_NAME}}", feature_name)
+        .replace("{{OBJECTIVE_RAW}}", objective_raw or "(import de brief existant)")
+    )
 
-    Toute la boucle de raffinement se déroule dans cet unique appel de
-    node (pas d'aller-retour via le mécanisme de checkpoint LangGraph/
-    resume : l'utilisateur est déjà présent au terminal à chaque tour,
-    donc le "checkpoint" de cette phase est le dialogue lui-même).
+
+async def _run_validation_dialogue(
+    config: StudioConfig,
+    tracer: AgentTracer,
+    system_prompt: str,
+    transcript_seed: list[str],
+    draft_label: str,
+    confirm_prompt: str,
+    model_key: str,
+) -> tuple[str, int, int, int, int]:
     """
-    system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
-    transcript = [f"Objectif initial de l'utilisateur : {state.objective_raw}"]
+    Boucle de dialogue QUESTION:/FICHE_VALIDEE: partagée entre _run_cadrage
+    (phase 1, depuis un objectif brut) et _run_brief_import (raccourci
+    import de brief existant, depuis state.imported_brief_content) — voir
+    prompts/pm.md, section Format de sortie. Synchrone (terminal
+    input()/print()) : pas d'aller-retour via le mécanisme de checkpoint
+    LangGraph/resume, l'utilisateur est déjà présent au terminal à chaque
+    tour, donc le "checkpoint" de cette phase est le dialogue lui-même.
+
+    Args:
+        transcript_seed: message(s) initial(aux) du transcript (objectif
+            brut pour _run_cadrage, document importé + contexte projet pour
+            _run_brief_import).
+        draft_label: libellé affiché au-dessus du brouillon proposé par le
+            PM (ex. "PM (proposition de fiche racine)").
+        confirm_prompt: texte exact de la confirmation terminale (ex.
+            "\nValider cette fiche racine ? [oui/non] : ").
+        model_key: clé dans config.models (les deux appelants utilisent
+            "pm_opus" aujourd'hui).
+
+    Returns:
+        (draft validé, tokens_prompt_total, tokens_completion_total,
+        duration_total_ms, claude_code_calls) — à l'appelant d'écrire les
+        fichiers, committer, construire l'AgentResult et avancer la phase.
+    """
+    transcript = list(transcript_seed)
     claude_code_config = config.get("claude_code", {})
     tokens_prompt_total = 0
     tokens_completion_total = 0
     duration_total_ms = 0
     claude_code_calls = 0
 
-    tracer = RunTracer.for_run(config, state.run_id).for_agent("pm", state.current_phase)
-    tracer.emit("node_enter")
-
     while True:
         claude_code_calls += 1
         result = await run_claude_code(
             prompt=f"{system_prompt}\n\n---\n\n" + "\n\n".join(transcript),
-            model=config.models["pm_opus"],
+            model=config.models[model_key],
             cwd=config.repo_path,
             timeout_seconds=claude_code_config.get("timeout_seconds", 300),
             output_format=claude_code_config.get("output_format", "json"),
@@ -136,36 +191,17 @@ async def _run_cadrage(state: StudioState, config: StudioConfig) -> dict:
         if fiche_match:
             draft = fiche_match.group(1).strip()
             _cadrage_console.print(_TURN_SEPARATOR, style="dim")
-            _cadrage_console.print("[bold cyan]PM (proposition de fiche racine)[/bold cyan] :")
+            _cadrage_console.print(f"[bold cyan]{draft_label}[/bold cyan] :")
             _cadrage_console.print(draft)
-            confirmation = input("\nValider cette fiche racine ? [oui/non] : ").strip().lower()
+            confirmation = input(confirm_prompt).strip().lower()
             _cadrage_console.print(f"[green]Vous :[/green] {confirmation or '(aucune précision)'}")
             if confirmation in _AFFIRMATIVE_REPLIES:
-                card_root_relative = str(Path(_specs_dir(config)) / state.run_id / "card-root.md")
-                await write_card(config.repo_path / card_root_relative, draft, tracer=tracer)
-
-                agent_result = AgentResult(
-                    agent="pm",
-                    phase=state.current_phase,
-                    status="success",
-                    output_files=[card_root_relative],
-                    tokens_prompt=tokens_prompt_total,
-                    tokens_completion=tokens_completion_total,
-                    duration_ms=duration_total_ms,
+                return (
+                    draft, tokens_prompt_total, tokens_completion_total,
+                    duration_total_ms, claude_code_calls,
                 )
-                await record_agent_result(
-                    config, state, agent_result, model=config.models["pm_opus"],
-                    claude_code_calls=claude_code_calls,
-                )
-                tracer.emit("node_exit", status="success", output_files=[card_root_relative])
-                return {
-                    "agent_results": state.agent_results + [agent_result],
-                    "card_root_path": card_root_relative,
-                    "current_phase": Phase.AUDIT_AMONT,
-                    "total_tokens_opus": state.total_tokens_opus + tokens_prompt_total + tokens_completion_total,
-                }
 
-            transcript.append(f"PM (proposition de fiche racine) :\n{draft}")
+            transcript.append(f"{draft_label} :\n{draft}")
             transcript.append(
                 f"Utilisateur : pas encore validé — {confirmation or '(aucune précision)'}"
             )
@@ -179,6 +215,135 @@ async def _run_cadrage(state: StudioState, config: StudioConfig) -> dict:
         _cadrage_console.print(f"[green]Vous :[/green] {reply}")
         transcript.append(f"PM : {question}")
         transcript.append(f"Utilisateur : {reply}")
+
+
+async def _run_cadrage(state: StudioState, config: StudioConfig) -> dict:
+    """
+    Dialogue de cadrage jusqu'à validation explicite de la fiche racine par
+    l'utilisateur — voir prompts/pm.md, section Format de sortie (phase 1),
+    et _run_validation_dialogue pour la mécanique du dialogue elle-même.
+    """
+    system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
+    transcript_seed = [f"Objectif initial de l'utilisateur : {state.objective_raw}"]
+
+    tracer = RunTracer.for_run(config, state.run_id).for_agent("pm", state.current_phase)
+    tracer.emit("node_enter")
+
+    draft, tokens_prompt_total, tokens_completion_total, duration_total_ms, claude_code_calls = (
+        await _run_validation_dialogue(
+            config, tracer, system_prompt, transcript_seed,
+            draft_label="PM (proposition de fiche racine)",
+            confirm_prompt="\nValider cette fiche racine ? [oui/non] : ",
+            model_key="pm_opus",
+        )
+    )
+
+    card_root_relative = str(Path(_specs_dir(config)) / state.run_id / "card-root.md")
+    await write_card(config.repo_path / card_root_relative, draft, tracer=tracer)
+
+    agent_result = AgentResult(
+        agent="pm",
+        phase=state.current_phase,
+        status="success",
+        output_files=[card_root_relative],
+        tokens_prompt=tokens_prompt_total,
+        tokens_completion=tokens_completion_total,
+        duration_ms=duration_total_ms,
+    )
+    await record_agent_result(
+        config, state, agent_result, model=config.models["pm_opus"],
+        claude_code_calls=claude_code_calls,
+    )
+    tracer.emit("node_exit", status="success", output_files=[card_root_relative])
+    return {
+        "agent_results": state.agent_results + [agent_result],
+        "card_root_path": card_root_relative,
+        "current_phase": Phase.AUDIT_AMONT,
+        "total_tokens_opus": state.total_tokens_opus + tokens_prompt_total + tokens_completion_total,
+    }
+
+
+async def _run_brief_import(state: StudioState, config: StudioConfig) -> dict:
+    """
+    Raccourci "import de brief existant" (voir prompts/pm.md, section Import
+    de brief existant) : le PM révise directement state.imported_brief_content
+    au lieu de dialoguer à partir de state.objective_raw (phase 1), ET saute
+    l'audit amont Architecte (phase 2) — décision actée explicitement par
+    l'utilisateur (voir docs/roadmap.md). Le brouillon validé devient
+    architect-brief.md tel quel ; un card-root.md minimal est synthétisé en
+    Python (voir _render_imported_card_root), pas par le LLM.
+    """
+    system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
+
+    reference_files = config.get("reference_files", {})
+    project_map_content = await _read_optional(
+        config.repo_path / reference_files.get("project_map", "specs/project-map.md")
+    )
+    architect_map_content = await _read_optional(
+        config.repo_path / reference_files.get("architect_map", "specs/architect-map.md")
+    )
+    transcript_seed = [
+        f"Document importé par l'utilisateur :\n\n{state.imported_brief_content}",
+        f"## project-map.md\n\n{project_map_content or '(absent — premier run du projet)'}\n\n"
+        f"## architect-map.md\n\n{architect_map_content or '(absent — premier run du projet)'}",
+    ]
+
+    tracer = RunTracer.for_run(config, state.run_id).for_agent("pm", state.current_phase)
+    tracer.emit("node_enter")
+
+    draft, tokens_prompt_total, tokens_completion_total, duration_total_ms, claude_code_calls = (
+        await _run_validation_dialogue(
+            config, tracer, system_prompt, transcript_seed,
+            draft_label="PM (revue du brief importé)",
+            confirm_prompt="\nValider ce brief Architecte ? [oui/non] : ",
+            model_key="pm_opus",
+        )
+    )
+
+    feature_name = _extract_feature_name(draft)
+
+    brief_relative = str(Path(_specs_dir(config)) / state.run_id / "architect-brief.md")
+    await write_card(config.repo_path / brief_relative, draft, tracer=tracer)
+    await commit_as_agent(
+        repo_path=config.repo_path,
+        agent="pm",
+        message="docs: architect brief (import)",
+        files=[brief_relative],
+        tracer=tracer,
+    )
+
+    card_root_relative = str(Path(_specs_dir(config)) / state.run_id / "card-root.md")
+    card_root_content = _render_imported_card_root(
+        run_id=state.run_id,
+        project_name=state.project_name,
+        feature_name=feature_name,
+        objective_raw=state.objective_raw,
+    )
+    await write_card(config.repo_path / card_root_relative, card_root_content, tracer=tracer)
+
+    agent_result = AgentResult(
+        agent="pm",
+        phase=state.current_phase,
+        status="success",
+        output_files=[card_root_relative, brief_relative],
+        tokens_prompt=tokens_prompt_total,
+        tokens_completion=tokens_completion_total,
+        duration_ms=duration_total_ms,
+    )
+    await record_agent_result(
+        config, state, agent_result, model=config.models["pm_opus"],
+        claude_code_calls=claude_code_calls,
+    )
+    tracer.emit("node_exit", status="success", output_files=[card_root_relative, brief_relative])
+
+    return {
+        "agent_results": state.agent_results + [agent_result],
+        "card_root_path": card_root_relative,
+        "architect_brief_path": brief_relative,
+        "current_phase": Phase.FICHES,
+        "agent_cards": {},
+        "total_tokens_opus": state.total_tokens_opus + tokens_prompt_total + tokens_completion_total,
+    }
 
 
 async def _create_branch_and_advance(
@@ -458,7 +623,12 @@ async def run(state: StudioState) -> StudioState:
         - En Phase.RECEPTION/Phase.CADRAGE : le dialogue tourne
           entièrement dans cet appel (terminal synchrone) jusqu'à
           validation explicite ; state.card_root_path renseigné,
-          state.current_phase=Phase.AUDIT_AMONT en retour.
+          state.current_phase=Phase.AUDIT_AMONT en retour. Si
+          state.imported_brief_content est renseigné : state.card_root_path
+          (synthétisé) ET state.architect_brief_path (le document importé,
+          validé) sont renseignés, state.agent_cards remis à {}, et
+          state.current_phase=Phase.FICHES directement (phases 1 et 2
+          sautées).
         - En Phase.FICHES, première invocation (state.agent_cards vide) :
           state.agent_cards et state.agent_sequence renseignés. Si
           should_checkpoint(state) : state.status=RunStatus.WAITING_HUMAN,
@@ -530,6 +700,8 @@ async def run(state: StudioState) -> StudioState:
     config = StudioConfig.from_env()
 
     if state.current_phase in (Phase.RECEPTION, Phase.CADRAGE):
+        if state.imported_brief_content:
+            return await _run_brief_import(state, config)
         return await _run_cadrage(state, config)
     if state.current_phase == Phase.FICHES:
         return await _run_fiches(state, config)

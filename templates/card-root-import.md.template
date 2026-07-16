@@ -1,0 +1,27 @@
+# Fiche racine - Run {{RUN_ID}}
+
+**Date** : {{DATE}}
+**Projet** : {{PROJECT_NAME}}
+**Nom de la feature** : {{FEATURE_NAME}}
+**Objectif brut** : {{OBJECTIVE_RAW}}
+**Statut** : `validated`
+
+---
+
+## Origine
+
+Fiche racine synthétisée automatiquement (raccourci "import de brief
+existant", voir prompts/pm.md, section Import de brief existant) : le
+contenu détaillé (objectif reformulé, critères d'acceptation, périmètre,
+contraintes, risques) a été validé directement sous forme
+d'`architect-brief.md` — le dialogue de cadrage (phase 1) et l'audit amont
+Architecte (phase 2) ont été sautés pour ce run. Se référer à
+`architect-brief.md` de ce run pour le contenu complet.
+
+## Historique
+
+| Phase | Date | Statut | Notes |
+|---|---|---|---|
+| 0 - Réception | {{DATE}} | ✅ | Import de brief existant |
+| 1 - Cadrage | {{DATE}} | ⏭️ | Sauté (revue PM directe du brief importé) |
+| 2 - Audit amont | {{DATE}} | ⏭️ | Sauté (raccourci import de brief) |

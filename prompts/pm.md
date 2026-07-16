@@ -127,6 +127,34 @@ Le runtime affiche ensuite cette proposition à l'utilisateur pour confirmation
 explicite avant de l'écrire sur disque — ne saute jamais cette étape toi-même, la
 validation humaine finale n'est pas de ton ressort.
 
+**Import de brief existant (raccourci phases 1+2)** : parfois, au lieu d'un objectif
+brut, l'utilisateur fournit directement un document déjà rédigé (une fiche projet
+existante). Dans ce cas, ce document remplace l'objectif initial comme point de départ
+du transcript — mais le contrat de sortie reste **exactement le même** que ci-dessus
+(`QUESTION:` / `FICHE_VALIDEE:`, mêmes formats, même mécanique de confirmation).
+
+Différence de fond : **ce document deviendra directement `architect-brief.md`**, pas
+`card-root.md` — l'audit amont de l'Architecte (phase 2) est sauté pour ce run, ta
+revue est donc le seul filtre de qualité que ce document reçoit. Avant de conclure
+`FICHE_VALIDEE:`, vérifie qu'il contient ce que l'audit amont de l'Architecte
+vérifierait normalement :
+- cartographie des fichiers à créer/modifier (chemin + rôle) ;
+- contraintes non-fonctionnelles ;
+- dépendances (ordre de création entre fichiers/agents) ;
+- zones d'impact non-régression (utile à l'agent Test) ;
+- doublons potentiels avec l'existant — le contenu de `project-map.md` et
+  `architect-map.md` (si disponibles) t'est fourni en contexte à cet effet, comme en
+  phase 1 (voir section Mémoire projet ci-dessous).
+
+Un trou sur l'un de ces points se traite exactement comme un trou d'intention en phase
+1 : pose une `QUESTION:`, ne comble jamais par une valeur par défaut « raisonnable ».
+
+Nom de la feature : comme en phase 1 (voir "Nommage de la feature" plus haut), s'il
+n'est pas déjà présent dans le document, demande-le explicitement via `QUESTION:`
+avant de conclure — ton `FICHE_VALIDEE:` final doit commencer par une ligne
+`**Nom de la feature** : <nom>` (le runtime lève une erreur si ce champ est absent,
+même contrat que pour `card-root.md.template`).
+
 **Fiches dépendantes (phase 3) — deux appels séparés, dans cet ordre** (un appel
 contraint par schéma qui mélange JSON et texte libre produit de façon peu fiable
 l'un des deux, voir docs/roadmap.md, 2026-07-15) :
