@@ -35,9 +35,17 @@ models:
 # test:
 #   command: "pytest {target_dir} -q"
 
-# Overrides de checkpoints (optionnel)
-# checkpoints:
-#   phase_9_audit_aval: false
+# Overrides de checkpoints (optionnel) — phase_1_cadrage reste à true
+# (hérité de studio.yml) : validation manuelle de la Fiche racine par le
+# dialogue PM. Tout le reste est désactivé pour ce run de test : le
+# pipeline continue seul après cette validation (jusqu'à COMPLETED, FAILED,
+# ou une pause agent normale sur blocage/max_iterations, qui n'est pas un
+# checkpoint configurable).
+checkpoints:
+  phase_2_audit_amont: false
+  phase_3_fiches: false
+  phase_5_audit_stubs: false
+  phase_9_audit_aval: false
 
 # Contraintes projet spécifiques (transmises à l'Architecte) — à compléter,
 # volontairement vide : pas de valeurs par défaut pertinentes pour un
