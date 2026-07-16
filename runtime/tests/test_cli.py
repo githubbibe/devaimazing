@@ -241,10 +241,14 @@ def test_run_closes_checkpointer_connection_even_on_error(monkeypatch: pytest.Mo
     # trouvé lors du premier run réel de bout en bout (2026-07-10) : le
     # process restait bloqué après la fin du run, sans traceback ni
     # message, juste un terminal qui ne rendait jamais la main.
+    # ValueError plutôt que RuntimeError/TimeoutError : ceux-ci sont
+    # désormais attrapés proprement par _run_async (voir
+    # test_run_external_service_error_prints_clean_message_and_closes) —
+    # ce test veut vérifier le cas d'une exception qui se propage toujours.
     closed = []
 
     async def fake_ainvoke(state, config):
-        raise RuntimeError("erreur pendant le run")
+        raise ValueError("bug interne inattendu")
 
     fake_graph = SimpleNamespace(ainvoke=fake_ainvoke, checkpointer=_fake_checkpointer(closed))
 
@@ -257,6 +261,50 @@ def test_run_closes_checkpointer_connection_even_on_error(monkeypatch: pytest.Mo
 
     assert result.exit_code != 0  # l'exception se propage toujours
     assert closed == [True]  # mais la connexion a bien été fermée (finally)
+
+
+def test_run_external_service_error_prints_clean_message_and_closes(
+    monkeypatch: pytest.MonkeyPatch, repo: Path,
+):
+    # TimeoutError/ExternalServiceError/RuntimeError levées pendant
+    # graph.ainvoke (Ollama, Claude Code CLI, Git) sont attrapées et
+    # affichées proprement plutôt que de laisser remonter la traceback
+    # brute à travers LangGraph/httpx/httpcore — vécu en run réel
+    # (2026-07-16, voir docs/roadmap.md).
+    closed = []
+
+    async def fake_ainvoke(state, config):
+        raise TimeoutError(
+            "Ollama n'a pas répondu dans le délai imparti (120s) pour le modèle "
+            "'qwen2.5:7b-instruct'"
+        )
+
+    fake_graph = SimpleNamespace(ainvoke=fake_ainvoke, checkpointer=_fake_checkpointer(closed))
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["run", "demo", "--objective", "x"])
+
+    assert result.exit_code == 0
+    assert result.exception is None
+    assert "Ollama n'a pas répondu" in result.output
+    assert "Traceback" not in result.output
+    assert closed == [True]
+
+    # Régression : sans marqueur de fin, un run interrompu par une erreur
+    # externe n'a qu'un run_start dans trace.jsonl — trouvé lors de ce
+    # correctif (2026-07-16, voir docs/roadmap.md).
+    run_id = [
+        line for line in result.output.splitlines() if line.startswith("Run run-")
+    ][0].split()[1]
+    trace_path = repo / "specs" / run_id / "trace.jsonl"
+    events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    assert [e["event"] for e in events] == ["run_start", "run_end"]
+    assert events[-1]["status"] == "interrupted"
+    assert "Ollama n'a pas répondu" in events[-1]["error"]
 
 
 def test_run_prompts_for_objective_when_missing(monkeypatch: pytest.MonkeyPatch):
@@ -417,6 +465,40 @@ def test_resume_success_clears_flag_and_continues(monkeypatch: pytest.MonkeyPatc
     assert updated["awaiting_human_validation"] is False
     assert "terminé" in result.output
     assert closed == [True]  # régression : voir test_run_closes_checkpointer_connection_even_on_error
+
+
+def test_resume_external_service_error_prints_clean_message_and_closes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state = {"awaiting_human_validation": True, "status": RunStatus.WAITING_HUMAN}
+    closed = []
+
+    async def fake_aget_state(config):
+        return _FakeSnapshot(dict(state))
+
+    async def fake_aupdate_state(config, updates):
+        pass
+
+    async def fake_ainvoke(input_state, config):
+        raise cli_module.ExternalServiceError("Ollama injoignable après 3 tentatives")
+
+    fake_graph = SimpleNamespace(
+        aget_state=fake_aget_state, aupdate_state=fake_aupdate_state, ainvoke=fake_ainvoke,
+        checkpointer=_fake_checkpointer(closed),
+    )
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["resume", "run-042", "--project", "demo"])
+
+    assert result.exit_code == 0
+    assert result.exception is None
+    assert "Ollama injoignable" in result.output
+    assert "Traceback" not in result.output
+    assert closed == [True]
 
 
 def test_resume_unknown_run_prints_error(monkeypatch: pytest.MonkeyPatch):
@@ -679,6 +761,40 @@ def test_retry_confirmation_accepted_invokes_graph(monkeypatch: pytest.MonkeyPat
     assert result.exit_code == 0
     assert calls == [None]
     assert "terminé" in result.output
+
+
+def test_retry_external_service_error_prints_clean_message_and_closes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state = {
+        "awaiting_human_validation": False, "status": RunStatus.IN_PROGRESS,
+        "current_phase": Phase.STUBS, "agent_sequence": ["back"], "current_agent_index": 0,
+        "agent_results": [],
+    }
+    closed = []
+
+    async def fake_aget_state(config):
+        return _FakeSnapshot(dict(state))
+
+    async def fake_ainvoke(input_state, config):
+        raise RuntimeError("Commande git échouée (code 1) : git checkout develop")
+
+    fake_graph = SimpleNamespace(
+        aget_state=fake_aget_state, ainvoke=fake_ainvoke, checkpointer=_fake_checkpointer(closed),
+    )
+
+    async def fake_build_graph(config):
+        return fake_graph
+
+    monkeypatch.setattr(cli_module, "build_graph", fake_build_graph)
+
+    result = CliRunner().invoke(main, ["retry", "run-042", "--project", "demo"], input="y\n")
+
+    assert result.exit_code == 0
+    assert result.exception is None
+    assert "Commande git échouée" in result.output
+    assert "Traceback" not in result.output
+    assert closed == [True]
 
 
 def test_retry_closes_checkpointer_connection_on_success(monkeypatch: pytest.MonkeyPatch):

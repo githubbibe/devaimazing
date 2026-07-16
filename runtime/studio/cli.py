@@ -43,9 +43,24 @@ from studio.tools.git import (
     init_repo,
     push_branch,
 )
+from studio.tools.ollama import ExternalServiceError
 from studio.tools.tracer import RunTracer
 
 console = Console()
+
+# Erreurs "attendues" d'un service externe (Ollama, Claude Code CLI, Git),
+# déjà porteuses d'un message clair côté outil (voir tools/ollama.py,
+# tools/claude_code.py, tools/git.py) — affichées proprement au lieu de
+# laisser remonter la traceback brute à travers LangGraph/httpx/httpcore
+# (voir docs/roadmap.md 2026-07-16). Toute autre exception continue de
+# remonter telle quelle : elle indique un bug interne, pas une panne d'un
+# service externe, et mérite sa traceback complète pour le diagnostic.
+_EXTERNAL_SERVICE_ERRORS = (TimeoutError, ExternalServiceError, RuntimeError)
+
+
+def _print_node_failure(run_id: str, exc: Exception, tracer: RunTracer) -> None:
+    console.print(f"[red]❌ Run {run_id} interrompu : {exc}[/red]")
+    tracer.emit("run_end", status="interrupted", error=str(exc))
 
 
 def _devaimazing_root() -> Path:
@@ -182,7 +197,11 @@ async def _run_async(project: str, objective: Optional[str], dry_run: bool) -> N
             status=RunStatus.IN_PROGRESS,
             started_at=datetime.now(timezone.utc),
         )
-        final_state = await graph.ainvoke(initial_state, config=_thread_config(run_id))
+        try:
+            final_state = await graph.ainvoke(initial_state, config=_thread_config(run_id))
+        except _EXTERNAL_SERVICE_ERRORS as exc:
+            _print_node_failure(run_id, exc, tracer)
+            return
         _print_run_outcome(run_id, final_state)
         tracer.emit("run_end", status=str(final_state.get("status")))
     finally:
@@ -228,7 +247,11 @@ async def _resume_async(run_id: str, project: str) -> None:
             thread_config,
             {"status": RunStatus.IN_PROGRESS, "awaiting_human_validation": False},
         )
-        final_state = await graph.ainvoke(None, config=thread_config)
+        try:
+            final_state = await graph.ainvoke(None, config=thread_config)
+        except _EXTERNAL_SERVICE_ERRORS as exc:
+            _print_node_failure(run_id, exc, tracer)
+            return
         _print_run_outcome(run_id, final_state)
         tracer.emit("run_end", status=str(final_state.get("status")))
     finally:
@@ -313,7 +336,11 @@ async def _retry_async(run_id: str, project: str) -> None:
         tracer = RunTracer.for_run(config, run_id)
         tracer.emit("run_start", command="retry", project=project)
 
-        final_state = await graph.ainvoke(None, config=thread_config)
+        try:
+            final_state = await graph.ainvoke(None, config=thread_config)
+        except _EXTERNAL_SERVICE_ERRORS as exc:
+            _print_node_failure(run_id, exc, tracer)
+            return
         _print_run_outcome(run_id, final_state)
         tracer.emit("run_end", status=str(final_state.get("status")))
     finally:
@@ -505,7 +532,10 @@ async def _run_agent_async(
     node = _node_for_agent(agent)
     try:
         updates = await node.run(state)
-    except (RuntimeError, KeyError, FileNotFoundError, TimeoutError, ValueError, TypeError) as exc:
+    except (
+        RuntimeError, KeyError, FileNotFoundError, TimeoutError, ValueError, TypeError,
+        ExternalServiceError,
+    ) as exc:
         console.print(f"[red]{type(exc).__name__} : {exc}[/red]")
         return
 

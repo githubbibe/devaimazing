@@ -10,7 +10,7 @@ Le runtime devaimazing est **fonctionnellement complet et testé de bout en bout
 closer), `metrics.py` et `cli.py` (`run`, `resume`, `retry`, `run-agent`, `runs`,
 `metrics`, `new-project`, `projects`, `doctor`) sont tous implémentés — voir
 `CLAUDE.md` pour la convention (stub-first reste appliquée par le pipeline aux
-projets *cibles*, pas à ce dépôt). **299/299 tests verts** sur `runtime/tests/`.
+projets *cibles*, pas à ce dépôt). **302/302 tests verts** sur `runtime/tests/`.
 
 Deux runs réels de bout en bout ont été menés sur des projets cibles distincts
 (`demo-todo-app`, `todo-list`) et ont permis de trouver/corriger plusieurs bugs
@@ -60,6 +60,25 @@ en écrivant les tests (real-git, pas de mock) : `_run_git` strippe tout le
 stdout, ce qui mangeait l'espace de tête de la première ligne de
 `git status --porcelain` et décalait le parsing en position fixe — d'où une
 fonction `_dirty_paths` dédiée qui n'utilise pas `_run_git`.
+
+**2026-07-16 — erreurs de service externe affichées proprement au lieu
+d'une traceback brute.** En relançant `todo-list2`, un `TimeoutError` Ollama
+levé pendant l'exécution d'un node remontait tel quel à travers
+LangGraph/httpx/httpcore jusqu'au CLI (`run`/`resume`/`retry`), affichant une
+traceback de plusieurs dizaines de lignes au lieu du message déjà clair porté
+par l'exception elle-même. Les trois commandes attrapent désormais
+`(TimeoutError, ExternalServiceError, RuntimeError)` autour de
+`graph.ainvoke(...)` et affichent `str(exc)` proprement (rouge, préfixé du
+run_id) plutôt que de laisser planter le process — un `run_end` (`status:
+"interrupted"`) est aussi émis dans `trace.jsonl` sur ce chemin, qui n'avait
+jusqu'ici qu'un `run_start` sans marqueur de fin. Choix assumé : `RuntimeError`
+est large, mais tous les points `raise RuntimeError` actuels du code
+(`tools/git.py`, `tools/claude_code.py`, `nodes/pm.py`, `nodes/architect.py`,
+`nodes/security.py`) représentent une sortie d'outil/LLM externe mal formée,
+jamais un bug interne — si un futur `RuntimeError` interne apparaît, il sera
+avalé silencieusement (exit 0) au lieu de remonter ; à surveiller si ça
+devient un problème. `run-agent` avait déjà ce garde-fou (trouvé en le
+consultant) mais sans `ExternalServiceError` dans sa liste — ajouté aussi.
 
 **Run laissé en pause volontaire** : `run-20260714-205712` (projet `todo-list`)
 est arrêté sur `back-tu`, qui signale un `blocked_reason` factuellement faux —
