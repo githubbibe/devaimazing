@@ -160,7 +160,14 @@ async def _run_async(project: str, objective: Optional[str], dry_run: bool) -> N
         return
 
     base_branch = config.get("git", {}).get("base_branch", "develop")
-    await checkout_branch(config.repo_path, base_branch)
+    cleanup_commits = await checkout_branch(config.repo_path, base_branch)
+    if cleanup_commits:
+        hashes = ", ".join(h[:8] for h in cleanup_commits)
+        console.print(
+            f"[yellow]Worktree {config.repo_path} non propre (run précédent interrompu) — "
+            f"sauvegardé en {len(cleanup_commits)} commit(s) ({hashes}) avant checkout "
+            f"{base_branch!r}.[/yellow]"
+        )
 
     tracer = RunTracer.for_run(config, run_id)
     tracer.emit("run_start", command="run", project=project, objective=objective)

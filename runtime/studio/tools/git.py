@@ -8,6 +8,7 @@ de branches de run, et le merge final vers develop.
 
 import asyncio
 import hashlib
+import json
 import os
 import re
 import time
@@ -24,6 +25,109 @@ AGENT_GIT_IDENTITIES = {
     "test":      ("test-aimazing",      "test@aimazing.fr"),
     "security":  ("security-aimazing",  "security@aimazing.fr"),
 }
+
+# Fiche (specs/<run-id>/<fichier>) -> agent propriétaire, pour attribuer
+# correctement un commit de sauvegarde automatique (voir checkout_branch) à
+# l'identité Git de l'agent concerné plutôt qu'à une identité générique.
+# back-tu/front-tu partagent l'identité Git de back/front (voir docs/agents.md).
+_CARD_FILENAME_TO_AGENT = {
+    "card-root.md": "pm",
+    "architect-brief.md": "architect",
+    "back.md": "back",
+    "back-tu.md": "back",
+    "front.md": "front",
+    "front-tu.md": "front",
+    "test.md": "test",
+    "secu.md": "security",
+}
+
+# Rôle tel qu'émis dans le champ "agent" d'un événement trace.jsonl
+# (studio.tools.tracer.AgentTracer.for_agent) -> identité Git (voir
+# _CARD_FILENAME_TO_AGENT pour le même regroupement back-tu/front-tu ->
+# back/front, secu -> security).
+_TRACE_ROLE_TO_AGENT = {
+    "pm": "pm",
+    "architect": "architect",
+    "back": "back",
+    "back-tu": "back",
+    "front": "front",
+    "front-tu": "front",
+    "test": "test",
+    "security": "security",
+    "secu": "security",
+}
+
+
+def _infer_agent_from_trace(trace_path: Path) -> Optional[str]:
+    """
+    Déduit l'agent propriétaire d'un trace.jsonl depuis le champ "agent" de
+    son dernier événement — contrairement aux fiches, un fichier de trace
+    n'a pas de nom par agent, mais chaque événement en émet un (voir
+    studio.tools.tracer.AgentTracer).
+    """
+    try:
+        lines = trace_path.read_text(encoding="utf-8").splitlines()
+    except (FileNotFoundError, UnicodeDecodeError):
+        return None
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        return _TRACE_ROLE_TO_AGENT.get(event.get("agent"))
+    return None
+
+
+def _infer_owning_agent(repo_path: Path, path: str) -> Optional[str]:
+    """Déduit l'agent propriétaire d'un chemin dirty, sinon `None`."""
+    name = Path(path).name
+    if name == "trace.jsonl":
+        return _infer_agent_from_trace(repo_path / path)
+    return _CARD_FILENAME_TO_AGENT.get(name)
+
+
+async def _dirty_paths(repo_path: Path) -> list[str]:
+    """
+    Liste les chemins (fichiers modifiés, ajoutés, supprimés ou non
+    trackés) issus de `git status --porcelain --untracked-files=all` — pour
+    un rename (`R  ancien -> nouveau`), seul le chemin `nouveau` est retenu.
+
+    `--untracked-files=all` (plutôt que le défaut `normal`) : sans lui, un
+    dossier entièrement nouveau et jamais commité (ex. specs/<run-id>/ d'un
+    run qui a planté avant le premier commit de phase) est listé comme une
+    seule entrée `?? specs/<run-id>/` — les fiches à l'intérieur ne sont
+    alors plus attribuables individuellement à leur agent. Sans risque de
+    perf ici : cette fonction ne s'exécute que sur le repo *cible* piloté
+    par devaimazing, pas un repo arbitraire (voir docs/roadmap.md 2026-07-16).
+
+    N'utilise pas `_run_git` : son `.strip()` global mangerait l'espace de
+    tête de la toute première ligne quand son statut d'index est vide (ex.
+    `" M fichier"`, modification non indexée), décalant de un caractère le
+    parsing en position fixe (colonnes 0-1 statut, 2 espace, 3+ chemin) —
+    bug trouvé en test (2026-07-16, voir docs/roadmap.md).
+    """
+    process = await asyncio.create_subprocess_exec(
+        "git", "-C", str(repo_path), "status", "--porcelain", "--untracked-files=all",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate()
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"Commande git échouée (code {process.returncode}) : git status --porcelain\n"
+            f"{stderr.decode('utf-8', errors='replace').strip()}"
+        )
+    paths = []
+    for line in stdout.decode("utf-8", errors="replace").splitlines():
+        if not line:
+            continue
+        entry = line[3:]
+        if " -> " in entry:
+            entry = entry.split(" -> ", 1)[1]
+        paths.append(entry.strip('"'))
+    return paths
 
 
 async def _run_git(repo_path: Path, *args: str, env: Optional[dict] = None) -> str:
@@ -93,7 +197,7 @@ def generate_branch_name(feature_name: str) -> str:
     return f"studio/{slug}-{digest}"
 
 
-async def checkout_branch(repo_path: Path, branch: str) -> None:
+async def checkout_branch(repo_path: Path, branch: str) -> list[str]:
     """
     Bascule sur `branch` dans le repo projet.
 
@@ -101,12 +205,34 @@ async def checkout_branch(repo_path: Path, branch: str) -> None:
         repo_path: Chemin absolu vers le repo projet.
         branch: Nom de la branche à checkout.
 
+    Returns:
+        Liste des hash de commit de sauvegarde créés si le worktree était
+        sale (voir Side effects) — liste vide si le worktree était déjà
+        propre.
+
     Raises:
-        RuntimeError: Si le checkout échoue (modifications locales non
-            commitées en conflit avec `branch`, branche inexistante).
+        RuntimeError: Si le checkout échoue (branche inexistante, ou
+            modifications locales encore en conflit avec `branch` après la
+            sauvegarde automatique — ne devrait plus arriver pour le cas
+            simple "fichiers modifiés/non trackés", seulement pour des cas
+            hors scope, ex. rebase en cours).
 
     Side effects:
-        Change la branche courante du repo projet.
+        Si le worktree contient des modifications non commitées (typiquement
+        la trace/fiche d'un run précédent interrompu en cours de nœud, avant
+        son propre commit_as_agent — trouvé en run, voir docs/roadmap.md
+        2026-07-16), elles sont d'abord sauvegardées : un commit par agent
+        propriétaire identifiable (voir _CARD_FILENAME_TO_AGENT pour les
+        fiches, ex. specs/<run-id>/back.md -> identité back-aimazing ; pour
+        un trace.jsonl, l'agent est déduit du champ "agent" de son dernier
+        événement, voir _infer_agent_from_trace — respecte la convention
+        "chaque agent assure son commit", voir docs/agents.md), puis un
+        commit unique sous l'identité `devaimazing-bootstrap` pour les
+        fichiers restants dont l'agent propriétaire ne peut pas être déduit
+        (ex. trace.jsonl sans événement exploitable, fichiers de code déjà
+        écrits). Tout ça avant le checkout, plutôt que de faire échouer le
+        run avec une erreur Git brute. Change ensuite la branche courante
+        du repo projet.
 
     Notes:
         Appelé au tout début d'un nouveau run (`cli.py::_run_async`, avant
@@ -120,7 +246,54 @@ async def checkout_branch(repo_path: Path, branch: str) -> None:
         base_branch entre deux runs — perdus dès que create_run_branch
         rebascule sur base_branch pour créer la nouvelle branche.
     """
+    paths = await _dirty_paths(repo_path)
+    if not paths:
+        await _run_git(repo_path, "checkout", branch)
+        return []
+
+    by_agent: dict[Optional[str], list[str]] = {}
+    for path in paths:
+        by_agent.setdefault(_infer_owning_agent(repo_path, path), []).append(path)
+
+    commit_hashes = []
+    for agent, files in by_agent.items():
+        if agent is None:
+            continue
+        name, email = AGENT_GIT_IDENTITIES[agent]
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": name,
+            "GIT_AUTHOR_EMAIL": email,
+            "GIT_COMMITTER_NAME": name,
+            "GIT_COMMITTER_EMAIL": email,
+        }
+        await _run_git(repo_path, "add", "--", *files)
+        await _run_git(
+            repo_path, "commit", "-m",
+            f"chore: sauvegarde du run précédent avant changement de branche ({agent})",
+            env=env,
+        )
+        commit_hashes.append(await _run_git(repo_path, "rev-parse", "HEAD"))
+
+    remaining = by_agent.get(None, [])
+    if remaining:
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "devaimazing-bootstrap",
+            "GIT_AUTHOR_EMAIL": "bootstrap@aimazing.fr",
+            "GIT_COMMITTER_NAME": "devaimazing-bootstrap",
+            "GIT_COMMITTER_EMAIL": "bootstrap@aimazing.fr",
+        }
+        await _run_git(repo_path, "add", "--", *remaining)
+        await _run_git(
+            repo_path, "commit", "-m",
+            "chore: sauvegarde de fichiers non attribuables à un agent (run précédent)",
+            env=env,
+        )
+        commit_hashes.append(await _run_git(repo_path, "rev-parse", "HEAD"))
+
     await _run_git(repo_path, "checkout", branch)
+    return commit_hashes
 
 
 async def create_run_branch(repo_path: Path, feature_name: str, base_branch: str = "develop") -> str:

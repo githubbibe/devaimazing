@@ -10,7 +10,7 @@ Le runtime devaimazing est **fonctionnellement complet et testé de bout en bout
 closer), `metrics.py` et `cli.py` (`run`, `resume`, `retry`, `run-agent`, `runs`,
 `metrics`, `new-project`, `projects`, `doctor`) sont tous implémentés — voir
 `CLAUDE.md` pour la convention (stub-first reste appliquée par le pipeline aux
-projets *cibles*, pas à ce dépôt). **292/292 tests verts** sur `runtime/tests/`.
+projets *cibles*, pas à ce dépôt). **299/299 tests verts** sur `runtime/tests/`.
 
 Deux runs réels de bout en bout ont été menés sur des projets cibles distincts
 (`demo-todo-app`, `todo-list`) et ont permis de trouver/corriger plusieurs bugs
@@ -32,10 +32,34 @@ maintenant un paramètre `num_ctx` (défaut **16384**, transmis via
 `options={"num_ctx": ...}`), configurable par `ollama.num_ctx` dans
 `config/studio.yml` ; câblé dans les 3 appelants (`backend.py`, `frontend.py`,
 `test.py`). 8192 avait été envisagé puis écarté (marge insuffisante : un run
-réel a déjà atteint ~6000-6700 tokens de prompt hors complétion). Pas encore
-revérifié par un run réel de bout en bout sur `todo-list2` (reste à relancer,
-et la lenteur CPU/Ollama qui avait motivé la pause initiale du run reste un
-facteur séparé, non résolu par ce correctif).
+réel a déjà atteint ~6000-6700 tokens de prompt hors complétion). **Validé en
+situation réelle** via `devaimazing run-agent todo-list2 run-20260716-095240
+back --phase STUBS` : `tokens_prompt=4955` (contre ~2050 plafonné avant),
+`status='success'` — plus de blocage sur le formatter JSON. La lenteur
+CPU/Ollama qui avait motivé la pause initiale du run reste un facteur séparé,
+non résolu par ce correctif.
+
+**2026-07-16 — auto-nettoyage du worktree cible avant checkout (run).** En
+relançant `todo-list2` de bout en bout après le fix ci-dessus,
+`devaimazing run` échouait avec une erreur Git brute (`git checkout develop`
+refusé, modifications non commitées d'un run précédent interrompu en cours de
+nœud). `tools.git.checkout_branch` (appelée uniquement par
+`cli.py::_run_async`, pas par `resume`) détecte maintenant un worktree sale
+avant le checkout et sauvegarde son contenu en un ou plusieurs commits plutôt
+que de faire échouer le run : un commit par agent propriétaire identifiable
+(fiches via le nom de fichier — `specs/<run-id>/back.md` → `back-aimazing` —
+et `trace.jsonl` via le champ `"agent"` de son dernier événement), puis un
+commit `devaimazing-bootstrap` pour le reste (fichiers dont l'agent
+propriétaire ne peut pas être déduit, ex. code source déjà écrit par un
+agent — la vérification de périmètre par fichier, point 2 de "Reste à
+faire", permettrait de fermer ce dernier cas). Détection basée sur
+`git status --porcelain --untracked-files=all` (nécessaire pour ne pas
+regrouper tout un dossier `specs/<run-id>/` jamais commité en une seule
+entrée non attribuable). Un bug de parsing a été trouvé et corrigé au passage
+en écrivant les tests (real-git, pas de mock) : `_run_git` strippe tout le
+stdout, ce qui mangeait l'espace de tête de la première ligne de
+`git status --porcelain` et décalait le parsing en position fixe — d'où une
+fonction `_dirty_paths` dédiée qui n'utilise pas `_run_git`.
 
 **Run laissé en pause volontaire** : `run-20260714-205712` (projet `todo-list`)
 est arrêté sur `back-tu`, qui signale un `blocked_reason` factuellement faux —

@@ -18,6 +18,7 @@ import pytest
 import studio.tools.git as git_tool
 from studio.tools.git import (
     AGENT_GIT_IDENTITIES,
+    checkout_branch,
     commit_as_agent,
     create_github_remote,
     create_initial_commit,
@@ -83,6 +84,99 @@ async def test_create_run_branch(repo: Path):
 async def test_create_run_branch_unknown_base_raises(repo: Path):
     with pytest.raises(RuntimeError):
         await create_run_branch(repo, "ajout panier", base_branch="branche-inconnue")
+
+
+async def test_checkout_branch_clean_worktree_switches_without_commit(repo: Path):
+    _git(repo, "checkout", "-q", "-b", "studio/autre-run")
+
+    result = await checkout_branch(repo, "develop")
+
+    assert result == []
+    assert _git(repo, "branch", "--show-current") == "develop"
+
+
+async def test_checkout_branch_dirty_worktree_commits_known_card_under_agent_identity(repo: Path):
+    # specs/ est un dossier entièrement nouveau, jamais commité — vérifie
+    # que --untracked-files=all l'éclate bien en fichiers individuels
+    # plutôt que de le regrouper en une seule entrée "?? specs/".
+    _git(repo, "checkout", "-q", "-b", "studio/run-precedent")
+    (repo / "specs").mkdir()
+    (repo / "specs" / "back.md").write_text("feedback non commité\n", encoding="utf-8")
+
+    commit_hashes = await checkout_branch(repo, "develop")
+
+    assert len(commit_hashes) == 1
+    assert _git(repo, "branch", "--show-current") == "develop"
+    assert _git(repo, "status", "--porcelain") == ""
+    author = _git(repo, "log", "-1", "--format=%an <%ae>", "studio/run-precedent")
+    assert author == "back-aimazing <back@aimazing.fr>"
+
+
+async def test_checkout_branch_dirty_worktree_unknown_file_falls_back_to_bootstrap(repo: Path):
+    _git(repo, "checkout", "-q", "-b", "studio/run-precedent")
+    (repo / "README.md").write_text("# Projet de test modifié\n", encoding="utf-8")
+
+    commit_hashes = await checkout_branch(repo, "develop")
+
+    assert len(commit_hashes) == 1
+    author = _git(repo, "log", "-1", "--format=%an <%ae>", "studio/run-precedent")
+    assert author == "devaimazing-bootstrap <bootstrap@aimazing.fr>"
+
+
+async def test_checkout_branch_dirty_worktree_attributes_trace_via_last_event_agent(repo: Path):
+    _git(repo, "checkout", "-q", "-b", "studio/run-precedent")
+    (repo / "specs").mkdir()
+    (repo / "specs" / "trace.jsonl").write_text(
+        '{"event": "node_enter", "agent": "front", "phase": "STUBS"}\n'
+        '{"event": "node_exit", "agent": "front", "phase": "STUBS"}\n',
+        encoding="utf-8",
+    )
+
+    commit_hashes = await checkout_branch(repo, "develop")
+
+    assert len(commit_hashes) == 1
+    author = _git(repo, "log", "-1", "--format=%an <%ae>", "studio/run-precedent")
+    assert author == "front-aimazing <front@aimazing.fr>"
+
+
+async def test_checkout_branch_dirty_worktree_trace_without_agent_field_falls_back_to_bootstrap(
+    repo: Path,
+):
+    _git(repo, "checkout", "-q", "-b", "studio/run-precedent")
+    (repo / "specs").mkdir()
+    (repo / "specs" / "trace.jsonl").write_text('{"event": "run_start"}\n', encoding="utf-8")
+
+    commit_hashes = await checkout_branch(repo, "develop")
+
+    assert len(commit_hashes) == 1
+    author = _git(repo, "log", "-1", "--format=%an <%ae>", "studio/run-precedent")
+    assert author == "devaimazing-bootstrap <bootstrap@aimazing.fr>"
+
+
+async def test_checkout_branch_dirty_worktree_splits_commits_by_owning_agent(repo: Path):
+    _git(repo, "checkout", "-q", "-b", "studio/run-precedent")
+    (repo / "specs").mkdir()
+    (repo / "specs" / "back.md").write_text("feedback back non commité\n", encoding="utf-8")
+    (repo / "specs" / "front.md").write_text("feedback front non commité\n", encoding="utf-8")
+    (repo / "README.md").write_text("# Projet de test modifié\n", encoding="utf-8")
+
+    commit_hashes = await checkout_branch(repo, "develop")
+
+    assert len(commit_hashes) == 3
+    authors = {
+        _git(repo, "log", "-1", "--format=%an", commit_hashes[i]) for i in range(3)
+    }
+    assert authors == {"back-aimazing", "front-aimazing", "devaimazing-bootstrap"}
+
+
+async def test_checkout_branch_dirty_worktree_preserves_untracked_files(repo: Path):
+    _git(repo, "checkout", "-q", "-b", "studio/run-precedent")
+    (repo / "trace.jsonl").write_text('{"event": "node_enter"}\n', encoding="utf-8")
+
+    await checkout_branch(repo, "develop")
+
+    files = _git(repo, "show", "--stat", "--format=", "studio/run-precedent")
+    assert "trace.jsonl" in files
 
 
 async def test_commit_as_agent_creates_commit_with_identity(repo: Path):
