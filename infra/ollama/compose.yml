@@ -1,0 +1,9 @@
+services:
+  ollama:
+    image: docker.io/ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ${OLLAMA_DATA_DIR:?Définir OLLAMA_DATA_DIR dans infra/ollama/.env (copier .env.example) — chemin sur une partition à gros quota, ex. /goinfre/<user>/Ollama}:/root/.ollama
