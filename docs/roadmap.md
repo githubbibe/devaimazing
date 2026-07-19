@@ -1,6 +1,6 @@
 # Feuille de route - devaimazing
 
-**Dernière mise à jour** : 2026-07-16
+**Dernière mise à jour** : 2026-07-19
 
 ## État actuel
 
@@ -10,7 +10,10 @@ Le runtime devaimazing est **fonctionnellement complet et testé de bout en bout
 closer), `metrics.py` et `cli.py` (`run`, `resume`, `retry`, `run-agent`, `runs`,
 `metrics`, `new-project`, `projects`, `doctor`) sont tous implémentés — voir
 `CLAUDE.md` pour la convention (stub-first reste appliquée par le pipeline aux
-projets *cibles*, pas à ce dépôt). **312/312 tests verts** sur `runtime/tests/`.
+projets *cibles*, pas à ce dépôt). **316/316 tests verts** sur `runtime/tests/`
+(hors `test_new_project_target_exists_not_git_repo_prints_error`, en échec
+préexistant sans rapport, dû au retour à la ligne du terminal dans les
+sorties Rich — non lié à ce chantier).
 
 Deux runs réels de bout en bout ont été menés sur des projets cibles distincts
 (`demo-todo-app`, `todo-list`) et ont permis de trouver/corriger plusieurs bugs
@@ -130,11 +133,41 @@ solution simple si ça arrive en pratique : redemander le nom via `input()`
 au lieu d'échouer dur) — à surveiller au premier usage réel plutôt qu'à
 anticiper.
 
-**Run laissé en pause volontaire** : `run-20260714-205712` (projet `todo-list`)
-est arrêté sur `back-tu`, qui signale un `blocked_reason` factuellement faux —
-limite de fiabilité de `qwen2.5:7b-instruct` sans GPU sur cette machine, pas un
-bug devaimazing. Reprise : `devaimazing retry run-20260714-205712 --project
-todo-list` (peut échouer une 3ᵉ fois et basculer en `FAILED`).
+**2026-07-19 — `run-20260714-205712` repris, puis `agent_iteration_count` corrigé
+après un vrai échec dur.** Reprise via `devaimazing resume` : le fix `num_ctx`
+du 2026-07-16 a confirmé son effet, `back-tu` a réussi dès la 3ᵉ tentative
+(fichiers `backend/tests/*` committés). `AUDIT_STUBS` a ensuite légitimement
+désigné `back` comme fautif (`TaskResponse` sans le champ `terminé`) ; `back`
+a corrigé avec succès au `resume` suivant. Mais le redo de phase STUBS
+déclenché par cette non-conformité rejoue **tout le groupe** (`back` et
+`back-tu`), pas seulement l'agent fautif — et `back-tu`, déjà à
+`agents.max_iterations` (2 `feedback_sent` + 1 `success` cumulés depuis le
+début du run), a été bloqué **avant même l'appel Ollama** : le run est tombé
+en `FAILED` (`requires_manual_intervention`) alors que `back-tu` n'était pour
+rien dans ce tour. Corrigé dans `studio.routing.agent_iteration_count` : pour
+les phases à agents multiples (`PHASE_AGENT_ROLES` — STUBS, IMPLEMENTATION),
+un résultat `"success"` remet désormais le compteur à zéro, pour ne pas
+pénaliser un agent déjà validé quand un redo est causé par un autre membre du
+groupe. Les phases à agent unique (SECURITE, TESTS) gardent le comptage
+cumulatif d'origine — nécessaire pour Sécu, qui peut légitimement ré-émettre
+un rapport `"success"` à chaque reprise humaine tant que des findings
+bloquants ne sont pas corrigés (le garde-fou doit continuer à compter ces
+tentatives-là). 4 tests de régression ajoutés dans `test_routing.py`
+(reset après succès en phase multi-agents, non-régression du comptage
+cumulatif en phase mono-agent, non-régression du garde-fou sur boucle
+d'échecs réelle). **316/316 tests verts.** Le run reste en `FAILED` dans
+`state.db` — aucune commande CLI actuelle (`resume`/`retry`) ne permet de
+relancer un run déjà `FAILED` (protection volontaire, voir docstring
+`backend.py::run`) ; un déblocage nécessiterait une intervention manuelle sur
+l'état du run, non faite ici faute de demande explicite.
+
+Anomalie non résolue relevée au passage : le commit de `back-tu` (fichiers
+`backend/tests/*`, hash `f8529e0`) a été signé git `front-aimazing` au lieu de
+`back-aimazing` attendu (`backend.py::_GIT_IDENTITY_AGENT = "back"`, y compris
+pour `back-tu`). Reproduit isolément (`commit_as_agent(agent="back", ...)`
+dans un dépôt jetable) : le code se comporte correctement seul. Le commit
+`back` suivant, dans le même run, a lui la bonne identité. Cause non
+identifiée — pas de fix tenté, à investiguer séparément si ça se reproduit.
 
 **Contraintes d'environnement à garder en tête** :
 - Ollama doit tourner en conteneur Podman sur cette machine (voir mémoire

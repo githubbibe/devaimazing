@@ -86,8 +86,31 @@ def agent_iteration_count(state: StudioState, agent: str) -> int:
     Nombre de tentatives déjà enregistrées pour cet agent à la phase
     courante (avant la tentative en cours) — compte les entrées de
     state.agent_results dont agent et phase correspondent.
+
+    Pour les phases à agents multiples (STUBS, IMPLEMENTATION — voir
+    PHASE_AGENT_ROLES), un succès remet ce compteur à zéro : sans ça, un
+    agent déjà réussi peut se retrouver bloqué à tort quand la phase est
+    rejouée à cause d'un AUTRE agent du même groupe désigné fautif par
+    l'Architecte (AUDIT_STUBS/AUDIT_AVAL) — gap trouvé en run le
+    2026-07-19 sur back-tu (voir docs/roadmap.md) : back-tu réussit,
+    l'audit désigne back comme fautif, back corrige, mais back-tu était
+    déjà à agents.max_iterations (2 feedback_sent + 1 success cumulés
+    depuis le début du run) et échouait immédiatement sans même retenter.
+
+    Pour les phases à agent unique (SECURITE, TESTS, ...), le compteur
+    reste cumulatif sur tout le run sans remise à zéro : un succès n'y
+    signifie pas "cet agent a fini son tour et peut être rejoué sans
+    risque" (ex. Sécu peut ré-émettre un rapport "success" à chaque
+    reprise humaine tant que les findings bloquants ne sont pas corrigés
+    — la boucle de garde-fou doit continuer à compter ces succès répétés).
     """
-    return sum(1 for r in state.agent_results if r.agent == agent and r.phase == state.current_phase)
+    resets_on_success = state.current_phase in PHASE_AGENT_ROLES
+    count = 0
+    for r in state.agent_results:
+        if r.agent != agent or r.phase != state.current_phase:
+            continue
+        count = 0 if (resets_on_success and r.status == "success") else count + 1
+    return count
 
 
 def max_iterations_exceeded(state: StudioState, config: StudioConfig, agent: str) -> bool:

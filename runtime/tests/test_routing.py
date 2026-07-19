@@ -88,6 +88,60 @@ def test_agent_iteration_count_ignores_other_phase():
     assert agent_iteration_count(state, "back") == 0
 
 
+def test_agent_iteration_count_resets_after_success_in_multi_agent_phase():
+    """
+    Régression run-20260714-205712 (2026-07-19) : back-tu échoue 2 fois
+    puis réussit ; l'audit redémarre ensuite la phase STUBS pour corriger
+    un AUTRE agent (back). Le compteur de back-tu (phase à agents
+    multiples, voir PHASE_AGENT_ROLES) doit repartir de 0 pour sa
+    prochaine tentative, pas rester bloqué à 3.
+    """
+    state = StudioState(
+        current_phase=Phase.STUBS,
+        agent_results=[
+            AgentResult(agent="back-tu", phase=Phase.STUBS, status="feedback_sent", iteration=1),
+            AgentResult(agent="back-tu", phase=Phase.STUBS, status="feedback_sent", iteration=2),
+            AgentResult(agent="back-tu", phase=Phase.STUBS, status="success", iteration=3),
+        ],
+    )
+    assert agent_iteration_count(state, "back-tu") == 0
+
+
+def test_agent_iteration_count_still_counts_failures_after_a_success():
+    """
+    Après le reset dû au succès, de nouveaux échecs recomptent bien à
+    partir de 0 — pas de contournement permanent du garde-fou.
+    """
+    state = StudioState(
+        current_phase=Phase.STUBS,
+        agent_results=[
+            AgentResult(agent="back-tu", phase=Phase.STUBS, status="success", iteration=1),
+            AgentResult(agent="back-tu", phase=Phase.STUBS, status="feedback_sent", iteration=1),
+            AgentResult(agent="back-tu", phase=Phase.STUBS, status="feedback_sent", iteration=2),
+        ],
+    )
+    assert agent_iteration_count(state, "back-tu") == 2
+
+
+def test_agent_iteration_count_does_not_reset_on_success_for_single_agent_phase():
+    """
+    Non-régression : les phases à agent unique (ex. SECURITE, Sécu) n'ont
+    pas ce mécanisme de redo ciblé par groupe — un succès n'y remet pas le
+    compteur à zéro, il reste cumulatif sur tout le run (ex. Sécu peut
+    ré-émettre un rapport "success" à chaque reprise humaine tant que des
+    findings bloquants subsistent ; le garde-fou doit continuer à compter
+    ces tentatives).
+    """
+    state = StudioState(
+        current_phase=Phase.SECURITE,
+        agent_results=[
+            AgentResult(agent="secu", phase=Phase.SECURITE, status="success", iteration=i + 1)
+            for i in range(3)
+        ],
+    )
+    assert agent_iteration_count(state, "secu") == 3
+
+
 def test_max_iterations_not_exceeded_below_threshold(config: StudioConfig):
     state = StudioState(current_phase=Phase.STUBS, agent_results=_results("back", Phase.STUBS, 2))
     assert max_iterations_exceeded(state, config, "back") is False
