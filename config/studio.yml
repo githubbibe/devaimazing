@@ -16,9 +16,13 @@ ollama:
   # réglage, Ollama tronque silencieusement à son défaut (2048) — augmenter si
   # les logs de trace montrent tokens_prompt collé à num_ctx alors que
   # prompt_chars grossit (feedback tronqué, voir docs/roadmap.md 2026-07-16).
-  # 16384 laisse une vraie marge : un run réel a déjà atteint 23472 caractères
-  # de prompt (~6000-6700 tokens) avant même de compter la complétion JSON.
-  num_ctx: 16384
+  # Relevé à 32768 le 2026-07-19 (run-20260714-205712, todo-list) : le
+  # feedback cumulé de back a fait grimper tokens_prompt de 4537 à 8950 sur
+  # 11 tours consécutifs (croissance ~400-500 tokens/tour) — 16384 restait
+  # suffisant sur ce run mais la tendance annonçait un dépassement à terme.
+  # 32768 = context_length natif de qwen2.5:7b-instruct (voir `ollama show`) :
+  # plafond du modèle, pas de marge artificielle en-deçà.
+  num_ctx: 32768
 
 # Claude Code CLI
 claude_code:
