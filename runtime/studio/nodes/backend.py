@@ -19,6 +19,7 @@ state.agent_sequence, pas par un node séparé.
 """
 
 from pathlib import Path
+from typing import Optional
 
 from studio.config import StudioConfig
 from studio.metrics import record_agent_result
@@ -35,6 +36,7 @@ from studio.tools.filesystem import (
     parse_structured_file_output,
     read_card,
     read_files,
+    strip_feedback_section,
     write_card,
 )
 from studio.tools.git import commit_as_agent
@@ -57,6 +59,24 @@ def _requirements_relative(config: StudioConfig) -> str:
     return str(Path(backend_dir) / "requirements.txt")
 
 
+def _updated_retry_scope(
+    state: StudioState, role: str, entry: Optional[dict[str, str]]
+) -> dict[str, dict[str, str]]:
+    """
+    Nouveau state.retry_scope après ce tour. `entry` non vide (fichier ->
+    message) remplace le scope de `role` — pas d'union avec un scope
+    précédent, un nouvel échec cible le fichier fautif de CE tour, pas
+    l'historique. `entry` vide/None retire `role` du scope (retour à la
+    régénération complète au prochain tour — cas blocked_reason ou succès).
+    """
+    new_scope = dict(state.retry_scope)
+    if entry:
+        new_scope[role] = entry
+    else:
+        new_scope.pop(role, None)
+    return new_scope
+
+
 async def _feedback_sent(
     config: StudioConfig,
     state: StudioState,
@@ -66,11 +86,14 @@ async def _feedback_sent(
     feedback_text: str,
     result: dict,
     tracer: AgentTracer,
+    retry_scope_entry: Optional[dict[str, str]],
 ) -> StudioState:
     """
     Chemin commun aux deux cas de blocage de ce node : l'agent signale
-    lui-même un blocage (blocked_reason/sortie vide) OU la vérification
-    syntaxe/import (tools.pyenv.verify_python_files) échoue après coup.
+    lui-même un blocage (blocked_reason/sortie vide, fichier fautif non
+    identifiable — retry_scope_entry=None) OU la vérification syntaxe/
+    import (tools.pyenv.verify_python_files) échoue après coup (fichier
+    fautif connu avec certitude — retry_scope_entry={fichier: message}).
     Annote la fiche, enregistre le résultat, met le run en attente de
     validation humaine — pas de progression silencieuse dans les deux cas.
     """
@@ -91,6 +114,7 @@ async def _feedback_sent(
         "status": RunStatus.WAITING_HUMAN,
         "awaiting_human_validation": True,
         "total_tokens_ollama": state.total_tokens_ollama + result["tokens_prompt"] + result["tokens_completion"],
+        "retry_scope": _updated_retry_scope(state, role, retry_scope_entry),
     }
 
 
@@ -213,6 +237,31 @@ async def run(state: StudioState) -> StudioState:
     existing_files_context = await read_files(
         config.repo_path, state.agent_card_metadata[role]["existing_files_to_read"], tracer=tracer
     )
+
+    targeted_files = state.retry_scope.get(role) or {}
+    if targeted_files:
+        # Mode correction ciblée (voir StudioState.retry_scope) : un tour
+        # précédent a échoué sur un fichier identifié avec certitude
+        # (tools.pyenv.verify_python_files) — ne redemander que CE fichier,
+        # avec son contenu actuel et l'erreur précise, pas l'historique de
+        # feedback cumulé (source de non-convergence, voir docs/roadmap.md).
+        targeted_blocks = []
+        for relative_path, message in sorted(targeted_files.items()):
+            file_path = config.repo_path / relative_path
+            current_content = file_path.read_text(encoding="utf-8") if file_path.is_file() else ""
+            targeted_blocks.append(
+                f"### {relative_path}\n\nErreur à corriger : {message}\n\n"
+                f"Contenu actuel (à corriger, pas à réécrire de zéro) :\n"
+                f"```\n{current_content}\n```"
+            )
+        card_content = (
+            "MODE CORRECTION CIBLÉE — corrige UNIQUEMENT le(s) fichier(s) "
+            "ci-dessous. Ne modifie aucun autre fichier.\n\n"
+            f"{strip_feedback_section(card_content)}\n\n"
+            "## Fichier(s) à corriger\n\n" + "\n\n".join(targeted_blocks)
+        )
+        tracer.emit("targeted_retry", files=sorted(targeted_files))
+
     user_prompt = (
         f"{existing_files_context}\n\n---\n\n{card_content}" if existing_files_context else card_content
     )
@@ -247,9 +296,12 @@ async def run(state: StudioState) -> StudioState:
         files, blocked_reason = {}, ""
 
     if blocked_reason or not files:
+        # Fichier fautif non identifiable (texte libre) : retour à la
+        # régénération complète au prochain tour (retry_scope_entry=None).
         return await _feedback_sent(
             config, state, role, card_path, iteration,
             blocked_reason or result["content"], result, tracer,
+            retry_scope_entry=None,
         )
 
     for relative_path, content in files.items():
@@ -263,9 +315,12 @@ async def run(state: StudioState) -> StudioState:
         tracer=tracer,
     )
     if verify_error is not None:
-        tracer.emit("verify_failed", reason=verify_error)
+        tracer.emit("verify_failed", file=verify_error.file, reason=verify_error.message)
+        # Fichier fautif connu avec certitude : correction ciblée sur CE
+        # fichier au prochain tour.
         return await _feedback_sent(
-            config, state, role, card_path, iteration, verify_error, result, tracer,
+            config, state, role, card_path, iteration, verify_error.message, result, tracer,
+            retry_scope_entry={verify_error.file: verify_error.message},
         )
 
     is_implementation = state.current_phase == Phase.IMPLEMENTATION
@@ -301,6 +356,8 @@ async def run(state: StudioState) -> StudioState:
         "agent_results": state.agent_results + [agent_result],
         "total_tokens_ollama": state.total_tokens_ollama + result["tokens_prompt"] + result["tokens_completion"],
     }
+    if role in state.retry_scope:
+        updates["retry_scope"] = _updated_retry_scope(state, role, entry=None)
 
     if is_last_agent_of_phase(state):
         updates["current_phase"] = NEXT_PHASE_AFTER[state.current_phase]

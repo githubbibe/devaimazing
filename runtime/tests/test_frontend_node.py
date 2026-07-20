@@ -11,6 +11,7 @@ import yaml
 
 import studio.nodes.frontend as frontend_node
 from studio.state import AgentResult, Phase, RunStatus, StudioState
+from studio.tools.pyenv import VerifyFailure
 
 
 def _write_yaml(path: Path, data: dict) -> None:
@@ -361,7 +362,10 @@ async def test_frontend_verify_failure_appends_feedback_and_waits_for_human(
         return "abc123"
 
     async def fake_verify_python_files(**kwargs):
-        return "Échec d'import de frontend.scripts.build : NameError: name 'X' is not defined"
+        return VerifyFailure(
+            file="frontend/scripts/build.py",
+            message="Échec d'import de frontend.scripts.build : NameError: name 'X' is not defined",
+        )
 
     monkeypatch.setattr(frontend_node, "read_card", fake_read_card)
     monkeypatch.setattr(frontend_node, "run_ollama", fake_run_ollama)
@@ -386,3 +390,63 @@ async def test_frontend_verify_failure_appends_feedback_and_waits_for_human(
     assert "NameError" in feedback_calls[0][1]
     assert updates["status"] == RunStatus.WAITING_HUMAN
     assert updates["agent_results"][0].status == "feedback_sent"
+    assert updates["retry_scope"]["front"] == {
+        "frontend/scripts/build.py": (
+            "Échec d'import de frontend.scripts.build : NameError: name 'X' is not defined"
+        )
+    }
+
+
+async def test_frontend_targeted_mode_prompt_contains_only_flagged_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Voir test_backend_node.py::test_backend_targeted_mode_prompt_contains_only_flagged_file (même mécanisme)."""
+    repo_path = tmp_path / "project"
+    card = (
+        "## Tâche\n\nImplémente le formulaire de login.\n\n"
+        "## Feedback\n\n"
+        "[2026-07-19] [architect] : vieux feedback obsolète qui ne doit plus être vu.\n"
+    )
+
+    async def fake_read_card(path, tracer=None):
+        return card
+
+    (repo_path / "frontend" / "scripts").mkdir(parents=True)
+    (repo_path / "frontend" / "scripts" / "build.py").write_text(
+        "def build():\n    raise NotImplementedError\n", encoding="utf-8"
+    )
+
+    captured = {}
+
+    async def fake_run_ollama(**kwargs):
+        captured["user_prompt"] = kwargs["user_prompt"]
+        return _fake_ollama_result(FILE_OUTPUT)
+
+    async def fake_write_card(path, content, tracer=None):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(frontend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(frontend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(frontend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(frontend_node, "commit_as_agent", fake_commit_as_agent)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["front"],
+        current_agent_index=0,
+        agent_cards={"front": "specs/run-042/front.md"},
+        agent_card_metadata={"front": _card_metadata()},
+        retry_scope={"front": {"frontend/scripts/build.py": "NameError: X non défini"}},
+    )
+
+    await frontend_node.run(state)
+
+    prompt = captured["user_prompt"]
+    assert "def build():\n    raise NotImplementedError" in prompt
+    assert "NameError: X non défini" in prompt
+    assert "Implémente le formulaire de login." in prompt
+    assert "vieux feedback obsolète" not in prompt

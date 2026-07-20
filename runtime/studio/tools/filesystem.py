@@ -158,6 +158,29 @@ async def write_card(card_path: Path, content: str, tracer: Optional[AgentTracer
         tracer.emit("card_written", path=str(card_path), chars=len(content))
 
 
+def strip_feedback_section(card_content: str) -> str:
+    """
+    Retire la section Feedback (et tout ce qui suit) du contenu d'une
+    fiche — garde Contexte/Tâche/Critères de livraison, retire l'historique
+    de feedback cumulé.
+
+    Utilisé pour le mode correction ciblée (voir studio.state.StudioState.
+    retry_scope) : après un échec identifié avec certitude (tools.pyenv.
+    verify_python_files), le tour suivant n'a besoin que du fichier fautif
+    + son message d'erreur précis, pas de tout l'historique de feedback
+    (qui grossit sans borne — gap trouvé en run le 2026-07-20, un feedback
+    à lui seul avait déjà atteint 2792 caractères).
+
+    Example:
+        >>> strip_feedback_section("## Tâche\\nFais X.\\n\\n## Feedback\\n[...] : Y")
+        '## Tâche\\nFais X.\\n\\n'
+    """
+    heading_index = card_content.find(FEEDBACK_HEADING)
+    if heading_index == -1:
+        return card_content
+    return card_content[:heading_index]
+
+
 async def append_feedback(card_path: Path, agent_source: str, feedback: str) -> None:
     """
     Ajoute une entrée dans la section Feedback d'une fiche.

@@ -18,6 +18,7 @@ depuis son requirements.txt avant chaque vérification (no-op si absent).
 
 import ast
 import asyncio
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -26,6 +27,20 @@ from studio.tools.tracer import AgentTracer
 VENV_ROOT = Path.home() / ".devaimazing" / "venvs"
 IMPORT_TIMEOUT_SECONDS = 10
 _MAX_ERROR_CHARS = 300
+
+
+@dataclass
+class VerifyFailure:
+    """
+    Échec de vérification identifiant le fichier fautif avec certitude —
+    distingué du blocage `blocked_reason` de l'agent lui-même (texte libre,
+    fichier non identifiable) pour permettre une réécriture ciblée au tour
+    suivant (voir studio.state.StudioState.retry_scope, gap trouvé en run
+    réel le 2026-07-20 sur run-20260714-205712 : un fix manuel sur un seul
+    fichier était écrasé par la régénération complète du tour suivant).
+    """
+    file: str
+    message: str
 
 
 class DependencyInstallError(Exception):
@@ -158,11 +173,11 @@ def _module_name(relative_path: str) -> Optional[str]:
     return ".".join(parts)
 
 
-def check_syntax(files: dict[str, str]) -> Optional[str]:
+def check_syntax(files: dict[str, str]) -> Optional[VerifyFailure]:
     """
     Valide la syntaxe (ast.parse, aucune exécution) des fichiers .py de
-    `files`. Retourne le message de la première erreur rencontrée (chemin +
-    ligne + message natif), None si tout est syntaxiquement valide.
+    `files`. Retourne le VerifyFailure de la première erreur rencontrée
+    (chemin + ligne + message natif), None si tout est syntaxiquement valide.
     """
     for relative_path in sorted(files):
         if not relative_path.endswith(".py"):
@@ -170,7 +185,10 @@ def check_syntax(files: dict[str, str]) -> Optional[str]:
         try:
             ast.parse(files[relative_path], filename=relative_path)
         except SyntaxError as exc:
-            return f"Erreur de syntaxe dans {relative_path} ligne {exc.lineno} : {exc.msg}"
+            return VerifyFailure(
+                file=relative_path,
+                message=f"Erreur de syntaxe dans {relative_path} ligne {exc.lineno} : {exc.msg}",
+            )
     return None
 
 
@@ -180,18 +198,20 @@ async def check_imports(
     files: dict[str, str],
     timeout_seconds: float = IMPORT_TIMEOUT_SECONDS,
     tracer: Optional[AgentTracer] = None,
-) -> Optional[str]:
+) -> Optional[VerifyFailure]:
     """
     Tente d'importer (venv dédié, cwd=repo_path) chaque fichier .py de
     `files` individuellement — un import transitif (ex. `main.py`
     important `routers`, `crud`, `schemas`...) révèle aussi les
     ImportError/NameError situés dans les fichiers dépendants, pas
-    seulement dans le fichier importé lui-même.
+    seulement dans le fichier importé lui-même (le VerifyFailure.file
+    retourné est alors le fichier IMPORTÉ, ex. `backend/main.py`, pas
+    forcément celui où l'erreur réelle se trouve).
 
     Returns:
-        Message de la première erreur rencontrée (dernière ligne utile du
-        stderr), None si tous les imports réussissent (ou si `files` ne
-        contient aucun fichier .py importable).
+        VerifyFailure de la première erreur rencontrée (dernière ligne
+        utile du stderr), None si tous les imports réussissent (ou si
+        `files` ne contient aucun fichier .py importable).
     """
     for relative_path in sorted(files):
         module_name = _module_name(relative_path)
@@ -224,7 +244,7 @@ async def check_imports(
                 path=relative_path,
                 stderr=stderr[-2000:],
             )
-        return message
+        return VerifyFailure(file=relative_path, message=message)
     return None
 
 
@@ -234,10 +254,10 @@ async def verify_python_files(
     files: dict[str, str],
     requirements_relative: Optional[str] = None,
     tracer: Optional[AgentTracer] = None,
-) -> Optional[str]:
+) -> Optional[VerifyFailure]:
     """
-    Point d'entrée : syntaxe puis import réel. Retourne le message de la
-    première erreur rencontrée, None si tout est valide (y compris si
+    Point d'entrée : syntaxe puis import réel. Retourne le VerifyFailure de
+    la première erreur rencontrée, None si tout est valide (y compris si
     `files` ne contient aucun fichier .py — no-op, ex. sortie de `front`).
     """
     syntax_error = check_syntax(files)
@@ -256,5 +276,5 @@ async def verify_python_files(
         # comme une erreur d'environnement — voir DependencyInstallError.
         # RuntimeError (échec de création du venv) n'est PAS capturé ici :
         # ça reste une vraie erreur d'infra, remontée telle quelle.
-        return str(exc)
+        return VerifyFailure(file=requirements_relative or "requirements.txt", message=str(exc))
     return await check_imports(repo_path, python_path, files, tracer=tracer)

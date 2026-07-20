@@ -36,8 +36,8 @@ def test_check_syntax_invalid_file_reports_line_and_message():
     files = {"backend/main.py": "CORS_ORIGINS = [\n"}
     error = pyenv.check_syntax(files)
     assert error is not None
-    assert "backend/main.py" in error
-    assert "ligne" in error
+    assert error.file == "backend/main.py"
+    assert "ligne" in error.message
 
 
 def test_check_syntax_ignores_non_python_files():
@@ -197,7 +197,8 @@ async def test_check_imports_name_error(tmp_path: Path):
         files={"pkg/broken.py": ""},
     )
     assert error is not None
-    assert "pkg.broken" in error
+    assert error.file == "pkg/broken.py"
+    assert "pkg.broken" in error.message
 
 
 async def test_check_imports_cross_file_import_error(tmp_path: Path):
@@ -214,7 +215,7 @@ async def test_check_imports_cross_file_import_error(tmp_path: Path):
         files={"pkg/schemas.py": "", "pkg/crud.py": ""},
     )
     assert error is not None
-    assert "pkg.crud" in error
+    assert "pkg.crud" in error.message
 
 
 async def test_check_imports_timeout(tmp_path: Path):
@@ -229,7 +230,7 @@ async def test_check_imports_timeout(tmp_path: Path):
         timeout_seconds=1,
     )
     assert error is not None
-    assert "Timeout" in error
+    assert "Timeout" in error.message
 
 
 async def test_check_imports_ignores_non_python_files(tmp_path: Path):
@@ -309,10 +310,14 @@ async def test_verify_python_files_dependency_install_error_returns_message(
 
     files = {"backend/main.py": "import fastapi\n"}
     error = await pyenv.verify_python_files(
-        repo_path=tmp_path, project_name="demo", files=files
+        repo_path=tmp_path,
+        project_name="demo",
+        files=files,
+        requirements_relative="backend/requirements.txt",
     )
     assert error is not None
-    assert "fastapi==0.95.3" in error
+    assert error.file == "backend/requirements.txt"
+    assert "fastapi==0.95.3" in error.message
 
 
 async def test_verify_python_files_venv_creation_runtime_error_propagates(

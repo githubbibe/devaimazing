@@ -14,6 +14,7 @@ import yaml
 
 import studio.nodes.backend as backend_node
 from studio.state import AgentResult, Phase, RunStatus, StudioState
+from studio.tools.pyenv import VerifyFailure
 
 
 def _write_yaml(path: Path, data: dict) -> None:
@@ -548,7 +549,10 @@ async def test_backend_verify_failure_appends_feedback_and_waits_for_human(
         return "abc123"
 
     async def fake_verify_python_files(**kwargs):
-        return "Échec d'import de backend.auth.endpoints : NameError: name 'X' is not defined"
+        return VerifyFailure(
+            file="backend/auth/endpoints.py",
+            message="Échec d'import de backend.auth.endpoints : NameError: name 'X' is not defined",
+        )
 
     monkeypatch.setattr(backend_node, "read_card", fake_read_card)
     monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
@@ -620,3 +624,211 @@ async def test_backend_verify_success_proceeds_to_commit(monkeypatch: pytest.Mon
     assert verify_calls[0]["files"] == {"backend/auth/endpoints.py": "def login():\n    ..."}
     assert committed["agent"] == "back"
     assert updates["agent_results"][0].status == "success"
+
+
+async def test_backend_verify_failure_sets_retry_scope(monkeypatch: pytest.MonkeyPatch):
+    """
+    Régression run-20260714-205712 (2026-07-20) : le fichier fautif connu
+    avec certitude (VerifyFailure) doit être ciblé pour le prochain tour,
+    pas noyé dans une régénération complète.
+    """
+    async def fake_read_card(path, tracer=None):
+        return "fiche back"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(FILE_OUTPUT)
+
+    async def fake_write_card(path, content, tracer=None):
+        pass
+
+    async def fake_append_feedback(card_path, agent_source, feedback):
+        pass
+
+    async def fake_verify_python_files(**kwargs):
+        return VerifyFailure(file="backend/auth/endpoints.py", message="NameError: X non défini")
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(backend_node, "append_feedback", fake_append_feedback)
+    monkeypatch.setattr(backend_node, "verify_python_files", fake_verify_python_files)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
+    )
+
+    updates = await backend_node.run(state)
+
+    assert updates["retry_scope"]["back"] == {
+        "backend/auth/endpoints.py": "NameError: X non défini"
+    }
+
+
+async def test_backend_success_clears_retry_scope(monkeypatch: pytest.MonkeyPatch, project_repo: Path):
+    """Un tour réussi vide le retry_scope de l'agent — retour au régime normal."""
+    async def fake_read_card(path, tracer=None):
+        return "fiche back"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(FILE_OUTPUT)
+
+    async def fake_write_card(path, content, tracer=None):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(backend_node, "commit_as_agent", fake_commit_as_agent)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
+        retry_scope={"back": {"backend/auth/endpoints.py": "erreur précédente"}},
+    )
+
+    updates = await backend_node.run(state)
+
+    assert "back" not in updates["retry_scope"]
+
+
+async def test_backend_blocked_reason_clears_retry_scope(monkeypatch: pytest.MonkeyPatch):
+    """
+    Un blocage de l'agent lui-même (blocked_reason, fichier non
+    identifiable) fait retomber en régénération complète — retry_scope vidé.
+    """
+    async def fake_read_card(path, tracer=None):
+        return "fiche back"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(
+            _structured_output({}, blocked_reason="Contradiction détectée.")
+        )
+
+    async def fake_append_feedback(card_path, agent_source, feedback):
+        pass
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "append_feedback", fake_append_feedback)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
+        retry_scope={"back": {"backend/auth/endpoints.py": "erreur précédente"}},
+    )
+
+    updates = await backend_node.run(state)
+
+    assert "back" not in updates["retry_scope"]
+
+
+async def test_backend_targeted_mode_prompt_contains_only_flagged_file(
+    monkeypatch: pytest.MonkeyPatch, project_repo: Path
+):
+    """
+    Régression run-20260714-205712 (2026-07-20) : en mode ciblé, le prompt
+    ne doit contenir QUE le contenu actuel du fichier fautif + l'erreur
+    précise — pas l'historique de feedback cumulé (source de non-
+    convergence déjà diagnostiquée), pas les autres fichiers du périmètre.
+    """
+    card = (
+        "## Tâche\n\nImplémente le endpoint login.\n\n"
+        "## Feedback\n\n"
+        "[2026-07-19] [architect] : vieux feedback obsolète qui ne doit plus être vu.\n"
+    )
+
+    async def fake_read_card(path, tracer=None):
+        return card
+
+    (project_repo / "backend" / "auth").mkdir(parents=True)
+    (project_repo / "backend" / "auth" / "endpoints.py").write_text(
+        "def login():\n    raise NotImplementedError\n", encoding="utf-8"
+    )
+
+    captured = {}
+
+    async def fake_run_ollama(**kwargs):
+        captured["user_prompt"] = kwargs["user_prompt"]
+        return _fake_ollama_result(FILE_OUTPUT)
+
+    async def fake_write_card(path, content, tracer=None):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(backend_node, "commit_as_agent", fake_commit_as_agent)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
+        retry_scope={"back": {"backend/auth/endpoints.py": "NameError: X non défini"}},
+    )
+
+    await backend_node.run(state)
+
+    prompt = captured["user_prompt"]
+    assert "def login():\n    raise NotImplementedError" in prompt
+    assert "NameError: X non défini" in prompt
+    assert "Implémente le endpoint login." in prompt
+    assert "vieux feedback obsolète" not in prompt
+
+
+async def test_backend_no_retry_scope_uses_full_regeneration(monkeypatch: pytest.MonkeyPatch):
+    """Non-régression : sans retry_scope, le prompt reste la fiche complète telle quelle."""
+    async def fake_read_card(path, tracer=None):
+        return "fiche back complète"
+
+    captured = {}
+
+    async def fake_run_ollama(**kwargs):
+        captured["user_prompt"] = kwargs["user_prompt"]
+        return _fake_ollama_result(FILE_OUTPUT)
+
+    async def fake_write_card(path, content, tracer=None):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(backend_node, "commit_as_agent", fake_commit_as_agent)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
+    )
+
+    await backend_node.run(state)
+
+    assert "fiche back complète" in captured["user_prompt"]
+    assert "MODE CORRECTION CIBLÉE" not in captured["user_prompt"]

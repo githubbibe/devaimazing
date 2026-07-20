@@ -117,3 +117,14 @@ class StudioState:
     failed_agents: list[str] = field(default_factory=list)
     requires_manual_intervention: bool = False
     intervention_reason: Optional[str] = None
+
+    # Fichier(s) à corriger en mode ciblé au prochain tour de back/front, clé
+    # = rôle agent, valeur = {chemin relatif: message d'erreur}. Rempli par
+    # backend.py/frontend.py quand tools.pyenv.verify_python_files échoue
+    # (fichier fautif connu avec certitude) ; vidé dès qu'un tour réussit ou
+    # que l'agent se bloque lui-même (blocked_reason, fichier non
+    # identifiable — retour à la régénération complète). Voir
+    # docs/roadmap.md, gap trouvé en run le 2026-07-20 : un fix manuel sur
+    # un seul fichier était écrasé par la régénération complète du tour
+    # suivant faute de ce ciblage.
+    retry_scope: dict[str, dict[str, str]] = field(default_factory=dict)

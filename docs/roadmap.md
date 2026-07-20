@@ -10,10 +10,44 @@ Le runtime devaimazing est **fonctionnellement complet et testé de bout en bout
 closer), `metrics.py` et `cli.py` (`run`, `resume`, `retry`, `run-agent`, `runs`,
 `metrics`, `new-project`, `projects`, `doctor`) sont tous implémentés — voir
 `CLAUDE.md` pour la convention (stub-first reste appliquée par le pipeline aux
-projets *cibles*, pas à ce dépôt). **336/337 tests verts** sur `runtime/tests/`
+projets *cibles*, pas à ce dépôt). **348/349 tests verts** sur `runtime/tests/`
 (seul échec : `test_new_project_target_exists_not_git_repo_prints_error`,
 préexistant sans rapport, dû au retour à la ligne du terminal dans les
 sorties Rich).
+
+**2026-07-20 — correction ciblée après échec verify_python_files (patch
+incrémental, chantier 2).** Suite directe des chantiers du même jour : en
+conditions réelles sur `run-20260714-205712`, un fix manuel sur
+`requirements.txt` (fastapi==0.95.3 → 0.95.2) a été écrasé au tour suivant
+parce que `back` régénère l'intégralité de son périmètre (9 fichiers) à
+chaque tour, sans savoir qu'un seul fichier était en cause. `tools.pyenv.
+verify_python_files` retourne désormais une structure `VerifyFailure(file,
+message)` au lieu d'une simple string — le fichier fautif devient une
+donnée exploitable, pas juste un fragment de texte. Nouveau champ
+`StudioState.retry_scope: dict[str, dict[str, str]]` (rôle → {fichier:
+message}) : rempli par `backend.py`/`frontend.py` quand `verify_python_files`
+échoue (fichier connu avec certitude), vidé sur succès ou sur blocage de
+l'agent lui-même (`blocked_reason`, fichier non identifiable — retour à la
+régénération complète dans ce cas). Quand `retry_scope[role]` est non vide,
+le node bascule en mode ciblé : prompt = tâche/critères de la fiche (via
+nouveau `tools.filesystem.strip_feedback_section`, l'historique de feedback
+cumulé est exclu) + contenu actuel du seul fichier fautif + message d'erreur
+précis — pas les 8 autres fichiers, pas le feedback obsolète déjà traité.
+
+Explicitement **hors scope** de ce chantier : le cas où c'est l'Architecte
+(audit `AUDIT_STUBS`/`AUDIT_AVAL`) qui désigne un `faulty_agent` — son
+feedback est du texte libre sans liste structurée de fichiers, en extraire
+un scope fiable demanderait de changer le contrat de sortie de l'Architecte.
+Seul le cas `verify_python_files` (fichier connu avec certitude) est couvert.
+
+**Non testé en conditions réelles** au moment d'écrire cette entrée — à
+vérifier au prochain `resume` de `run-20260714-205712` : le mode ciblé se
+déclenche bien, le prompt est effectivement réduit, et ça réduit la
+régression observée (fix écrasé par régénération complète).
+
+12 tests ajoutés (`test_pyenv.py` : VerifyFailure structuré ; `test_filesystem.py` :
+`strip_feedback_section` ; `test_backend_node.py`/`test_frontend_node.py` :
+retry_scope posé/vidé, prompt ciblé, non-régression régénération complète).
 
 **2026-07-20 — vérification syntaxe + import réel avant commit (Back/Front).**
 Poursuite de `run-20260714-205712` (todo-list, voir entrée 2026-07-19) : 22

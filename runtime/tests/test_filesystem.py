@@ -15,6 +15,7 @@ from studio.tools.filesystem import (
     parse_structured_file_output,
     read_card,
     read_files,
+    strip_feedback_section,
     write_card,
 )
 from studio.tools.tracer import RunTracer
@@ -128,6 +129,19 @@ async def test_append_feedback_missing_section_raises(tmp_path: Path):
 
     with pytest.raises(ValueError):
         await append_feedback(card_path, agent_source="front", feedback="x")
+
+
+def test_strip_feedback_section_removes_feedback_and_beyond():
+    result = strip_feedback_section(CARD_WITH_FEEDBACK)
+    assert "## Objectif" in result
+    assert "Faire le truc." in result
+    assert "## Feedback" not in result
+    assert "Aucun feedback pour l'instant" not in result
+
+
+def test_strip_feedback_section_no_feedback_heading_returns_unchanged():
+    content = "# Fiche\n\n## Objectif\n\nFaire le truc.\n"
+    assert strip_feedback_section(content) == content
 
 
 async def test_read_files_includes_existing_file_content(tmp_path: Path):
