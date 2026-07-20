@@ -14,7 +14,13 @@ git:
 
 # Structure du projet cible
 structure:
-  backend_dir: backend/
+  # 2026-07-20 : backend_dir vide — layout plat réel (main.py/requirements.txt
+  # à la racine du repo, jamais sous backend/, voir back.md). L'ancienne
+  # valeur "backend/" faisait chercher verify_python_files un
+  # backend/requirements.txt inexistant, sautait silencieusement
+  # l'installation des dépendances (ensure_venv, no-op si fichier absent) et
+  # produisait un faux "ModuleNotFoundError: No module named 'fastapi'".
+  backend_dir: ""
   frontend_dir: frontend/
   tests_dir: tests/
   specs_dir: specs/          # Fiches devaimazing dans le repo projet
@@ -26,14 +32,27 @@ reference_files:
   architect_map: specs/architect-map.md
 
 # Overrides de modèles (optionnel, hérite de studio.yml si non défini)
+# 2026-07-20 : repassé à 7b-instruct sur poste 42 (f4r11s4, 15 Gi RAM) — le
+# 14b avec ollama.num_ctx=32768 (studio.yml) tue le process llama-server
+# (OOM, "signal: killed"). Remettre 14b-instruct sur une machine avec plus
+# de RAM si besoin de meilleure qualité.
 models:
-  agents_local: qwen2.5:14b-instruct  # si assez de RAM
+  agents_local: qwen2.5:7b-instruct
 
 # Commande de test du projet cible (phase 7, agent Test). Placeholder
 # {target_dir} substitué par repo_path à l'exécution. À décommenter et
 # adapter une fois la stack du projet connue.
-# test:
-#   command: "pytest {target_dir} -q"
+test:
+  # --tb=native : format de traceback Python natif (File "...", line N),
+  # requis pour que studio.tools.pyenv.extract_traceback_files identifie les
+  # fichiers impliqués dans un échec — voir studio.nodes.test::run,
+  # _owning_producer_agent (docs/roadmap.md, 2026-07-20). Le défaut pytest
+  # (chemin:ligne:) n'est pas parsable par cet utilitaire.
+  # python -m pytest (pas le binaire pytest direct) : -m ajoute le cwd à
+  # sys.path, nécessaire pour que `import main` (layout plat, racine du
+  # repo) fonctionne — le binaire pytest direct produit un faux
+  # ModuleNotFoundError sans rapport avec le vrai bug (vérifié 2026-07-20).
+  command: "/home/sgraebli/.devaimazing/venvs/todo-list2/bin/python -m pytest {target_dir} --tb=native -q"
 
 # Overrides de checkpoints (optionnel) — phase_1_cadrage reste à true
 # (hérité de studio.yml) : validation manuelle de la Fiche racine par le

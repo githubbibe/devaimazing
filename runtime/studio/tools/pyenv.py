@@ -163,7 +163,7 @@ async def ensure_venv(
     return python_path
 
 
-def _extract_traceback_files(stderr: str, repo_path: Path) -> list[str]:
+def extract_traceback_files(stderr: str, repo_path: Path) -> list[str]:
     """
     Extrait les fichiers du repo cible mentionnés dans une traceback Python
     (lignes `File "..."`) — hors pseudo-fichiers (`<string>`, `<frozen
@@ -175,7 +175,7 @@ def _extract_traceback_files(stderr: str, repo_path: Path) -> list[str]:
         traceback, dédupliqués.
 
     Example:
-        >>> _extract_traceback_files(
+        >>> extract_traceback_files(
         ...     'File "<string>", line 1, in <module>\\n'
         ...     'File "/repo/backend/crud.py", line 4, in <module>\\n'
         ...     'File "/repo/backend/models.py", line 2, in <module>',
@@ -252,7 +252,7 @@ async def check_imports(
     seulement dans le fichier importé lui-même. `VerifyFailure.file` reste
     le fichier IMPORTÉ (ex. `backend/main.py`) ; les autres fichiers du
     repo présents dans la traceback (le(s) fichier(s) réellement en cause)
-    sont dans `VerifyFailure.related_files` — voir `_extract_traceback_files`.
+    sont dans `VerifyFailure.related_files` — voir `extract_traceback_files`.
 
     Returns:
         VerifyFailure de la première erreur rencontrée (dernière ligne
@@ -287,7 +287,7 @@ async def check_imports(
                 last_line = last_line[:_MAX_ERROR_CHARS] + "… (tronqué)"
             message = f"Échec d'import de {module_name} ({relative_path}) : {last_line}"
             related_files = [
-                f for f in _extract_traceback_files(stderr, repo_path) if f != relative_path
+                f for f in extract_traceback_files(stderr, repo_path) if f != relative_path
             ]
         if tracer is not None:
             tracer.emit(

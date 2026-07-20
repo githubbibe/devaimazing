@@ -405,9 +405,15 @@ async def merge_run_branch(repo_path: Path, branch_name: str, target_branch: str
 
     Side effects:
         Merge la branche dans target_branch. Ne supprime pas la branche du run
-        (conservée pour traçabilité et audit).
+        (conservée pour traçabilité et audit). Utilise checkout_branch (pas un
+        checkout brut) : le node closer écrit son propre trace.jsonl
+        (tracer.emit("node_enter", ...)) juste avant d'appeler cette fonction,
+        ce qui salit systématiquement la branche du run et ferait échouer un
+        `git checkout` nu — trouvé en run (2026-07-20, voir docs/roadmap.md),
+        déjà contourné manuellement une fois avant ce fix (commit
+        78536ca sur todo-list2, "trace et fiche non commitées").
     """
-    await _run_git(repo_path, "checkout", target_branch)
+    await checkout_branch(repo_path, target_branch)
     await _run_git(
         repo_path, "merge", "--no-ff", branch_name,
         "-m", f"merge: {branch_name} into {target_branch}",

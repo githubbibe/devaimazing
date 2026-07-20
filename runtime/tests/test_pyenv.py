@@ -39,7 +39,7 @@ def test_extract_traceback_files_finds_repo_files_in_order():
         '    from backend.database import Base\n'
         "ImportError: cannot import name 'Base'\n"
     )
-    assert pyenv._extract_traceback_files(stderr, repo_path) == [
+    assert pyenv.extract_traceback_files(stderr, repo_path) == [
         "backend/crud.py",
         "backend/models.py",
     ]
@@ -52,7 +52,7 @@ def test_extract_traceback_files_excludes_pseudo_files():
         'File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed\n'
         'File "/repo/backend/main.py", line 1, in <module>\n'
     )
-    assert pyenv._extract_traceback_files(stderr, repo_path) == ["backend/main.py"]
+    assert pyenv.extract_traceback_files(stderr, repo_path) == ["backend/main.py"]
 
 
 def test_extract_traceback_files_excludes_files_outside_repo():
@@ -61,7 +61,7 @@ def test_extract_traceback_files_excludes_files_outside_repo():
         'File "/repo/backend/main.py", line 1, in <module>\n'
         'File "/usr/lib/python3.14/site-packages/fastapi/__init__.py", line 5, in <module>\n'
     )
-    assert pyenv._extract_traceback_files(stderr, repo_path) == ["backend/main.py"]
+    assert pyenv.extract_traceback_files(stderr, repo_path) == ["backend/main.py"]
 
 
 def test_extract_traceback_files_deduplicates():
@@ -70,7 +70,7 @@ def test_extract_traceback_files_deduplicates():
         'File "/repo/backend/main.py", line 1, in <module>\n'
         'File "/repo/backend/main.py", line 1, in <module>\n'
     )
-    assert pyenv._extract_traceback_files(stderr, repo_path) == ["backend/main.py"]
+    assert pyenv.extract_traceback_files(stderr, repo_path) == ["backend/main.py"]
 
 
 def test_check_syntax_valid_file():

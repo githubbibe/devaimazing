@@ -13,6 +13,7 @@ partagent les nodes backend/frontend (voir studio.routing.AGENT_TO_NODE).
 import asyncio
 import shlex
 from pathlib import Path
+from typing import Optional
 
 from studio.config import StudioConfig
 from studio.metrics import record_agent_result
@@ -28,6 +29,7 @@ from studio.tools.filesystem import (
 )
 from studio.tools.git import commit_as_agent
 from studio.tools.ollama import FILE_OUTPUT_SCHEMA, run_ollama
+from studio.tools.pyenv import extract_traceback_files
 from studio.tools.tracer import RunTracer
 
 _DEVAIMAZING_ROOT = Path(__file__).resolve().parents[3]
@@ -38,6 +40,41 @@ _SKILL_NAMES = ["non-regression"]
 # Nombre de caractères d'output de test conservés dans la fiche en cas
 # d'échec (évite de dumper une sortie de suite de tests entière).
 _MAX_FEEDBACK_OUTPUT_CHARS = 4000
+
+
+def _owning_producer_agent(
+    config: StudioConfig, state: StudioState, relative_path: str
+) -> Optional[str]:
+    """
+    Détermine quel agent producteur (back ou front) est propriétaire d'un
+    chemin de fichier issu d'une traceback pytest de test_command — sert à
+    router un échec de non-régression vers le bon producteur (voir run(),
+    Phase.TESTS) au lieu de s'arrêter systématiquement sur WAITING_HUMAN.
+
+    Returns:
+        "back"/"front" si le chemin est sous structure.backend_dir/
+        frontend_dir (et que l'agent correspondant est actif dans
+        state.agent_sequence pour ce run) — None si le chemin est sous
+        structure.tests_dir (fichier de test lui-même : Test ne se corrige
+        jamais lui-même, voir docstring de run()) ou si aucun agent
+        producteur ne peut être déterminé avec confiance (préfère ne rien
+        attribuer plutôt que deviner, même logique que
+        architect._extract_feedback_files).
+    """
+    structure = config.get("structure", {})
+    tests_dir = structure.get("tests_dir", "tests/")
+    if tests_dir and relative_path.startswith(tests_dir):
+        return None
+
+    frontend_dir = structure.get("frontend_dir", "frontend/")
+    if frontend_dir and relative_path.startswith(frontend_dir):
+        return "front" if "front" in state.agent_sequence else None
+
+    backend_dir = structure.get("backend_dir", "backend/")
+    if not backend_dir or relative_path.startswith(backend_dir):
+        return "back" if "back" in state.agent_sequence else None
+
+    return None
 
 
 async def _run_test_command(command_template: str, target_dir: Path) -> tuple[bool, str]:
@@ -82,10 +119,18 @@ async def run(state: StudioState) -> StudioState:
           state.status=RunStatus.WAITING_HUMAN.
         - Si config.test_command est défini (voir config/projects/<nom>.yml
           section test) et que son exécution échoue (code de sortie non
-          nul) : traité comme un échec de non-régression — feedback ajouté
-          à la fiche avec l'output de la commande, AgentResult.status=
-          "error", state.status=RunStatus.WAITING_HUMAN. L'agent Test ne
-          corrige ni le test ni le code (voir docs/workflow.md phase 7).
+          nul) : traité comme un échec de non-régression. Si l'output
+          implique un fichier du périmètre Back ou Front (voir
+          _owning_producer_agent, nécessite --tb=native côté pytest) : redo
+          ciblé de ce producteur — feedback ajouté à SA fiche (pas celle de
+          Test), state.current_phase=Phase.IMPLEMENTATION,
+          state.current_agent_index pointant sur ce producteur,
+          state.retry_scope rempli (voir docs/roadmap.md, 2026-07-20).
+          Sinon (bug probablement dans le test lui-même, ou traceback non
+          exploitable) : feedback ajouté à la fiche de Test,
+          AgentResult.status="error", state.status=RunStatus.WAITING_HUMAN —
+          l'agent Test ne corrige jamais lui-même ni le test ni le code
+          (voir docs/workflow.md phase 7).
         - Si config.test_command n'est pas défini pour ce projet : les
           tests sont écrits et commités mais pas exécutés (voir Notes) ;
           state.current_phase avance normalement à Phase.SECURITE.
@@ -109,9 +154,10 @@ async def run(state: StudioState) -> StudioState:
           chemins exacts renvoyés par l'agent, sans validation de périmètre
           — rôle de l'Architecte en phase 9).
         - Si config.test_command est défini : exécute cette commande dans
-          config.repo_path.
+          config.repo_path, AVANT le commit (voir Notes) — pas après.
         - Commit sous l'identité test-aimazing <test@aimazing.fr> via
-          tools.git.commit_as_agent.
+          tools.git.commit_as_agent, uniquement si config.test_command est
+          absent ou réussit — jamais pour un test qui échoue à l'exécution.
         - Incrémente state.total_tokens_ollama.
 
     Example:
@@ -138,6 +184,13 @@ async def run(state: StudioState) -> StudioState:
         dans docs/workflow.md n'est pas encore câblée (pas d'outil de
         notification implémenté, topic ntfy toujours à
         <PLACEHOLDER_TOPIC> — voir docs/roadmap.md).
+
+        Commit déplacé après test_command (2026-07-20, voir docs/roadmap.md) :
+        auparavant le commit avait lieu avant l'exécution de test_command, donc
+        un test qui échouait à l'exécution finissait quand même committé —
+        découvert seulement après coup, au moment de l'échec. Les fichiers de
+        test sont toujours écrits sur disque avant l'exécution (test_command
+        en a besoin), seul le commit Git attend le résultat.
 
         Le run s'arrête sur un échec de non-régression, sans retry
         automatique — la correction implique potentiellement Back ou
@@ -231,14 +284,6 @@ async def run(state: StudioState) -> StudioState:
     for relative_path, content in files.items():
         await write_card(config.repo_path / relative_path, content, tracer=tracer)
 
-    await commit_as_agent(
-        repo_path=config.repo_path,
-        agent="test",
-        message=f"test: integration/non-regression - {', '.join(sorted(files))}",
-        files=sorted(files.keys()),
-        tracer=tracer,
-    )
-
     result_kwargs = dict(
         agent=role,
         phase=state.current_phase,
@@ -249,22 +294,76 @@ async def run(state: StudioState) -> StudioState:
         duration_ms=result["duration_ms"],
     )
 
+    # Le commit n'a lieu qu'après un test_command réussi (ou absent) — pas
+    # avant (voir docs/roadmap.md, 2026-07-20) : committer avant d'avoir
+    # exécuté le test laissait un commit "test: ..." en historique alors que
+    # le test qu'il contient ne tourne pas encore, découvert seulement après
+    # coup au moment de l'échec.
     test_command = config.test_command
     if test_command is not None:
         passed, output = await _run_test_command(test_command, config.repo_path)
         if not passed:
-            await append_feedback(
-                card_path, agent_source=role, feedback=output[-_MAX_FEEDBACK_OUTPUT_CHARS:]
-            )
             agent_result = AgentResult(status="error", **result_kwargs)
             await record_agent_result(config, state, agent_result, model=config.models["agents_local"])
-            tracer.emit("node_exit", status="error", reason="non_regression_failed")
-            return {
+            feedback_text = output[-_MAX_FEEDBACK_OUTPUT_CHARS:]
+            updates: dict = {
                 "agent_results": state.agent_results + [agent_result],
-                "status": RunStatus.WAITING_HUMAN,
-                "awaiting_human_validation": True,
                 "total_tokens_ollama": state.total_tokens_ollama + tokens_used,
             }
+
+            # Redo ciblé du producteur fautif si la traceback l'implique
+            # (voir _owning_producer_agent) — même mécanisme que
+            # architect._run_audit_stubs, mais désigné par les fichiers
+            # présents dans la sortie de test_command (nécessite --tb=native
+            # côté pytest pour produire des lignes File "..." exploitables,
+            # voir docs/roadmap.md, 2026-07-20) plutôt que par une
+            # désignation explicite d'un LLM. Si aucun fichier producteur
+            # n'est identifiable (ex. le bug est dans le test lui-même),
+            # aucune correction automatique : Test ne se corrige jamais
+            # lui-même (voir docstring de run()).
+            faulty_agent = None
+            faulty_files: list[str] = []
+            for relative_path in extract_traceback_files(output, config.repo_path):
+                owner = _owning_producer_agent(config, state, relative_path)
+                if owner is not None:
+                    faulty_agent = owner
+                    break
+            if faulty_agent is not None:
+                faulty_files = [
+                    f for f in extract_traceback_files(output, config.repo_path)
+                    if _owning_producer_agent(config, state, f) == faulty_agent
+                ]
+                faulty_card_path = config.repo_path / state.agent_cards[faulty_agent]
+                await append_feedback(faulty_card_path, agent_source="test", feedback=feedback_text)
+                updates["current_phase"] = Phase.IMPLEMENTATION
+                updates["current_agent_index"] = state.agent_sequence.index(faulty_agent)
+                updates["failed_agents"] = (
+                    state.failed_agents if faulty_agent in state.failed_agents
+                    else state.failed_agents + [faulty_agent]
+                )
+                updates["retry_scope"] = {
+                    **state.retry_scope,
+                    faulty_agent: {f: feedback_text for f in faulty_files},
+                }
+                tracer.emit(
+                    "node_exit", status="error", reason="non_regression_failed",
+                    escalated_to=faulty_agent, files=faulty_files,
+                )
+                return updates
+
+            await append_feedback(card_path, agent_source=role, feedback=feedback_text)
+            updates["status"] = RunStatus.WAITING_HUMAN
+            updates["awaiting_human_validation"] = True
+            tracer.emit("node_exit", status="error", reason="non_regression_failed")
+            return updates
+
+    await commit_as_agent(
+        repo_path=config.repo_path,
+        agent="test",
+        message=f"test: integration/non-regression - {', '.join(sorted(files))}",
+        files=sorted(files.keys()),
+        tracer=tracer,
+    )
 
     agent_result = AgentResult(status="success", **result_kwargs)
     await record_agent_result(config, state, agent_result, model=config.models["agents_local"])

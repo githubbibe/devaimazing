@@ -178,6 +178,8 @@ async def test_test_node_command_passes_advances_to_securite(
 ):
     _configure_env(tmp_path, repo, monkeypatch, test_command="python3 -c \"exit(0)\"")
 
+    committed = {"called": False}
+
     async def fake_read_card(path, tracer=None):
         return "fiche test"
 
@@ -188,6 +190,7 @@ async def test_test_node_command_passes_advances_to_securite(
         pass
 
     async def fake_commit_as_agent(**kwargs):
+        committed["called"] = True
         return "abc123"
 
     monkeypatch.setattr(test_node, "read_card", fake_read_card)
@@ -199,6 +202,51 @@ async def test_test_node_command_passes_advances_to_securite(
 
     assert updates["agent_results"][0].status == "success"
     assert updates["current_phase"] == Phase.SECURITE
+    assert committed["called"] is True
+
+
+async def test_test_node_command_fails_does_not_commit(
+    tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Régression 2026-07-20 (voir docs/roadmap.md) : le commit ne doit avoir
+    lieu qu'après un test_command réussi — un test qui échoue à l'exécution
+    ne doit jamais atterrir en historique Git, découvert seulement après
+    coup au moment de l'échec.
+    """
+    _configure_env(
+        tmp_path, repo, monkeypatch,
+        test_command="python3 -c \"import sys; print('boom'); sys.exit(1)\"",
+    )
+
+    committed = {"called": False}
+
+    async def fake_read_card(path, tracer=None):
+        return "fiche test"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(FILE_OUTPUT)
+
+    async def fake_write_card(path, content, tracer=None):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        committed["called"] = True
+        return "abc123"
+
+    async def fake_append_feedback(card_path, agent_source, feedback):
+        pass
+
+    monkeypatch.setattr(test_node, "read_card", fake_read_card)
+    monkeypatch.setattr(test_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(test_node, "write_card", fake_write_card)
+    monkeypatch.setattr(test_node, "commit_as_agent", fake_commit_as_agent)
+    monkeypatch.setattr(test_node, "append_feedback", fake_append_feedback)
+
+    updates = await test_node.run(_base_state(repo))
+
+    assert updates["agent_results"][0].status == "error"
+    assert committed["called"] is False
 
 
 async def test_test_node_command_fails_appends_feedback_and_waits_for_human(
@@ -239,6 +287,180 @@ async def test_test_node_command_fails_appends_feedback_and_waits_for_human(
     assert updates["awaiting_human_validation"] is True
     assert "boom" in feedback_calls[0][1]
     assert "current_phase" not in updates
+
+
+def _traceback_command(implicated_file: Path) -> str:
+    """Commande shell dont la sortie imite une traceback pytest --tb=native minimale."""
+    return (
+        "python3 -c \"import sys; "
+        f"print('File \\\"{implicated_file}\\\", line 1, in test_x'); "
+        "sys.exit(1)\""
+    )
+
+
+async def test_test_node_command_fails_escalates_to_owning_producer(
+    tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Régression 2026-07-20 (voir docs/roadmap.md) : un échec de test_command
+    dont la sortie (--tb=native) implique un fichier du périmètre Back doit
+    router vers un redo ciblé de back (retry_scope, current_phase, current_
+    agent_index), pas s'arrêter sur WAITING_HUMAN — feedback sur LA FICHE DE
+    BACK, pas celle de Test.
+    """
+    backend_file = repo / "backend" / "main.py"
+    backend_file.parent.mkdir(parents=True)
+    backend_file.write_text("def create_todo():\n    pass\n", encoding="utf-8")
+    _configure_env(tmp_path, repo, monkeypatch, test_command=_traceback_command(backend_file))
+
+    feedback_calls = []
+
+    async def fake_read_card(path, tracer=None):
+        return "fiche test"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(FILE_OUTPUT)
+
+    async def fake_write_card(path, content, tracer=None):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        raise AssertionError("commit_as_agent ne doit pas être appelé sur un échec")
+
+    async def fake_append_feedback(card_path, agent_source, feedback):
+        feedback_calls.append((str(card_path), agent_source))
+
+    monkeypatch.setattr(test_node, "read_card", fake_read_card)
+    monkeypatch.setattr(test_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(test_node, "write_card", fake_write_card)
+    monkeypatch.setattr(test_node, "commit_as_agent", fake_commit_as_agent)
+    monkeypatch.setattr(test_node, "append_feedback", fake_append_feedback)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.TESTS,
+        agent_sequence=["back", "test"],
+        current_agent_index=1,
+        agent_cards={"back": "specs/run-042/back.md", "test": "specs/run-042/test.md"},
+        agent_card_metadata={"test": _card_metadata()},
+    )
+
+    updates = await test_node.run(state)
+
+    assert updates.get("status") != RunStatus.WAITING_HUMAN
+    assert updates["current_phase"] == Phase.IMPLEMENTATION
+    assert updates["current_agent_index"] == 0
+    assert updates["failed_agents"] == ["back"]
+    assert updates["retry_scope"]["back"]
+    assert len(feedback_calls) == 1
+    assert feedback_calls[0][1] == "test"
+    assert feedback_calls[0][0].endswith("specs/run-042/back.md")
+
+
+async def test_test_node_command_fails_escalates_with_flat_backend_layout(
+    tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Même scénario que ci-dessus, mais avec structure.backend_dir="" (layout
+    plat, ex. todo-list2 — voir config/projects/todo-list2.yml, 2026-07-20) :
+    _owning_producer_agent doit reconnaître un fichier à la racine du repo
+    comme relevant de back quand backend_dir est vide, pas seulement quand
+    il est sous un sous-dossier backend/.
+    """
+    backend_file = repo / "main.py"
+    backend_file.write_text("def create_todo():\n    pass\n", encoding="utf-8")
+    _configure_env(tmp_path, repo, monkeypatch, test_command=_traceback_command(backend_file))
+
+    config_dir = tmp_path / "config"
+    project_data = yaml.safe_load((config_dir / "projects" / "demo.yml").read_text())
+    project_data["structure"] = {"backend_dir": ""}
+    _write_yaml(config_dir / "projects" / "demo.yml", project_data)
+
+    async def fake_read_card(path, tracer=None):
+        return "fiche test"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(FILE_OUTPUT)
+
+    async def fake_write_card(path, content, tracer=None):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        raise AssertionError("commit_as_agent ne doit pas être appelé sur un échec")
+
+    async def fake_append_feedback(card_path, agent_source, feedback):
+        pass
+
+    monkeypatch.setattr(test_node, "read_card", fake_read_card)
+    monkeypatch.setattr(test_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(test_node, "write_card", fake_write_card)
+    monkeypatch.setattr(test_node, "commit_as_agent", fake_commit_as_agent)
+    monkeypatch.setattr(test_node, "append_feedback", fake_append_feedback)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.TESTS,
+        agent_sequence=["back", "test"],
+        current_agent_index=1,
+        agent_cards={"back": "specs/run-042/back.md", "test": "specs/run-042/test.md"},
+        agent_card_metadata={"test": _card_metadata()},
+    )
+
+    updates = await test_node.run(state)
+
+    assert updates["current_phase"] == Phase.IMPLEMENTATION
+    assert updates["failed_agents"] == ["back"]
+
+
+async def test_test_node_command_fails_in_test_file_does_not_escalate(
+    tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Si la traceback n'implique QUE le fichier de test lui-même (bug de test,
+    pas de code produit), pas d'escalade automatique — Test ne se corrige
+    jamais lui-même (voir docstring de run()), comportement WAITING_HUMAN
+    existant préservé.
+    """
+    test_file = repo / "tests" / "integration" / "test_login_flow.py"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text("def test_login():\n    assert True\n", encoding="utf-8")
+    _configure_env(tmp_path, repo, monkeypatch, test_command=_traceback_command(test_file))
+
+    async def fake_read_card(path, tracer=None):
+        return "fiche test"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(FILE_OUTPUT)
+
+    async def fake_write_card(path, content, tracer=None):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        raise AssertionError("commit_as_agent ne doit pas être appelé sur un échec")
+
+    async def fake_append_feedback(card_path, agent_source, feedback):
+        pass
+
+    monkeypatch.setattr(test_node, "read_card", fake_read_card)
+    monkeypatch.setattr(test_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(test_node, "write_card", fake_write_card)
+    monkeypatch.setattr(test_node, "commit_as_agent", fake_commit_as_agent)
+    monkeypatch.setattr(test_node, "append_feedback", fake_append_feedback)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.TESTS,
+        agent_sequence=["back", "test"],
+        current_agent_index=1,
+        agent_cards={"back": "specs/run-042/back.md", "test": "specs/run-042/test.md"},
+        agent_card_metadata={"test": _card_metadata()},
+    )
+
+    updates = await test_node.run(state)
+
+    assert updates["status"] == RunStatus.WAITING_HUMAN
+    assert "current_phase" not in updates
+    assert "retry_scope" not in updates
 
 
 async def test_test_node_blocked_reason_appends_feedback(
