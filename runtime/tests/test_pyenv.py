@@ -110,6 +110,33 @@ async def test_ensure_venv_raises_on_creation_failure(tmp_path: Path, monkeypatc
         await pyenv.ensure_venv("demo-project", requirements_path=None)
 
 
+async def test_ensure_venv_raises_dependency_install_error_on_pip_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Régression run-20260714-205712 (2026-07-20, todo-list) : back avait
+    pinné `fastapi==0.95.3`, une version inexistante sur PyPI. pip install
+    échoue à cause du CONTENU de requirements.txt (bug de l'agent), pas de
+    l'environnement — doit lever DependencyInstallError, pas RuntimeError,
+    pour que verify_python_files le route vers feedback_sent au lieu de
+    faire planter le run.
+    """
+    monkeypatch.setattr(pyenv, "VENV_ROOT", tmp_path / "venvs")
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("fastapi==0.95.3\n", encoding="utf-8")
+
+    async def fake_run(*args, **kwargs):
+        if "pip" in args:
+            return 1, "", "ERROR: No matching distribution found for fastapi==0.95.3"
+        return await real_run(*args, **kwargs)
+
+    real_run = pyenv._run
+    monkeypatch.setattr(pyenv, "_run", fake_run)
+
+    with pytest.raises(pyenv.DependencyInstallError, match="fastapi==0.95.3"):
+        await pyenv.ensure_venv("demo-project", requirements_path=requirements)
+
+
 async def test_check_imports_success(tmp_path: Path):
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "__init__.py").write_text("", encoding="utf-8")
@@ -230,3 +257,45 @@ async def test_verify_python_files_success_path(tmp_path: Path, monkeypatch: pyt
         repo_path=tmp_path, project_name="demo", files=files
     )
     assert error is None
+
+
+async def test_verify_python_files_dependency_install_error_returns_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    DependencyInstallError (requirements.txt invalide, contenu de
+    l'agent) doit être renvoyé comme un message d'erreur normal
+    (feedback_sent), pas propagé comme une exception qui ferait planter
+    le run.
+    """
+    async def fake_ensure_venv(*args, **kwargs):
+        raise pyenv.DependencyInstallError("Échec pip install : fastapi==0.95.3 introuvable")
+
+    monkeypatch.setattr(pyenv, "ensure_venv", fake_ensure_venv)
+
+    files = {"backend/main.py": "import fastapi\n"}
+    error = await pyenv.verify_python_files(
+        repo_path=tmp_path, project_name="demo", files=files
+    )
+    assert error is not None
+    assert "fastapi==0.95.3" in error
+
+
+async def test_verify_python_files_venv_creation_runtime_error_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Non-régression : un vrai problème d'environnement (création du venv —
+    disque, permissions) reste une erreur dure, pas absorbée en
+    feedback_sent.
+    """
+    async def fake_ensure_venv(*args, **kwargs):
+        raise RuntimeError("Échec de création du venv : disque plein")
+
+    monkeypatch.setattr(pyenv, "ensure_venv", fake_ensure_venv)
+
+    files = {"backend/main.py": "import fastapi\n"}
+    with pytest.raises(RuntimeError, match="disque plein"):
+        await pyenv.verify_python_files(
+            repo_path=tmp_path, project_name="demo", files=files
+        )

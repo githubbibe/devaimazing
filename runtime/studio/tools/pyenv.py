@@ -27,6 +27,21 @@ VENV_ROOT = Path.home() / ".devaimazing" / "venvs"
 IMPORT_TIMEOUT_SECONDS = 10
 
 
+class DependencyInstallError(Exception):
+    """
+    `pip install` a échoué à cause du contenu de requirements.txt (ex.
+    version pinnée inexistante sur PyPI, hallucinée par l'agent) — un bug
+    du code produit, pas un problème d'environnement. Distingué du
+    RuntimeError générique (création du venv : disque, permissions) pour
+    que verify_python_files le route vers feedback_sent au lieu de faire
+    interrompre le run — gap trouvé en run réel le 2026-07-20 sur
+    run-20260714-205712 (todo-list) : `fastapi==0.95.3` n'existe pas,
+    `pip install` faisait planter le run en RuntimeError générique, un
+    `retry` manuel était nécessaire alors que l'agent aurait pu corriger
+    lui-même sa version au tour suivant.
+    """
+
+
 def _venv_python(venv_dir: Path) -> Path:
     return venv_dir / "bin" / "python"
 
@@ -73,10 +88,13 @@ async def ensure_venv(
         Chemin de l'exécutable python du venv.
 
     Raises:
-        RuntimeError: Si la création du venv ou `pip install` échoue —
-            remonté tel quel, pas de dégradation silencieuse (une
-            vérification qui échoue à s'exécuter ne doit pas être confondue
-            avec un code qui s'importe correctement).
+        RuntimeError: Si la création du venv échoue (disque, permissions) —
+            problème d'environnement, remonté tel quel, pas de dégradation
+            silencieuse.
+        DependencyInstallError: Si `pip install` échoue — problème de
+            contenu (requirements.txt produit par l'agent), à distinguer
+            d'une erreur d'environnement par l'appelant (voir
+            verify_python_files).
     """
     venv_dir = VENV_ROOT / project_name
     python_path = _venv_python(venv_dir)
@@ -93,7 +111,17 @@ async def ensure_venv(
             str(python_path), "-m", "pip", "install", "-q", "-r", str(requirements_path)
         )
         if returncode != 0:
-            raise RuntimeError(f"Échec pip install ({requirements_path}) : {stderr.strip()}")
+            stripped = stderr.strip()
+            last_lines = "\n".join(stripped.splitlines()[-3:]) if stripped else "erreur inconnue"
+            if tracer is not None:
+                tracer.emit(
+                    "dependency_install_failed",
+                    requirements=str(requirements_path),
+                    stderr=stderr[-2000:],
+                )
+            raise DependencyInstallError(
+                f"Échec pip install ({requirements_path}) : {last_lines}"
+            )
         if tracer is not None:
             tracer.emit("venv_dependencies_installed", requirements=str(requirements_path))
 
@@ -209,5 +237,13 @@ async def verify_python_files(
         return None
 
     requirements_path = (repo_path / requirements_relative) if requirements_relative else None
-    python_path = await ensure_venv(project_name, requirements_path, tracer=tracer)
+    try:
+        python_path = await ensure_venv(project_name, requirements_path, tracer=tracer)
+    except DependencyInstallError as exc:
+        # Bug de contenu (requirements.txt produit par l'agent) : traité
+        # comme les autres erreurs de vérification (feedback_sent), pas
+        # comme une erreur d'environnement — voir DependencyInstallError.
+        # RuntimeError (échec de création du venv) n'est PAS capturé ici :
+        # ça reste une vraie erreur d'infra, remontée telle quelle.
+        return str(exc)
     return await check_imports(repo_path, python_path, files, tracer=tracer)
