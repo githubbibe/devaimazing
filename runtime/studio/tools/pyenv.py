@@ -25,6 +25,7 @@ from studio.tools.tracer import AgentTracer
 
 VENV_ROOT = Path.home() / ".devaimazing" / "venvs"
 IMPORT_TIMEOUT_SECONDS = 10
+_MAX_ERROR_CHARS = 300
 
 
 class DependencyInstallError(Exception):
@@ -112,7 +113,15 @@ async def ensure_venv(
         )
         if returncode != 0:
             stripped = stderr.strip()
-            last_lines = "\n".join(stripped.splitlines()[-3:]) if stripped else "erreur inconnue"
+            # Une seule ligne utile suffit en général (ex. "ERROR: No matching
+            # distribution found for X") — au-delà de _MAX_ERROR_CHARS (pip
+            # concatène parfois la liste complète des versions disponibles
+            # sur une seule ligne, potentiellement des Ko), tronquer plutôt
+            # que de bloater davantage la fiche (voir docs/roadmap.md,
+            # feedback déjà cité comme cause de non-convergence).
+            last_line = stripped.splitlines()[-1] if stripped else "erreur inconnue"
+            if len(last_line) > _MAX_ERROR_CHARS:
+                last_line = last_line[:_MAX_ERROR_CHARS] + "… (tronqué)"
             if tracer is not None:
                 tracer.emit(
                     "dependency_install_failed",
@@ -120,7 +129,7 @@ async def ensure_venv(
                     stderr=stderr[-2000:],
                 )
             raise DependencyInstallError(
-                f"Échec pip install ({requirements_path}) : {last_lines}"
+                f"Échec pip install ({requirements_path}) : {last_line}"
             )
         if tracer is not None:
             tracer.emit("venv_dependencies_installed", requirements=str(requirements_path))
@@ -205,6 +214,8 @@ async def check_imports(
         else:
             stripped = stderr.strip()
             last_line = stripped.splitlines()[-1] if stripped else "erreur inconnue"
+            if len(last_line) > _MAX_ERROR_CHARS:
+                last_line = last_line[:_MAX_ERROR_CHARS] + "… (tronqué)"
             message = f"Échec d'import de {module_name} ({relative_path}) : {last_line}"
         if tracer is not None:
             tracer.emit(

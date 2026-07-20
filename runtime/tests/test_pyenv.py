@@ -137,6 +137,40 @@ async def test_ensure_venv_raises_dependency_install_error_on_pip_failure(
         await pyenv.ensure_venv("demo-project", requirements_path=requirements)
 
 
+async def test_ensure_venv_truncates_huge_pip_error_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """
+    Régression réelle (même run, découverte juste après le fix précédent) :
+    pip concatène parfois la liste complète des versions disponibles sur
+    une seule ligne ("from versions: 0.1.0, 0.1.2, ..." — plusieurs Ko sur
+    ce run réel), qui se retrouvait injectée telle quelle dans le feedback
+    de la fiche back.md, aggravant le problème de croissance du prompt déjà
+    diagnostiqué (docs/roadmap.md, 2026-07-19). Le message doit être tronqué.
+    """
+    monkeypatch.setattr(pyenv, "VENV_ROOT", tmp_path / "venvs")
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("fastapi==0.95.3\n", encoding="utf-8")
+
+    huge_line = "ERROR: Could not find a version (from versions: " + ", ".join(
+        f"0.{i}.0" for i in range(500)
+    ) + ")"
+
+    async def fake_run(*args, **kwargs):
+        if "pip" in args:
+            return 1, "", huge_line
+        return await real_run(*args, **kwargs)
+
+    real_run = pyenv._run
+    monkeypatch.setattr(pyenv, "_run", fake_run)
+
+    with pytest.raises(pyenv.DependencyInstallError) as exc_info:
+        await pyenv.ensure_venv("demo-project", requirements_path=requirements)
+
+    assert len(str(exc_info.value)) < len(huge_line)
+    assert "tronqué" in str(exc_info.value)
+
+
 async def test_check_imports_success(tmp_path: Path):
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "__init__.py").write_text("", encoding="utf-8")
