@@ -42,6 +42,20 @@ def _env(tmp_path: Path, project_repo: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("DEVAIMAZING_CONFIG_DIR", str(config_dir))
 
 
+@pytest.fixture(autouse=True)
+def _verify_python_files_succeeds_by_default(monkeypatch: pytest.MonkeyPatch):
+    """
+    tools.pyenv.verify_python_files fait un vrai import Python (venv dédié)
+    — hors scope de ces tests, qui vérifient le câblage du node, pas la
+    vérification elle-même (déjà testée dans test_pyenv.py). Les tests
+    dédiés à son échec (voir en bas de ce fichier) l'écrasent explicitement.
+    """
+    async def fake_verify_python_files(**kwargs):
+        return None
+
+    monkeypatch.setattr(backend_node, "verify_python_files", fake_verify_python_files)
+
+
 def _fake_ollama_result(content: str, tokens_prompt=5, tokens_completion=10, duration_ms=100) -> dict:
     return {
         "content": content,
@@ -501,3 +515,108 @@ async def test_backend_writes_trace_events_for_run(
     assert events[0]["phase"] == "STUBS"
     assert events[-1]["event"] == "node_exit"
     assert events[-1]["status"] == "success"
+
+
+async def test_backend_verify_failure_appends_feedback_and_waits_for_human(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    Régression run-20260714-205712 (2026-07-19/20, todo-list) : back
+    committait des fichiers syntaxiquement/logiquement invalides (imports
+    manquants, NameError) qui n'étaient détectés que par l'audit Architecte,
+    coûteux et tardif — voir tools.pyenv.verify_python_files et
+    docs/roadmap.md. Un échec de vérification doit suivre le même chemin
+    que blocked_reason : feedback ajouté, pas de commit, run en attente.
+    """
+    feedback_calls = []
+    committed = {"called": False}
+
+    async def fake_read_card(path, tracer=None):
+        return "fiche back"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(FILE_OUTPUT)
+
+    async def fake_write_card(path, content, tracer=None):
+        pass
+
+    async def fake_append_feedback(card_path, agent_source, feedback):
+        feedback_calls.append((agent_source, feedback))
+
+    async def fake_commit_as_agent(**kwargs):
+        committed["called"] = True
+        return "abc123"
+
+    async def fake_verify_python_files(**kwargs):
+        return "Échec d'import de backend.auth.endpoints : NameError: name 'X' is not defined"
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(backend_node, "append_feedback", fake_append_feedback)
+    monkeypatch.setattr(backend_node, "commit_as_agent", fake_commit_as_agent)
+    monkeypatch.setattr(backend_node, "verify_python_files", fake_verify_python_files)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back", "front"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
+    )
+
+    updates = await backend_node.run(state)
+
+    assert committed["called"] is False
+    assert len(feedback_calls) == 1
+    assert feedback_calls[0][0] == "back"
+    assert "NameError" in feedback_calls[0][1]
+    assert updates["status"] == RunStatus.WAITING_HUMAN
+    assert updates["awaiting_human_validation"] is True
+    assert updates["agent_results"][0].status == "feedback_sent"
+
+
+async def test_backend_verify_success_proceeds_to_commit(monkeypatch: pytest.MonkeyPatch):
+    """Non-régression : une vérification qui réussit ne bloque rien (chemin nominal inchangé)."""
+    committed = {}
+    verify_calls = []
+
+    async def fake_read_card(path, tracer=None):
+        return "fiche back"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(FILE_OUTPUT)
+
+    async def fake_write_card(path, content, tracer=None):
+        pass
+
+    async def fake_commit_as_agent(repo_path, agent, message, files, tracer=None):
+        committed.update(agent=agent, files=files)
+        return "abc123"
+
+    async def fake_verify_python_files(**kwargs):
+        verify_calls.append(kwargs)
+        return None
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(backend_node, "commit_as_agent", fake_commit_as_agent)
+    monkeypatch.setattr(backend_node, "verify_python_files", fake_verify_python_files)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
+    )
+
+    updates = await backend_node.run(state)
+
+    assert len(verify_calls) == 1
+    assert verify_calls[0]["files"] == {"backend/auth/endpoints.py": "def login():\n    ..."}
+    assert committed["agent"] == "back"
+    assert updates["agent_results"][0].status == "success"

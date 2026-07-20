@@ -1,6 +1,6 @@
 # Feuille de route - devaimazing
 
-**Dernière mise à jour** : 2026-07-19
+**Dernière mise à jour** : 2026-07-20
 
 ## État actuel
 
@@ -10,10 +10,51 @@ Le runtime devaimazing est **fonctionnellement complet et testé de bout en bout
 closer), `metrics.py` et `cli.py` (`run`, `resume`, `retry`, `run-agent`, `runs`,
 `metrics`, `new-project`, `projects`, `doctor`) sont tous implémentés — voir
 `CLAUDE.md` pour la convention (stub-first reste appliquée par le pipeline aux
-projets *cibles*, pas à ce dépôt). **316/316 tests verts** sur `runtime/tests/`
-(hors `test_new_project_target_exists_not_git_repo_prints_error`, en échec
+projets *cibles*, pas à ce dépôt). **336/337 tests verts** sur `runtime/tests/`
+(seul échec : `test_new_project_target_exists_not_git_repo_prints_error`,
 préexistant sans rapport, dû au retour à la ligne du terminal dans les
-sorties Rich — non lié à ce chantier).
+sorties Rich).
+
+**2026-07-20 — vérification syntaxe + import réel avant commit (Back/Front).**
+Poursuite de `run-20260714-205712` (todo-list, voir entrée 2026-07-19) : 22
+cycles `back`/`back-tu`/audit sur 2 modèles (`qwen2.5:7b-instruct` puis
+`qwen2.5:14b-instruct`, testé après le premier) sans converger — les mêmes
+bugs (`TaskResponse` absent, `TodoError(HTTPException)`) réapparaissaient
+identiquement avec le modèle plus gros, ce qui écartait la capacité du
+modèle comme cause unique. `tokens_prompt` restait loin de `num_ctx`
+(14432/32768 max) : pas un problème de troncature non plus (`num_ctx` relevé
+à 32768 dans la foulée par précaution, todo-list basculé sur 14b via
+`config/projects/todo-list.yml`, `models.agents_local`). Cause structurelle
+identifiée : `back`/`front` régénèrent l'intégralité de leur périmètre à
+chaque tour depuis la fiche + feedback textuel cumulé (245 lignes, 21
+entrées sur ce run), sans aucune vérification avant de committer — un
+`NameError`/`ImportError` trivial (import manquant, symbole absent d'un
+autre fichier) n'était détecté que par l'audit Architecte (Claude Sonnet,
+~60-100s, un tour entier perdu par bug).
+
+Ajouté : `tools/pyenv.py` — pour chaque fichier `.py` produit par `back`/
+`front` (no-op sur les autres extensions, donc sur `front` qui produit
+surtout du `.tsx`) : (1) `ast.parse` (syntaxe, gratuit) puis (2) tentative
+d'import réel dans un venv dédié au projet cible
+(`~/.devaimazing/venvs/<project>/`, créé au premier besoin, dépendances de
+`<backend_dir>/requirements.txt` installées avant chaque vérification,
+no-op si absent). Échec (syntaxe ou import) → même chemin que
+`blocked_reason` existant (`feedback_sent`, pas de commit, run en attente),
+message d'erreur Python natif injecté dans le feedback. Factorisé dans un
+helper `_feedback_sent` par node (dupliqué entre `backend.py`/`frontend.py`,
+pas de module de nodes partagé actuellement). `test.py` **non modifié** :
+il exécute déjà la vraie suite `pytest` juste après écriture (vérification
+strictement plus forte, dans le même nœud) — ajouter ce check y serait
+redondant.
+
+**Non testé en conditions réelles** : ce correctif n'a pas encore été validé
+sur un nouveau `resume` de `run-20260714-205712` (session terminée avant).
+À vérifier au prochain run : le venv se crée bien, `pip install` réussit
+sans réseau bloquant, et les bugs `NameError`/`ImportError` vus dans ce run
+sont bien interceptés avant l'audit plutôt qu'après.
+
+23 tests ajoutés (`test_pyenv.py` : 19 ; `test_backend_node.py`/
+`test_frontend_node.py` : 2 chacun, cas échec + non-régression cas succès).
 
 Deux runs réels de bout en bout ont été menés sur des projets cibles distincts
 (`demo-todo-app`, `todo-list`) et ont permis de trouver/corriger plusieurs bugs

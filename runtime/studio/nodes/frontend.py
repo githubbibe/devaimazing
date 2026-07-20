@@ -39,7 +39,8 @@ from studio.tools.filesystem import (
 )
 from studio.tools.git import commit_as_agent
 from studio.tools.ollama import FILE_OUTPUT_SCHEMA, run_ollama
-from studio.tools.tracer import RunTracer
+from studio.tools.pyenv import verify_python_files
+from studio.tools.tracer import AgentTracer, RunTracer
 
 _DEVAIMAZING_ROOT = Path(__file__).resolve().parents[3]
 _PROMPT_PATH = _DEVAIMAZING_ROOT / "prompts" / "frontend.md"
@@ -48,6 +49,43 @@ _SKILL_NAMES = ["stub-first", "error-handling", "logging-conventions"]
 _TU_EXTRA_SKILLS = ["non-regression"]
 
 _GIT_IDENTITY_AGENT = "front"  # front-tu commit sous l'identité front (docs/agents.md)
+
+
+async def _feedback_sent(
+    config: StudioConfig,
+    state: StudioState,
+    role: str,
+    card_path: Path,
+    iteration: int,
+    feedback_text: str,
+    result: dict,
+    tracer: AgentTracer,
+) -> StudioState:
+    """
+    Chemin commun aux deux cas de blocage de ce node : l'agent signale
+    lui-même un blocage (blocked_reason/sortie vide) OU la vérification
+    syntaxe/import (tools.pyenv.verify_python_files, no-op si aucun fichier
+    .py) échoue après coup. Voir studio.nodes.backend._feedback_sent
+    (identique, dupliqué ici faute de module de nodes partagé).
+    """
+    await append_feedback(card_path, agent_source=role, feedback=feedback_text)
+    agent_result = AgentResult(
+        agent=role,
+        phase=state.current_phase,
+        status="feedback_sent",
+        iteration=iteration,
+        tokens_prompt=result["tokens_prompt"],
+        tokens_completion=result["tokens_completion"],
+        duration_ms=result["duration_ms"],
+    )
+    await record_agent_result(config, state, agent_result, model=config.models["agents_local"])
+    tracer.emit("node_exit", status="feedback_sent")
+    return {
+        "agent_results": state.agent_results + [agent_result],
+        "status": RunStatus.WAITING_HUMAN,
+        "awaiting_human_validation": True,
+        "total_tokens_ollama": state.total_tokens_ollama + result["tokens_prompt"] + result["tokens_completion"],
+    }
 
 
 async def run(state: StudioState) -> StudioState:
@@ -192,29 +230,25 @@ async def run(state: StudioState) -> StudioState:
         files, blocked_reason = {}, ""
 
     if blocked_reason or not files:
-        await append_feedback(
-            card_path, agent_source=role, feedback=blocked_reason or result["content"]
+        return await _feedback_sent(
+            config, state, role, card_path, iteration,
+            blocked_reason or result["content"], result, tracer,
         )
-        agent_result = AgentResult(
-            agent=role,
-            phase=state.current_phase,
-            status="feedback_sent",
-            iteration=iteration,
-            tokens_prompt=result["tokens_prompt"],
-            tokens_completion=result["tokens_completion"],
-            duration_ms=result["duration_ms"],
-        )
-        await record_agent_result(config, state, agent_result, model=config.models["agents_local"])
-        tracer.emit("node_exit", status="feedback_sent")
-        return {
-            "agent_results": state.agent_results + [agent_result],
-            "status": RunStatus.WAITING_HUMAN,
-            "awaiting_human_validation": True,
-            "total_tokens_ollama": state.total_tokens_ollama + result["tokens_prompt"] + result["tokens_completion"],
-        }
 
     for relative_path, content in files.items():
         await write_card(config.repo_path / relative_path, content, tracer=tracer)
+
+    verify_error = await verify_python_files(
+        repo_path=config.repo_path,
+        project_name=config.project_name,
+        files=files,
+        tracer=tracer,
+    )
+    if verify_error is not None:
+        tracer.emit("verify_failed", reason=verify_error)
+        return await _feedback_sent(
+            config, state, role, card_path, iteration, verify_error, result, tracer,
+        )
 
     is_implementation = state.current_phase == Phase.IMPLEMENTATION
     if role == "front-tu":

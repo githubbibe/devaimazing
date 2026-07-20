@@ -329,3 +329,60 @@ async def test_frontend_records_metrics_on_success(monkeypatch: pytest.MonkeyPat
     collector = MetricsCollector(tmp_path / "metrics.db")
     summary = await collector.get_run_summary("run-042")
     assert summary["by_agent"]["front"]["task_count"] == 1
+
+
+async def test_frontend_verify_failure_appends_feedback_and_waits_for_human(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    Voir studio.nodes.backend (même mécanisme) : front produit rarement du
+    .py, mais si ça arrive, une vérification qui échoue doit bloquer comme
+    un blocked_reason — pas de commit silencieux.
+    """
+    feedback_calls = []
+    committed = {"called": False}
+
+    async def fake_read_card(path, tracer=None):
+        return "fiche front"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(
+            _structured_output({"frontend/scripts/build.py": "print('x')"})
+        )
+
+    async def fake_write_card(path, content, tracer=None):
+        pass
+
+    async def fake_append_feedback(card_path, agent_source, feedback):
+        feedback_calls.append((agent_source, feedback))
+
+    async def fake_commit_as_agent(**kwargs):
+        committed["called"] = True
+        return "abc123"
+
+    async def fake_verify_python_files(**kwargs):
+        return "Échec d'import de frontend.scripts.build : NameError: name 'X' is not defined"
+
+    monkeypatch.setattr(frontend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(frontend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(frontend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(frontend_node, "append_feedback", fake_append_feedback)
+    monkeypatch.setattr(frontend_node, "commit_as_agent", fake_commit_as_agent)
+    monkeypatch.setattr(frontend_node, "verify_python_files", fake_verify_python_files)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back", "front"],
+        current_agent_index=1,
+        agent_cards={"front": "specs/run-042/front.md"},
+        agent_card_metadata={"front": _card_metadata()},
+    )
+
+    updates = await frontend_node.run(state)
+
+    assert committed["called"] is False
+    assert len(feedback_calls) == 1
+    assert "NameError" in feedback_calls[0][1]
+    assert updates["status"] == RunStatus.WAITING_HUMAN
+    assert updates["agent_results"][0].status == "feedback_sent"
