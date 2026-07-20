@@ -27,6 +27,52 @@ def test_module_name_invalid_identifier():
     assert pyenv._module_name("backend/my-file.py") is None
 
 
+def test_extract_traceback_files_finds_repo_files_in_order():
+    repo_path = Path("/repo")
+    stderr = (
+        'Traceback (most recent call last):\n'
+        '  File "<string>", line 1, in <module>\n'
+        '    import backend.crud\n'
+        '  File "/repo/backend/crud.py", line 4, in <module>\n'
+        '    from backend.models import Base\n'
+        '  File "/repo/backend/models.py", line 2, in <module>\n'
+        '    from backend.database import Base\n'
+        "ImportError: cannot import name 'Base'\n"
+    )
+    assert pyenv._extract_traceback_files(stderr, repo_path) == [
+        "backend/crud.py",
+        "backend/models.py",
+    ]
+
+
+def test_extract_traceback_files_excludes_pseudo_files():
+    repo_path = Path("/repo")
+    stderr = (
+        'File "<string>", line 1, in <module>\n'
+        'File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed\n'
+        'File "/repo/backend/main.py", line 1, in <module>\n'
+    )
+    assert pyenv._extract_traceback_files(stderr, repo_path) == ["backend/main.py"]
+
+
+def test_extract_traceback_files_excludes_files_outside_repo():
+    repo_path = Path("/repo")
+    stderr = (
+        'File "/repo/backend/main.py", line 1, in <module>\n'
+        'File "/usr/lib/python3.14/site-packages/fastapi/__init__.py", line 5, in <module>\n'
+    )
+    assert pyenv._extract_traceback_files(stderr, repo_path) == ["backend/main.py"]
+
+
+def test_extract_traceback_files_deduplicates():
+    repo_path = Path("/repo")
+    stderr = (
+        'File "/repo/backend/main.py", line 1, in <module>\n'
+        'File "/repo/backend/main.py", line 1, in <module>\n'
+    )
+    assert pyenv._extract_traceback_files(stderr, repo_path) == ["backend/main.py"]
+
+
 def test_check_syntax_valid_file():
     files = {"backend/schemas.py": "class TaskCreate:\n    pass\n"}
     assert pyenv.check_syntax(files) is None
@@ -216,6 +262,36 @@ async def test_check_imports_cross_file_import_error(tmp_path: Path):
     )
     assert error is not None
     assert "pkg.crud" in error.message
+
+
+async def test_check_imports_circular_import_reports_related_files(tmp_path: Path):
+    """
+    Régression run-20260714-205712 (2026-07-20) : import circulaire réel
+    entre models.py et database.py — le fichier réellement en cause
+    (models.py) doit apparaître dans related_files, pas seulement crud.py
+    (le module importé en tête), sinon le mode ciblé ne peut jamais montrer
+    le bon fichier au modèle (6 tours identiques observés en run réel).
+    """
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "pkg" / "database.py").write_text(
+        "from pkg.models import Base\n", encoding="utf-8"
+    )
+    (tmp_path / "pkg" / "models.py").write_text(
+        "from pkg.database import Base\n", encoding="utf-8"
+    )
+    (tmp_path / "pkg" / "crud.py").write_text(
+        "from pkg.models import Base\n", encoding="utf-8"
+    )
+
+    error = await pyenv.check_imports(
+        repo_path=tmp_path,
+        python_path=Path(sys.executable),
+        files={"pkg/crud.py": ""},
+    )
+    assert error is not None
+    assert error.file == "pkg/crud.py"
+    assert "pkg/models.py" in error.related_files
 
 
 async def test_check_imports_timeout(tmp_path: Path):

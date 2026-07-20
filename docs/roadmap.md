@@ -10,10 +10,41 @@ Le runtime devaimazing est **fonctionnellement complet et testé de bout en bout
 closer), `metrics.py` et `cli.py` (`run`, `resume`, `retry`, `run-agent`, `runs`,
 `metrics`, `new-project`, `projects`, `doctor`) sont tous implémentés — voir
 `CLAUDE.md` pour la convention (stub-first reste appliquée par le pipeline aux
-projets *cibles*, pas à ce dépôt). **348/349 tests verts** sur `runtime/tests/`
+projets *cibles*, pas à ce dépôt). **355/356 tests verts** sur `runtime/tests/`
 (seul échec : `test_new_project_target_exists_not_git_repo_prints_error`,
 préexistant sans rapport, dû au retour à la ligne du terminal dans les
 sorties Rich).
+
+**2026-07-20 — related_files : le mode ciblé couvre la chaîne d'import, pas
+seulement le module importé en tête (chantier 3).** Trouvé en relançant le
+chantier précédent en conditions réelles : `retry_scope` ne ciblait que le
+fichier IMPORTÉ (`backend/crud.py`), pas celui réellement en cause plus
+haut dans la chaîne — sur `run-20260714-205712`, un import circulaire réel
+entre `models.py` et `database.py` (chacun important `Base` de l'autre)
+faisait échouer l'import de `crud.py`, mais le modèle ne voyait jamais
+`models.py`/`database.py` en mode ciblé : **6 tours sur 8 ont échoué à
+l'identique** avant que ce soit repéré.
+
+`VerifyFailure` gagne `related_files: list[str]` — tous les fichiers du
+repo cible mentionnés dans la traceback complète (nouvelle fonction
+`_extract_traceback_files`, filtre les pseudo-fichiers `<string>`/`<frozen
+importlib._bootstrap>` et tout ce qui est hors `repo_path` — stdlib,
+site-packages). `backend.py`/`frontend.py` ciblent désormais `verify_error.
+file` **et** tous ses `related_files` au tour suivant, chacun avec le même
+message d'erreur complet. Reproduit exactement le bug réel en test
+(`models.py`/`database.py` mutuellement importés) — voir
+`test_check_imports_circular_import_reports_related_files`.
+
+**Validé en conditions réelles** juste après : le mode ciblé (chantier 2)
+fonctionnait déjà correctement (prompt réduit de ~55 000 à ~19 000
+caractères, un seul fichier régénéré au lieu de 9) mais bouclait sur le
+mauvais fichier faute de `related_files` — ce chantier corrige précisément
+ce point, pas encore revérifié en run réel au moment d'écrire cette entrée
+(à faire au prochain `resume`).
+
+7 tests ajoutés (`test_pyenv.py` : `_extract_traceback_files` + reproduction
+exacte de l'import circulaire réel ; `test_backend_node.py` : retry_scope
+avec plusieurs fichiers, prompt ciblé contenant tous les fichiers liés).
 
 **2026-07-20 — correction ciblée après échec verify_python_files (patch
 incrémental, chantier 2).** Suite directe des chantiers du même jour : en

@@ -285,10 +285,17 @@ async def run(state: StudioState) -> StudioState:
         tracer=tracer,
     )
     if verify_error is not None:
-        tracer.emit("verify_failed", file=verify_error.file, reason=verify_error.message)
+        tracer.emit(
+            "verify_failed",
+            file=verify_error.file,
+            related_files=verify_error.related_files,
+            reason=verify_error.message,
+        )
         return await _feedback_sent(
             config, state, role, card_path, iteration, verify_error.message, result, tracer,
-            retry_scope_entry={verify_error.file: verify_error.message},
+            retry_scope_entry={
+                f: verify_error.message for f in [verify_error.file, *verify_error.related_files]
+            },
         )
 
     is_implementation = state.current_phase == Phase.IMPLEMENTATION

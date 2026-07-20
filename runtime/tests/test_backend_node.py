@@ -669,6 +669,53 @@ async def test_backend_verify_failure_sets_retry_scope(monkeypatch: pytest.Monke
     }
 
 
+async def test_backend_verify_failure_related_files_all_targeted(monkeypatch: pytest.MonkeyPatch):
+    """
+    Régression run-20260714-205712 (2026-07-20) : import circulaire — le
+    fichier importé (crud.py) ET le fichier réellement en cause
+    (models.py, via VerifyFailure.related_files) doivent tous deux
+    apparaître dans retry_scope, sinon le tour suivant ne montre jamais le
+    vrai fichier fautif au modèle (6 tours identiques observés en run réel).
+    """
+    async def fake_read_card(path, tracer=None):
+        return "fiche back"
+
+    async def fake_run_ollama(**kwargs):
+        return _fake_ollama_result(FILE_OUTPUT)
+
+    async def fake_write_card(path, content, tracer=None):
+        pass
+
+    async def fake_append_feedback(card_path, agent_source, feedback):
+        pass
+
+    async def fake_verify_python_files(**kwargs):
+        return VerifyFailure(
+            file="backend/crud.py",
+            message="ImportError: cannot import name 'Base' (import circulaire)",
+            related_files=["backend/models.py"],
+        )
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(backend_node, "append_feedback", fake_append_feedback)
+    monkeypatch.setattr(backend_node, "verify_python_files", fake_verify_python_files)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
+    )
+
+    updates = await backend_node.run(state)
+
+    assert set(updates["retry_scope"]["back"]) == {"backend/crud.py", "backend/models.py"}
+
+
 async def test_backend_success_clears_retry_scope(monkeypatch: pytest.MonkeyPatch, project_repo: Path):
     """Un tour réussi vide le retry_scope de l'agent — retour au régime normal."""
     async def fake_read_card(path, tracer=None):
@@ -795,6 +842,65 @@ async def test_backend_targeted_mode_prompt_contains_only_flagged_file(
     assert "NameError: X non défini" in prompt
     assert "Implémente le endpoint login." in prompt
     assert "vieux feedback obsolète" not in prompt
+
+
+async def test_backend_targeted_mode_prompt_contains_all_related_files(
+    monkeypatch: pytest.MonkeyPatch, project_repo: Path
+):
+    """
+    Régression run-20260714-205712 (2026-07-20) : import circulaire — le
+    prompt ciblé doit contenir le contenu des DEUX fichiers (crud.py ET
+    models.py), sinon le modèle ne peut pas corriger un bug situé dans le
+    fichier lié plutôt que dans le fichier importé en tête.
+    """
+    async def fake_read_card(path, tracer=None):
+        return "## Tâche\n\nCorrige le backend.\n"
+
+    (project_repo / "backend").mkdir(parents=True)
+    (project_repo / "backend" / "crud.py").write_text(
+        "from backend.models import Base\n", encoding="utf-8"
+    )
+    (project_repo / "backend" / "models.py").write_text(
+        "from backend.database import Base\n", encoding="utf-8"
+    )
+
+    captured = {}
+
+    async def fake_run_ollama(**kwargs):
+        captured["user_prompt"] = kwargs["user_prompt"]
+        return _fake_ollama_result(FILE_OUTPUT)
+
+    async def fake_write_card(path, content, tracer=None):
+        pass
+
+    async def fake_commit_as_agent(**kwargs):
+        return "abc123"
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(backend_node, "commit_as_agent", fake_commit_as_agent)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
+        retry_scope={
+            "back": {
+                "backend/crud.py": "ImportError circulaire",
+                "backend/models.py": "ImportError circulaire",
+            }
+        },
+    )
+
+    await backend_node.run(state)
+
+    prompt = captured["user_prompt"]
+    assert "from backend.models import Base" in prompt
+    assert "from backend.database import Base" in prompt
 
 
 async def test_backend_no_retry_scope_uses_full_regeneration(monkeypatch: pytest.MonkeyPatch):

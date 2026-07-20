@@ -18,7 +18,8 @@ depuis son requirements.txt avant chaque vérification (no-op si absent).
 
 import ast
 import asyncio
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -38,9 +39,19 @@ class VerifyFailure:
     suivant (voir studio.state.StudioState.retry_scope, gap trouvé en run
     réel le 2026-07-20 sur run-20260714-205712 : un fix manuel sur un seul
     fichier était écrasé par la régénération complète du tour suivant).
+
+    `related_files` : autres fichiers du repo cible mentionnés dans la
+    traceback (import transitif — ex. `crud.py` importe `models.py` qui
+    échoue réellement à cause d'un import circulaire avec `database.py`) —
+    sans eux, le mode ciblé montrerait au modèle un fichier qui n'est pas
+    en cause et qui ne peut donc jamais corriger le vrai bug. Gap trouvé en
+    run réel le 2026-07-20 (même run) : 6 tours sur 8 ont échoué à
+    l'identique sur `backend/crud.py` alors que le bug était dans
+    `models.py`/`database.py`, jamais montrés au modèle.
     """
     file: str
     message: str
+    related_files: list[str] = field(default_factory=list)
 
 
 class DependencyInstallError(Exception):
@@ -152,6 +163,40 @@ async def ensure_venv(
     return python_path
 
 
+def _extract_traceback_files(stderr: str, repo_path: Path) -> list[str]:
+    """
+    Extrait les fichiers du repo cible mentionnés dans une traceback Python
+    (lignes `File "..."`) — hors pseudo-fichiers (`<string>`, `<frozen
+    importlib._bootstrap>`) et hors fichiers extérieurs au repo (stdlib,
+    site-packages), que l'agent ne peut de toute façon pas corriger.
+
+    Returns:
+        Chemins relatifs à repo_path, dans l'ordre d'apparition dans la
+        traceback, dédupliqués.
+
+    Example:
+        >>> _extract_traceback_files(
+        ...     'File "<string>", line 1, in <module>\\n'
+        ...     'File "/repo/backend/crud.py", line 4, in <module>\\n'
+        ...     'File "/repo/backend/models.py", line 2, in <module>',
+        ...     Path("/repo"),
+        ... )
+        ['backend/crud.py', 'backend/models.py']
+    """
+    seen: list[str] = []
+    for match in re.findall(r'File "([^"]+)"', stderr):
+        if match.startswith("<"):
+            continue
+        try:
+            relative = Path(match).relative_to(repo_path)
+        except ValueError:
+            continue
+        relative_str = relative.as_posix()
+        if relative_str not in seen:
+            seen.append(relative_str)
+    return seen
+
+
 def _module_name(relative_path: str) -> Optional[str]:
     """
     Chemin relatif -> nom de module importable.
@@ -204,14 +249,17 @@ async def check_imports(
     `files` individuellement — un import transitif (ex. `main.py`
     important `routers`, `crud`, `schemas`...) révèle aussi les
     ImportError/NameError situés dans les fichiers dépendants, pas
-    seulement dans le fichier importé lui-même (le VerifyFailure.file
-    retourné est alors le fichier IMPORTÉ, ex. `backend/main.py`, pas
-    forcément celui où l'erreur réelle se trouve).
+    seulement dans le fichier importé lui-même. `VerifyFailure.file` reste
+    le fichier IMPORTÉ (ex. `backend/main.py`) ; les autres fichiers du
+    repo présents dans la traceback (le(s) fichier(s) réellement en cause)
+    sont dans `VerifyFailure.related_files` — voir `_extract_traceback_files`.
 
     Returns:
         VerifyFailure de la première erreur rencontrée (dernière ligne
-        utile du stderr), None si tous les imports réussissent (ou si
-        `files` ne contient aucun fichier .py importable).
+        utile du stderr comme message, tous les fichiers repo de la
+        traceback comme related_files), None si tous les imports
+        réussissent (ou si `files` ne contient aucun fichier .py
+        importable).
     """
     for relative_path in sorted(files):
         module_name = _module_name(relative_path)
@@ -231,20 +279,25 @@ async def check_imports(
                 f"Timeout ({timeout_seconds}s) à l'import de {module_name} "
                 f"({relative_path}) — effet de bord probable au niveau module."
             )
+            related_files: list[str] = []
         else:
             stripped = stderr.strip()
             last_line = stripped.splitlines()[-1] if stripped else "erreur inconnue"
             if len(last_line) > _MAX_ERROR_CHARS:
                 last_line = last_line[:_MAX_ERROR_CHARS] + "… (tronqué)"
             message = f"Échec d'import de {module_name} ({relative_path}) : {last_line}"
+            related_files = [
+                f for f in _extract_traceback_files(stderr, repo_path) if f != relative_path
+            ]
         if tracer is not None:
             tracer.emit(
                 "import_check_failed",
                 module=module_name,
                 path=relative_path,
+                related_files=related_files,
                 stderr=stderr[-2000:],
             )
-        return VerifyFailure(file=relative_path, message=message)
+        return VerifyFailure(file=relative_path, message=message, related_files=related_files)
     return None
 
 
