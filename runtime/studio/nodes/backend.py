@@ -59,6 +59,34 @@ def _requirements_relative(config: StudioConfig) -> str:
     return str(Path(backend_dir) / "requirements.txt")
 
 
+def _targeted_correction_prompt(
+    repo_path: Path, card_content: str, targeted_files: dict[str, str], mode_label: str,
+) -> str:
+    """
+    Construit le corps de prompt "mode correction ciblée" : fiche (section
+    Feedback retirée) + contenu actuel et erreur précise pour chaque fichier
+    de `targeted_files`. Partagé entre le mode ciblé inter-activations
+    (state.retry_scope, alimenté par l'Architecte) et la boucle de retry
+    interne à une même activation (voir run(), inner_retry_limit) — même
+    format de prompt, deux déclencheurs différents.
+    """
+    targeted_blocks = []
+    for relative_path, message in sorted(targeted_files.items()):
+        file_path = repo_path / relative_path
+        current_content = file_path.read_text(encoding="utf-8") if file_path.is_file() else ""
+        targeted_blocks.append(
+            f"### {relative_path}\n\nErreur à corriger : {message}\n\n"
+            f"Contenu actuel (à corriger, pas à réécrire de zéro) :\n"
+            f"```\n{current_content}\n```"
+        )
+    return (
+        f"{mode_label} — corrige UNIQUEMENT le(s) fichier(s) "
+        "ci-dessous. Ne modifie aucun autre fichier.\n\n"
+        f"{strip_feedback_section(card_content)}\n\n"
+        "## Fichier(s) à corriger\n\n" + "\n\n".join(targeted_blocks)
+    )
+
+
 def _updated_retry_scope(
     state: StudioState, role: str, entry: Optional[dict[str, str]]
 ) -> dict[str, dict[str, str]]:
@@ -240,31 +268,20 @@ async def run(state: StudioState) -> StudioState:
 
     targeted_files = state.retry_scope.get(role) or {}
     if targeted_files:
-        # Mode correction ciblée (voir StudioState.retry_scope) : un tour
-        # précédent a échoué sur un fichier identifié avec certitude
-        # (tools.pyenv.verify_python_files) — ne redemander que CE fichier,
-        # avec son contenu actuel et l'erreur précise, pas l'historique de
-        # feedback cumulé (source de non-convergence, voir docs/roadmap.md).
-        targeted_blocks = []
-        for relative_path, message in sorted(targeted_files.items()):
-            file_path = config.repo_path / relative_path
-            current_content = file_path.read_text(encoding="utf-8") if file_path.is_file() else ""
-            targeted_blocks.append(
-                f"### {relative_path}\n\nErreur à corriger : {message}\n\n"
-                f"Contenu actuel (à corriger, pas à réécrire de zéro) :\n"
-                f"```\n{current_content}\n```"
-            )
-        card_content = (
-            "MODE CORRECTION CIBLÉE — corrige UNIQUEMENT le(s) fichier(s) "
-            "ci-dessous. Ne modifie aucun autre fichier.\n\n"
-            f"{strip_feedback_section(card_content)}\n\n"
-            "## Fichier(s) à corriger\n\n" + "\n\n".join(targeted_blocks)
+        # Mode correction ciblée inter-activations (voir StudioState.retry_scope) :
+        # un tour précédent (activation complète antérieure) a échoué sur un
+        # fichier identifié avec certitude — ne redemander que CE fichier, pas
+        # l'historique de feedback cumulé (source de non-convergence, voir
+        # docs/roadmap.md).
+        card_content = _targeted_correction_prompt(
+            config.repo_path, card_content, targeted_files, "MODE CORRECTION CIBLÉE",
         )
         tracer.emit("targeted_retry", files=sorted(targeted_files))
 
-    user_prompt = (
-        f"{existing_files_context}\n\n---\n\n{card_content}" if existing_files_context else card_content
-    )
+    def _build_prompt(body: str) -> str:
+        return f"{existing_files_context}\n\n---\n\n{body}" if existing_files_context else body
+
+    user_prompt = _build_prompt(card_content)
 
     skill_names = list(_SKILL_NAMES)
     if role == "back-tu":
@@ -277,54 +294,96 @@ async def run(state: StudioState) -> StudioState:
     )
 
     ollama_config = config.get("ollama", {})
-    result = await run_ollama(
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        model=config.models["agents_local"],
-        base_url=config.ollama_base_url,
-        timeout_seconds=ollama_config.get("timeout_seconds", 120),
-        num_ctx=ollama_config.get("num_ctx", 16384),
-        response_format=FILE_OUTPUT_SCHEMA,
-        tracer=tracer,
-    )
+    inner_retry_limit = config.get("agents", {}).get("inner_retry_limit", 3)
 
     iteration = agent_iteration_count(state, role) + 1
 
-    try:
-        files, blocked_reason = parse_structured_file_output(result["content"], tracer=tracer)
-    except ValueError:
-        files, blocked_reason = {}, ""
+    tokens_prompt_total = 0
+    tokens_completion_total = 0
+    duration_total_ms = 0
+    files: dict[str, str] = {}
+    blocked_reason = ""
+    verify_error = None
+
+    for inner_attempt in range(1, inner_retry_limit + 1):
+        result = await run_ollama(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=config.models["agents_local"],
+            base_url=config.ollama_base_url,
+            timeout_seconds=ollama_config.get("timeout_seconds", 120),
+            num_ctx=ollama_config.get("num_ctx", 16384),
+            response_format=FILE_OUTPUT_SCHEMA,
+            tracer=tracer,
+        )
+        tokens_prompt_total += result["tokens_prompt"]
+        tokens_completion_total += result["tokens_completion"]
+        duration_total_ms += result["duration_ms"]
+
+        try:
+            files, blocked_reason = parse_structured_file_output(result["content"], tracer=tracer)
+        except ValueError:
+            files, blocked_reason = {}, ""
+
+        if blocked_reason or not files:
+            # Fichier fautif non identifiable (texte libre) : pas de boucle
+            # interne possible (rien à cibler), retour à la régénération
+            # complète au prochain tour (retry_scope_entry=None).
+            verify_error = None
+            break
+
+        for relative_path, content in files.items():
+            await write_card(config.repo_path / relative_path, content, tracer=tracer)
+
+        verify_error = await verify_python_files(
+            repo_path=config.repo_path,
+            project_name=config.project_name,
+            files=files,
+            requirements_relative=_requirements_relative(config),
+            tracer=tracer,
+        )
+        if verify_error is None:
+            break
+
+        tracer.emit(
+            "verify_failed",
+            file=verify_error.file,
+            related_files=verify_error.related_files,
+            reason=verify_error.message,
+            inner_attempt=inner_attempt,
+        )
+        if inner_attempt == inner_retry_limit:
+            # Budget de retry interne épuisé : on sort avec verify_error
+            # encore posé, le bloc ci-dessous bascule sur le mode
+            # feedback_sent/WAITING_HUMAN existant (retry_scope inter-
+            # activations, pas de 3e mécanisme).
+            break
+
+        # Correction ciblée DANS la même activation (voir
+        # _targeted_correction_prompt) — fichier fautif + fichiers liés
+        # (chaîne d'import transitive, voir VerifyFailure.related_files),
+        # sans ça un bug situé dans un fichier importé (ex. import
+        # circulaire) ne serait jamais montré au modèle.
+        user_prompt = _build_prompt(
+            _targeted_correction_prompt(
+                config.repo_path, card_content,
+                {f: verify_error.message for f in [verify_error.file, *verify_error.related_files]},
+                "MODE CORRECTION CIBLÉE (tour interne)",
+            )
+        )
+
+    result["tokens_prompt"] = tokens_prompt_total
+    result["tokens_completion"] = tokens_completion_total
+    result["duration_ms"] = duration_total_ms
 
     if blocked_reason or not files:
-        # Fichier fautif non identifiable (texte libre) : retour à la
-        # régénération complète au prochain tour (retry_scope_entry=None).
         return await _feedback_sent(
             config, state, role, card_path, iteration,
             blocked_reason or result["content"], result, tracer,
             retry_scope_entry=None,
         )
 
-    for relative_path, content in files.items():
-        await write_card(config.repo_path / relative_path, content, tracer=tracer)
-
-    verify_error = await verify_python_files(
-        repo_path=config.repo_path,
-        project_name=config.project_name,
-        files=files,
-        requirements_relative=_requirements_relative(config),
-        tracer=tracer,
-    )
     if verify_error is not None:
-        tracer.emit(
-            "verify_failed",
-            file=verify_error.file,
-            related_files=verify_error.related_files,
-            reason=verify_error.message,
-        )
-        # Fichier fautif + fichiers liés (chaîne d'import transitive, voir
-        # VerifyFailure.related_files) : correction ciblée sur tous au
-        # prochain tour — sans ça, un bug situé dans un fichier importé
-        # (ex. import circulaire) ne serait jamais montré au modèle.
         return await _feedback_sent(
             config, state, role, card_path, iteration, verify_error.message, result, tracer,
             retry_scope_entry={

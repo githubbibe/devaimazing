@@ -134,10 +134,10 @@ async def run_claude_code(
         ) from exc
 
     if process.returncode != 0:
-        message = (
-            f"Claude Code CLI a échoué (code {process.returncode}) : "
-            f"{stderr.decode('utf-8', errors='replace').strip()}"
-        )
+        stderr_text = stderr.decode("utf-8", errors="replace").strip()
+        stdout_text = stdout.decode("utf-8", errors="replace").strip()
+        detail = stderr_text or stdout_text or "(stdout et stderr vides)"
+        message = f"Claude Code CLI a échoué (code {process.returncode}) : {detail}"
         if tracer is not None:
             tracer.emit("error", backend="claude_code", model=model, message=message)
         raise RuntimeError(message)

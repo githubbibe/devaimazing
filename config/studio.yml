@@ -51,6 +51,15 @@ checkpoints:
 agents:
   max_iterations: 3
   retry_delay_seconds: 5
+  # Tentatives de correction ciblée DANS une même activation d'un agent
+  # producteur (Back/Front/Test), après un échec de tools.pyenv.verify_python_files
+  # (syntaxe/import) — distinct de max_iterations, qui borne les activations
+  # complètes successives (nouvelle lecture de fiche, nouvel appel outer via
+  # le graphe). But : transformer plusieurs échecs WAITING_HUMAN en un seul,
+  # en corrigeant immédiatement dans le même tour (voir docs/roadmap.md,
+  # 2026-07-20). Ne couvre que ce que verify_python_files détecte
+  # (syntaxe/import) — pas les écarts sémantiques avec la fiche.
+  inner_retry_limit: 3
 
 # Métriques
 metrics:

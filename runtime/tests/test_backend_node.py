@@ -626,6 +626,138 @@ async def test_backend_verify_success_proceeds_to_commit(monkeypatch: pytest.Mon
     assert updates["agent_results"][0].status == "success"
 
 
+async def test_backend_inner_retry_converges_without_feedback_sent(monkeypatch: pytest.MonkeyPatch):
+    """
+    La boucle de retry interne (inner_retry_limit) doit corriger un échec de
+    vérification DANS la même activation : 1er appel Ollama produit un
+    fichier qui échoue à la vérification, 2e appel (prompt "mode correction
+    ciblée (tour interne)") produit un fichier qui passe — le node doit
+    committer normalement, sans jamais passer par feedback_sent/WAITING_HUMAN
+    (voir docs/roadmap.md, 2026-07-20).
+    """
+    calls = {"count": 0}
+    verify_call_count = {"count": 0}
+    committed = {}
+    feedback_calls = []
+
+    BROKEN_OUTPUT = _structured_output({"backend/auth/endpoints.py": "def login(:\n    ..."})
+    FIXED_OUTPUT = _structured_output({"backend/auth/endpoints.py": "def login():\n    ..."})
+
+    async def fake_read_card(path, tracer=None):
+        return "fiche back"
+
+    async def fake_run_ollama(**kwargs):
+        calls["count"] += 1
+        content = BROKEN_OUTPUT if calls["count"] == 1 else FIXED_OUTPUT
+        return _fake_ollama_result(content, tokens_prompt=5, tokens_completion=10, duration_ms=100)
+
+    async def fake_write_card(path, content, tracer=None):
+        pass
+
+    async def fake_commit_as_agent(repo_path, agent, message, files, tracer=None):
+        committed.update(agent=agent, files=files)
+        return "abc123"
+
+    async def fake_append_feedback(card_path, agent_source, feedback):
+        feedback_calls.append((agent_source, feedback))
+
+    async def fake_verify_python_files(**kwargs):
+        verify_call_count["count"] += 1
+        if verify_call_count["count"] == 1:
+            return VerifyFailure(
+                file="backend/auth/endpoints.py",
+                message="Erreur de syntaxe dans backend/auth/endpoints.py : invalid syntax",
+            )
+        return None
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(backend_node, "commit_as_agent", fake_commit_as_agent)
+    monkeypatch.setattr(backend_node, "append_feedback", fake_append_feedback)
+    monkeypatch.setattr(backend_node, "verify_python_files", fake_verify_python_files)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
+    )
+
+    updates = await backend_node.run(state)
+
+    assert calls["count"] == 2
+    assert verify_call_count["count"] == 2
+    assert feedback_calls == []
+    assert committed["agent"] == "back"
+    assert "status" not in updates
+    assert updates["agent_results"][0].status == "success"
+    assert updates["agent_results"][0].tokens_prompt == 10
+    assert updates["agent_results"][0].tokens_completion == 20
+
+
+async def test_backend_inner_retry_exhausted_falls_back_to_feedback_sent(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    Si tous les tours internes échouent (inner_retry_limit atteint sans
+    vérification réussie), le node doit retomber sur le chemin existant
+    feedback_sent/WAITING_HUMAN — un seul appel à append_feedback, pas un
+    par tentative interne.
+    """
+    calls = {"count": 0}
+    feedback_calls = []
+
+    BROKEN_OUTPUT = _structured_output({"backend/auth/endpoints.py": "def login(:\n    ..."})
+
+    async def fake_read_card(path, tracer=None):
+        return "fiche back"
+
+    async def fake_run_ollama(**kwargs):
+        calls["count"] += 1
+        return _fake_ollama_result(BROKEN_OUTPUT)
+
+    async def fake_write_card(path, content, tracer=None):
+        pass
+
+    async def fake_append_feedback(card_path, agent_source, feedback):
+        feedback_calls.append((agent_source, feedback))
+
+    async def fake_commit_as_agent(**kwargs):
+        raise AssertionError("commit_as_agent ne doit pas être appelé si la vérification échoue toujours")
+
+    async def fake_verify_python_files(**kwargs):
+        return VerifyFailure(
+            file="backend/auth/endpoints.py",
+            message="Erreur de syntaxe dans backend/auth/endpoints.py : invalid syntax",
+        )
+
+    monkeypatch.setattr(backend_node, "read_card", fake_read_card)
+    monkeypatch.setattr(backend_node, "run_ollama", fake_run_ollama)
+    monkeypatch.setattr(backend_node, "write_card", fake_write_card)
+    monkeypatch.setattr(backend_node, "append_feedback", fake_append_feedback)
+    monkeypatch.setattr(backend_node, "commit_as_agent", fake_commit_as_agent)
+    monkeypatch.setattr(backend_node, "verify_python_files", fake_verify_python_files)
+
+    state = StudioState(
+        run_id="run-042",
+        current_phase=Phase.STUBS,
+        agent_sequence=["back"],
+        current_agent_index=0,
+        agent_cards={"back": "specs/run-042/back.md"},
+        agent_card_metadata={"back": _card_metadata()},
+    )
+
+    updates = await backend_node.run(state)
+
+    assert calls["count"] == 3  # inner_retry_limit par défaut (studio.yml)
+    assert len(feedback_calls) == 1
+    assert updates["status"] == RunStatus.WAITING_HUMAN
+    assert updates["agent_results"][0].status == "feedback_sent"
+
+
 async def test_backend_verify_failure_sets_retry_scope(monkeypatch: pytest.MonkeyPatch):
     """
     Régression run-20260714-205712 (2026-07-20) : le fichier fautif connu
