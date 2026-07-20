@@ -32,18 +32,32 @@ def test_router_fiches_routes_to_pm():
     assert router(StudioState(current_phase=Phase.FICHES)) == "pm"
 
 
-def test_router_stubs_phase_filters_sequence_to_back_and_front():
-    # La séquence complète du run inclut back-tu/front-tu/test/secu, mais la
-    # phase 4 (stubs) ne concerne que back et front (voir docs/workflow.md).
+def test_router_stubs_phase_indexes_full_sequence_not_filtered():
+    """
+    Régression run réel (2026-07-20, voir docs/roadmap.md) : ce test
+    attendait auparavant router(index=1) == "frontend", ce qui encodait le
+    bug lui-même — index 1 dans state.agent_sequence (la séquence
+    complète) est "back-tu", pas "front". Le bug envoyait le node
+    "backend" (rôle réel back-tu) tourner sous l'identité/prompt "front".
+    back-tu/front-tu participent bien à la phase STUBS (voir routing.py::
+    PHASE_AGENT_ROLES), donc les 4 premiers index routent tous vers le bon
+    node.
+    """
     state = StudioState(
         current_phase=Phase.STUBS,
         agent_sequence=["back", "back-tu", "front", "front-tu", "test", "secu"],
         current_agent_index=0,
     )
-    assert router(state) == "backend"
+    assert router(state) == "backend"  # back
 
     state.current_agent_index = 1
-    assert router(state) == "frontend"
+    assert router(state) == "backend"  # back-tu -> même node que back
+
+    state.current_agent_index = 2
+    assert router(state) == "frontend"  # front
+
+    state.current_agent_index = 3
+    assert router(state) == "frontend"  # front-tu -> même node que front
 
 
 def test_router_implementation_phase_includes_tu_roles():
@@ -91,8 +105,7 @@ def test_router_index_out_of_bounds_raises_value_error():
 
 
 def test_router_sequence_without_any_role_for_phase_raises_value_error():
-    # "agent-inconnu" n'appartient à aucun rôle de PHASE_AGENT_ROLES[STUBS] :
-    # la séquence filtrée est vide -> current_agent_index (0) est hors bornes.
+    # "agent-inconnu" n'appartient à aucun rôle de PHASE_AGENT_ROLES[STUBS].
     state = StudioState(
         current_phase=Phase.STUBS,
         agent_sequence=["agent-inconnu"],

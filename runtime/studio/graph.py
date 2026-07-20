@@ -20,7 +20,6 @@ from studio.routing import (
     AGENT_TO_NODE,
     PHASE_AGENT_ROLES,
     PHASE_NODE,
-    phase_agent_sequence,
     should_checkpoint,
 )
 from studio.state import AgentResult, Phase, RunStatus, StudioState
@@ -118,22 +117,40 @@ def router(state: StudioState) -> str:
 
     Raises:
         ValueError: Si state.agent_sequence est incohérent avec la phase
-            courante (current_agent_index hors bornes, ou agent absent de
-            AGENT_TO_NODE). Un état malformé signale un bug ailleurs dans le
-            runtime (le node qui a produit cet état) — ne pas l'absorber
-            silencieusement en routant vers END.
+            courante (current_agent_index hors bornes, agent à cet index
+            n'appartenant pas aux rôles de la phase courante — voir
+            PHASE_AGENT_ROLES —, ou agent absent de AGENT_TO_NODE). Un état
+            malformé signale un bug ailleurs dans le runtime (le node qui a
+            produit cet état) — ne pas l'absorber silencieusement en
+            routant vers END.
+
+    Notes:
+        Indexe directement state.agent_sequence (la séquence complète),
+        jamais une sous-liste filtrée par phase — un bug réel en run
+        (2026-07-20, voir docs/roadmap.md et PHASE_AGENT_ROLES dans
+        routing.py) venait d'un décalage entre une sous-liste filtrée à 2
+        éléments utilisée ici pour l'indexation et la séquence complète à
+        6 éléments utilisée par backend.py/frontend.py pour résoudre le
+        rôle réel : back-tu (index 1 dans la séquence complète) se
+        retrouvait routé vers le node "frontend" (index 1 de la sous-liste
+        filtrée ["back", "front"]).
     """
     if state.status in (RunStatus.WAITING_HUMAN, RunStatus.FAILED, RunStatus.COMPLETED):
         return END
 
     if state.current_phase in PHASE_AGENT_ROLES:
-        phase_sequence = phase_agent_sequence(state)
-        if state.current_agent_index >= len(phase_sequence):
+        if state.current_agent_index >= len(state.agent_sequence):
             raise ValueError(
                 f"current_agent_index ({state.current_agent_index}) hors bornes pour "
-                f"la phase {state.current_phase.name} (séquence filtrée : {phase_sequence})"
+                f"state.agent_sequence (longueur {len(state.agent_sequence)})"
             )
-        agent = phase_sequence[state.current_agent_index]
+        agent = state.agent_sequence[state.current_agent_index]
+        if agent not in PHASE_AGENT_ROLES[state.current_phase]:
+            raise ValueError(
+                f"Agent {agent!r} (index {state.current_agent_index}) n'appartient pas "
+                f"aux rôles de la phase {state.current_phase.name} "
+                f"({sorted(PHASE_AGENT_ROLES[state.current_phase])})"
+            )
         if agent not in AGENT_TO_NODE:
             raise ValueError(f"Agent inconnu dans agent_sequence : {agent!r}")
         return AGENT_TO_NODE[agent]

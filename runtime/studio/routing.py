@@ -36,11 +36,20 @@ PHASE_NODE = {
     Phase.CLOTURE: "closer",
 }
 
-# Phases où plusieurs agents s'enchaînent selon state.agent_sequence, filtré aux
-# rôles concernés par cette phase précise (voir docs/workflow.md phases 4 et 6 —
-# back-tu/front-tu/test/secu ne participent pas à la phase 4, contrairement à la 6).
+# Phases où plusieurs agents s'enchaînent selon state.agent_sequence — le rôle
+# à state.current_agent_index doit appartenir à cet ensemble pour la phase
+# courante (voir router() dans graph.py et is_last_agent_of_phase ci-dessous).
+# back-tu/front-tu participent bien à la phase 4 (écrivent les tests unitaires
+# en même temps que les stubs de code, voir docs/agents.md) — élargi le
+# 2026-07-20 après un bug réel trouvé en run (voir docs/roadmap.md) : cet
+# ensemble ne contenait que {"back", "front"}, alors que back-tu/front-tu sont
+# bel et bien programmés par le PM dans cette phase ; router()/
+# is_last_agent_of_phase indexaient une sous-liste filtrée à 2 éléments avec
+# un compteur qui progresse sur la séquence complète à 6 éléments — décalage
+# qui envoyait le node "backend" (rôle back-tu) tourner sous le node
+# "frontend" (identité git, prompt système et skills de front, pas de back).
 PHASE_AGENT_ROLES = {
-    Phase.STUBS: {"back", "front"},
+    Phase.STUBS: {"back", "back-tu", "front", "front-tu"},
     Phase.IMPLEMENTATION: {"back", "back-tu", "front", "front-tu"},
 }
 
@@ -60,25 +69,19 @@ PHASE_CHECKPOINT_KEYS = {
 }
 
 
-def phase_agent_sequence(state: StudioState) -> list[str]:
-    """
-    Sous-séquence de state.agent_sequence filtrée aux rôles de la phase
-    courante (voir PHASE_AGENT_ROLES). Liste vide si la phase courante n'est
-    pas une phase à agents multiples (STUBS, IMPLEMENTATION).
-    """
-    roles = PHASE_AGENT_ROLES.get(state.current_phase)
-    if roles is None:
-        return []
-    return [agent for agent in state.agent_sequence if agent in roles]
-
-
 def is_last_agent_of_phase(state: StudioState) -> bool:
     """
-    True si l'agent à state.current_agent_index est le dernier de la
-    sous-séquence filtrée de la phase courante (voir phase_agent_sequence).
+    True si l'agent suivant state.current_agent_index dans
+    state.agent_sequence (la séquence COMPLÈTE — pas de sous-liste
+    filtrée, voir PHASE_AGENT_ROLES ci-dessus pour l'historique du bug que
+    ça a causé) n'appartient plus aux rôles de la phase courante, ou si
+    current_agent_index est déjà le dernier élément de la séquence.
     """
-    sequence = phase_agent_sequence(state)
-    return state.current_agent_index >= len(sequence) - 1
+    roles = PHASE_AGENT_ROLES.get(state.current_phase, set())
+    next_index = state.current_agent_index + 1
+    if next_index >= len(state.agent_sequence):
+        return True
+    return state.agent_sequence[next_index] not in roles
 
 
 def agent_iteration_count(state: StudioState, agent: str) -> int:

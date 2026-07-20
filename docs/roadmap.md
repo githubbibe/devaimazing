@@ -10,10 +10,67 @@ Le runtime devaimazing est **fonctionnellement complet et testé de bout en bout
 closer), `metrics.py` et `cli.py` (`run`, `resume`, `retry`, `run-agent`, `runs`,
 `metrics`, `new-project`, `projects`, `doctor`) sont tous implémentés — voir
 `CLAUDE.md` pour la convention (stub-first reste appliquée par le pipeline aux
-projets *cibles*, pas à ce dépôt). **363/364 tests verts** sur `runtime/tests/`
+projets *cibles*, pas à ce dépôt). **361/362 tests verts** sur `runtime/tests/`
 (seul échec : `test_new_project_target_exists_not_git_repo_prints_error`,
 préexistant sans rapport, dû au retour à la ligne du terminal dans les
 sorties Rich).
+
+**2026-07-20 — bug fondamental d'indexation router/phase_agent_sequence
+résolu (explique l'anomalie d'identité git back-tu, chantier 5 de la
+journée sur run-20260714-205712).** En dressant un panorama des blocages
+de la journée, l'anomalie « `back-tu` commit sous l'identité
+`front-aimazing` » (signalée dès le premier chantier du jour comme
+inexpliquée) s'est révélée **systématique** : 22 commits `back-tu` sur 22
+dans tout l'historique du run, sans exception — pas un aléa.
+
+Cause trouvée et vérifiée directement : `graph.py::router()` et
+`routing.py::is_last_agent_of_phase()` indexaient `phase_agent_sequence(
+state)` — une sous-liste de `state.agent_sequence` **filtrée** aux rôles
+de la phase courante (`PHASE_AGENT_ROLES[Phase.STUBS] = {"back", "front"}`,
+2 éléments) — alors que `backend.py`/`frontend.py` résolvent le rôle réel
+et incrémentent `current_agent_index` sur `state.agent_sequence`, la
+séquence **complète** (6 éléments : `back, back-tu, front, front-tu, test,
+secu`). Après que `back` (index 0) termine, `current_agent_index` passe à
+1 : `router()` lisait `["back","front"][1]` = `"front"` → dispatchait vers
+le node **frontend.py**, alors que `state.agent_sequence[1]` = `"back-tu"`
+— le rôle réellement attendu. `frontend.py` résolvait quand même une fiche
+et des métadonnées cohérentes (`state.agent_cards["back-tu"]` existe,
+lookup par clé dict, indépendant de l'indexation buguée), donc le tour
+"fonctionnait" en apparence — juste sous le mauvais prompt système
+(`prompts/frontend.md`), sans le skill `non-regression`, avec l'identité
+git `front-aimazing` et le préfixe de commit `feat` au lieu de `test`.
+Repro minimale :
+```python
+router(StudioState(current_phase=Phase.STUBS,
+    agent_sequence=["back","back-tu","front","front-tu","test","secu"],
+    current_agent_index=1)) == "frontend"  # alors que agent_sequence[1] == "back-tu"
+```
+
+Explique aussi un symptôme relevé plus tôt sans être relié : la phase
+STUBS ne faisait jamais tourner `front`/`front-tu` et sautait direct à
+`AUDIT_STUBS` après `back-tu` (`is_last_agent_of_phase` avait le même bug
+de comparaison filtrée/complète).
+
+**Corrigé** : `PHASE_AGENT_ROLES[Phase.STUBS]` élargi à `{"back", "back-tu",
+"front", "front-tu"}` (reflète la réalité — back-tu/front-tu tournent bien
+en phase STUBS) ; `router()`/`is_last_agent_of_phase()` réécrits pour
+indexer directement `state.agent_sequence` (jamais de sous-liste filtrée) ;
+`phase_agent_sequence()` supprimée (plus aucun appelant) ; correction au
+passage du même bug d'indexation dans `architect.py::_run_audit_stubs`
+(`stubs_sequence.index(faulty_agent)` → `state.agent_sequence.index(...)`),
+noté « hors scope » lors du chantier précédent sans réaliser qu'il s'agissait
+de la même cause.
+
+Un test existant (`test_router_stubs_phase_filters_sequence_to_back_and_front`)
+encodait le bug lui-même (`current_agent_index=1` → attendait `"frontend"`)
+— corrigé pour attendre `"backend"`.
+
+**Non revérifié en conditions réelles** au moment d'écrire cette entrée — à
+faire au prochain `resume` de `run-20260714-205712`. Si le diagnostic est
+juste, `back-tu` devrait enfin tourner sous le bon prompt/skills, ce qui
+peut changer significativement son taux de réussite (une partie de
+l'instabilité attribuée à "qwen2.5 est peu fiable" pourrait en réalité
+venir de ce mauvais routage).
 
 **2026-07-20 — redo ciblé quand l'Architecte désigne un agent fautif
 (chantier 4, dernier des 4 chantiers de la journée sur run-20260714-205712).**

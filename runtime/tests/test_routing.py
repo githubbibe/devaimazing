@@ -12,7 +12,6 @@ from studio.routing import (
     agent_iteration_count,
     is_last_agent_of_phase,
     max_iterations_exceeded,
-    phase_agent_sequence,
 )
 from studio.state import AgentResult, Phase, StudioState
 
@@ -30,37 +29,41 @@ def config(tmp_path: Path) -> StudioConfig:
     return StudioConfig(project_name="demo", config_dir=config_dir)
 
 
-def test_phase_agent_sequence_filters_stubs_phase():
+def test_is_last_agent_of_phase_non_contiguous_sequence():
+    """
+    Régression run réel (2026-07-20, voir docs/roadmap.md) : back-tu/
+    front-tu s'intercalent entre back/front dans state.agent_sequence
+    (séquence complète, jamais une sous-liste filtrée) — is_last_agent_of_
+    phase doit avancer sur les 4 rôles de la phase STUBS avant de
+    considérer la phase terminée, pas s'arrêter après 2 (l'ancien bug :
+    une sous-liste filtrée à 2 éléments comparée à un index progressant
+    sur 6 éléments envoyait le node "backend" (rôle back-tu, index 1)
+    tourner sous le node "frontend" (identité git front, mauvais prompt).
+    """
     state = StudioState(
         current_phase=Phase.STUBS,
         agent_sequence=["back", "back-tu", "front", "front-tu", "test", "secu"],
-    )
-    assert phase_agent_sequence(state) == ["back", "front"]
-
-
-def test_phase_agent_sequence_filters_implementation_phase():
-    state = StudioState(
-        current_phase=Phase.IMPLEMENTATION,
-        agent_sequence=["back", "back-tu", "front", "front-tu", "test", "secu"],
-    )
-    assert phase_agent_sequence(state) == ["back", "back-tu", "front", "front-tu"]
-
-
-def test_phase_agent_sequence_empty_for_non_multi_agent_phase():
-    state = StudioState(current_phase=Phase.SECURITE, agent_sequence=["secu"])
-    assert phase_agent_sequence(state) == []
-
-
-def test_is_last_agent_of_phase():
-    state = StudioState(
-        current_phase=Phase.STUBS,
-        agent_sequence=["back", "front"],
         current_agent_index=0,
     )
-    assert is_last_agent_of_phase(state) is False
+    assert is_last_agent_of_phase(state) is False  # suivant : back-tu, encore STUBS
 
     state.current_agent_index = 1
-    assert is_last_agent_of_phase(state) is True
+    assert is_last_agent_of_phase(state) is False  # suivant : front, encore STUBS
+
+    state.current_agent_index = 2
+    assert is_last_agent_of_phase(state) is False  # suivant : front-tu, encore STUBS
+
+    state.current_agent_index = 3
+    assert is_last_agent_of_phase(state) is True  # suivant : test, plus dans STUBS
+
+
+def test_is_last_agent_of_phase_end_of_sequence():
+    state = StudioState(
+        current_phase=Phase.IMPLEMENTATION,
+        agent_sequence=["back", "back-tu"],
+        current_agent_index=1,
+    )
+    assert is_last_agent_of_phase(state) is True  # pas d'élément suivant
 
 
 def _results(agent: str, phase: Phase, count: int) -> list[AgentResult]:

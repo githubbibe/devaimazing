@@ -260,9 +260,11 @@ async def _run_audit_stubs(state: StudioState, config: StudioConfig, tracer: Age
     else:
         faulty_card_path = config.repo_path / state.agent_cards[faulty_agent]
         await append_feedback(faulty_card_path, agent_source="architect", feedback=feedback)
-        stubs_sequence = [a for a in state.agent_sequence if a in PHASE_AGENT_ROLES[Phase.STUBS]]
         updates["current_phase"] = Phase.STUBS
-        updates["current_agent_index"] = stubs_sequence.index(faulty_agent)
+        # Index dans state.agent_sequence (la séquence complète) — pas une
+        # sous-liste filtrée par phase, voir routing.py::PHASE_AGENT_ROLES
+        # pour l'historique du bug de décalage d'indexation que ça causait.
+        updates["current_agent_index"] = state.agent_sequence.index(faulty_agent)
         updates["failed_agents"] = state.failed_agents + [faulty_agent]
 
         metadata = state.agent_card_metadata.get(faulty_agent, {})
