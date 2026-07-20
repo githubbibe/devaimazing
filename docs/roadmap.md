@@ -10,10 +10,50 @@ Le runtime devaimazing est **fonctionnellement complet et testé de bout en bout
 closer), `metrics.py` et `cli.py` (`run`, `resume`, `retry`, `run-agent`, `runs`,
 `metrics`, `new-project`, `projects`, `doctor`) sont tous implémentés — voir
 `CLAUDE.md` pour la convention (stub-first reste appliquée par le pipeline aux
-projets *cibles*, pas à ce dépôt). **355/356 tests verts** sur `runtime/tests/`
+projets *cibles*, pas à ce dépôt). **363/364 tests verts** sur `runtime/tests/`
 (seul échec : `test_new_project_target_exists_not_git_repo_prints_error`,
 préexistant sans rapport, dû au retour à la ligne du terminal dans les
 sorties Rich).
+
+**2026-07-20 — redo ciblé quand l'Architecte désigne un agent fautif
+(chantier 4, dernier des 4 chantiers de la journée sur run-20260714-205712).**
+Trouvé en poursuivant les chantiers précédents en conditions réelles :
+`retry_scope` n'était alimenté que par `verify_python_files` (chantiers
+2/3) — le redo déclenché par l'audit Architecte (`_run_audit_stubs`) ne le
+touchait jamais, donc `back` retombait systématiquement en régénération
+complète de son périmètre (9 fichiers) à chaque écart signalé par
+l'Architecte, même pour un seul fichier en cause. Confirmé en run réel :
+`fastapi==0.95.3` (déjà vu et corrigé au chantier 1) est **revenu 3 fois**
+via exactement ce chemin, malgré `retry_scope` fonctionnel pour les échecs
+`verify_python_files`.
+
+Nouvelle fonction `_extract_feedback_files` (architect.py) : extrait les
+chemins de fichiers cités entre backticks dans le texte de feedback de
+l'Architecte (ex. `` `backend/schemas.py` ``), résolus contre le périmètre
+déclaré de l'agent fautif (`agent_card_metadata[faulty_agent]`,
+files_to_create + files_to_modify) — un candidat non résolvable avec
+certitude (ex. nom de fichier ambigu, symbole de code sans extension) est
+ignoré plutôt que deviné, avec repli sur la régénération complète
+existante. Pas de changement du contrat de sortie de l'Architecte
+(`prompts/architect.md` inchangé) — extraction depuis le texte déjà produit,
+qui cite déjà les chemins entre backticks dans son style actuel.
+
+Bug distinct noté au passage, **non corrigé** (hors scope) : le redo
+Architecte fait retraverser tout le groupe de phase (`back` puis `back-tu`)
+même quand un seul des deux est fautif, à cause de l'indexation par
+sous-séquence de phase appliquée à la séquence complète
+(`stubs_sequence.index(faulty_agent)` utilisé comme `current_agent_index`
+dans `state.agent_sequence`) — fonctionne par coïncidence pour `back`
+(même position dans les deux séquences) mais serait incorrect pour
+`front`. À corriger séparément si ça cause un problème observé.
+
+**Non revérifié en conditions réelles** au moment d'écrire cette entrée
+(session déjà longue) — à faire au prochain `resume` de
+`run-20260714-205712`.
+
+11 tests ajoutés (`test_architect_node.py` : `_extract_feedback_files` +
+intégration `_run_audit_stubs` avec/sans fichiers extractibles, non-
+régression retry_scope d'un autre agent préservé).
 
 **2026-07-20 — related_files : le mode ciblé couvre la chaîne d'import, pas
 seulement le module importé en tête (chantier 3).** Trouvé en relançant le

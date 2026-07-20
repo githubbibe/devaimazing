@@ -44,6 +44,48 @@ _STATUT_PATTERN = re.compile(r"STATUT:\s*(CONFORME|ECART)", re.IGNORECASE)
 _AGENT_PATTERN = re.compile(r"AGENT:\s*(\S+)")
 _FEEDBACK_PATTERN = re.compile(r"FEEDBACK:\s*(.+)", re.DOTALL)
 
+# Chemins de fichiers cités entre backticks dans le feedback de l'Architecte
+# (ex. « `backend/schemas.py` — TaskResponse hérite... »), distingués des
+# symboles de code (`TaskResponse`, `HTTPException`) par une extension
+# reconnue. Voir _extract_feedback_files.
+_BACKTICKED_FILE_PATTERN = re.compile(
+    r"`([^`]+\.(?:py|md|txt|json|ya?ml|tsx?|jsx?|html|css))`"
+)
+
+
+def _extract_feedback_files(feedback: str, known_files: list[str]) -> list[str]:
+    """
+    Extrait du texte de feedback de l'Architecte les chemins de fichiers
+    qu'il cite entre backticks, résolus contre `known_files` (le périmètre
+    déclaré de l'agent fautif — state.agent_card_metadata[faulty_agent],
+    files_to_create + files_to_modify) pour permettre une correction
+    ciblée (voir StudioState.retry_scope) au lieu d'une régénération
+    complète — gap trouvé en run réel le 2026-07-20 sur run-20260714-205712 :
+    un redo Architecte faisait toujours régénérer tout le périmètre de
+    l'agent fautif, même pour un écart sur un seul fichier (ex.
+    `fastapi==0.95.3` réintroduit 3 fois via ce chemin).
+
+    L'Architecte cite parfois un chemin complet (`backend/schemas.py`),
+    parfois juste le nom de fichier (`crud.py`) — la résolution contre
+    `known_files` (chemin exact, ou match unique par nom de fichier)
+    évite de générer un chemin incorrect ; un candidat non résolu de
+    façon certaine est ignoré plutôt que deviné.
+
+    Returns:
+        Chemins relatifs résolus, dédupliqués, dans l'ordre d'apparition.
+        Liste vide si aucun chemin n'est extractible ou résolvable —
+        l'appelant doit alors se rabattre sur la régénération complète.
+    """
+    resolved: list[str] = []
+    for candidate in _BACKTICKED_FILE_PATTERN.findall(feedback):
+        if candidate in known_files and candidate not in resolved:
+            resolved.append(candidate)
+            continue
+        matches = [f for f in known_files if f == candidate or f.endswith(f"/{candidate}")]
+        if len(matches) == 1 and matches[0] not in resolved:
+            resolved.append(matches[0])
+    return resolved
+
 
 async def _read_optional(path: Path) -> str:
     """Lit un fichier, retourne une chaîne vide s'il n'existe pas (contexte optionnel)."""
@@ -222,7 +264,25 @@ async def _run_audit_stubs(state: StudioState, config: StudioConfig, tracer: Age
         updates["current_phase"] = Phase.STUBS
         updates["current_agent_index"] = stubs_sequence.index(faulty_agent)
         updates["failed_agents"] = state.failed_agents + [faulty_agent]
-        tracer.emit("node_exit", status="success", conforme=False, faulty_agent=faulty_agent)
+
+        metadata = state.agent_card_metadata.get(faulty_agent, {})
+        known_files = metadata.get("files_to_create", []) + metadata.get("files_to_modify", [])
+        flagged_files = _extract_feedback_files(feedback, known_files)
+        if flagged_files:
+            # Fichiers identifiés avec une confiance suffisante (résolus
+            # contre le périmètre déclaré) : correction ciblée au prochain
+            # tour au lieu d'une régénération complète du périmètre entier.
+            new_retry_scope = dict(state.retry_scope)
+            new_retry_scope[faulty_agent] = {f: feedback for f in flagged_files}
+            updates["retry_scope"] = new_retry_scope
+
+        tracer.emit(
+            "node_exit",
+            status="success",
+            conforme=False,
+            faulty_agent=faulty_agent,
+            flagged_files=flagged_files,
+        )
 
     return _with_checkpoint(state, updates)
 

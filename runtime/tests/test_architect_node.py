@@ -163,6 +163,76 @@ async def test_audit_stubs_ecart_sends_back_to_faulty_agent(
     assert updates["current_agent_index"] == 1  # position de "front" dans la séquence stubs
     assert updates["failed_agents"] == ["front"]
     assert feedback_calls[0] == ("architect", "signature incohérente avec le brief")
+    assert "retry_scope" not in updates  # aucun fichier extractible du feedback
+
+
+async def test_audit_stubs_ecart_with_flagged_file_sets_retry_scope(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    """
+    Régression run-20260714-205712 (2026-07-20) : un écart citant un
+    fichier précis doit cibler ce fichier au tour suivant (mode ciblé déjà
+    existant, chantiers 2/3), pas déclencher une régénération complète du
+    périmètre de l'agent fautif.
+    """
+    async def fake_run_claude_code(**kwargs):
+        return _fake_claude_result(
+            "STATUT: ECART\nAGENT: back\nFEEDBACK: "
+            "`backend/schemas.py` — TaskResponse hérite de TaskCreate sans le champ terminé."
+        )
+
+    async def fake_append_feedback(card_path, agent_source, feedback):
+        pass
+
+    monkeypatch.setattr(architect_node, "run_claude_code", fake_run_claude_code)
+    monkeypatch.setattr(architect_node, "append_feedback", fake_append_feedback)
+
+    state = _base_state(
+        current_phase=Phase.AUDIT_STUBS,
+        agent_sequence=["back", "front"],
+        agent_card_metadata={
+            "back": {
+                "files_to_create": ["backend/schemas.py", "backend/exceptions.py"],
+                "files_to_modify": [],
+            }
+        },
+    )
+    updates = await architect_node.run(state)
+
+    assert updates["retry_scope"]["back"] == {
+        "backend/schemas.py": (
+            "`backend/schemas.py` — TaskResponse hérite de TaskCreate sans le champ terminé."
+        )
+    }
+
+
+async def test_audit_stubs_ecart_preserves_other_agents_retry_scope(
+    monkeypatch: pytest.MonkeyPatch, repo: Path
+):
+    """Un nouveau retry_scope pour l'agent fautif n'écrase pas celui d'un autre agent."""
+    async def fake_run_claude_code(**kwargs):
+        return _fake_claude_result(
+            "STATUT: ECART\nAGENT: back\nFEEDBACK: `backend/schemas.py` incomplet."
+        )
+
+    async def fake_append_feedback(card_path, agent_source, feedback):
+        pass
+
+    monkeypatch.setattr(architect_node, "run_claude_code", fake_run_claude_code)
+    monkeypatch.setattr(architect_node, "append_feedback", fake_append_feedback)
+
+    state = _base_state(
+        current_phase=Phase.AUDIT_STUBS,
+        agent_sequence=["back", "front"],
+        agent_card_metadata={
+            "back": {"files_to_create": ["backend/schemas.py"], "files_to_modify": []},
+        },
+        retry_scope={"front": {"frontend/App.tsx": "erreur front non liée"}},
+    )
+    updates = await architect_node.run(state)
+
+    assert updates["retry_scope"]["front"] == {"frontend/App.tsx": "erreur front non liée"}
+    assert "backend/schemas.py" in updates["retry_scope"]["back"]
 
 
 async def test_audit_stubs_missing_statut_raises_runtime_error(
@@ -253,3 +323,45 @@ def test_parse_audit_decision_ecart():
     assert conforme is False
     assert agent == "back"
     assert feedback == "manque la gestion d'erreur"
+
+
+def test_extract_feedback_files_exact_path_match():
+    feedback = "`backend/schemas.py` — TaskResponse hérite de TaskCreate sans le champ terminé."
+    known_files = ["backend/schemas.py", "backend/exceptions.py"]
+    assert architect_node._extract_feedback_files(feedback, known_files) == ["backend/schemas.py"]
+
+
+def test_extract_feedback_files_resolves_bare_filename():
+    feedback = "`crud.py` ligne 4 importe un symbole absent de schemas.py."
+    known_files = ["backend/crud.py", "backend/schemas.py"]
+    assert architect_node._extract_feedback_files(feedback, known_files) == ["backend/crud.py"]
+
+
+def test_extract_feedback_files_ignores_code_symbols():
+    feedback = "`TaskResponse` et `HTTPException` posent problème dans `backend/schemas.py`."
+    known_files = ["backend/schemas.py"]
+    assert architect_node._extract_feedback_files(feedback, known_files) == ["backend/schemas.py"]
+
+
+def test_extract_feedback_files_drops_ambiguous_bare_filename():
+    """
+    Deux fichiers connus se terminent par /crud.py (cas construit — en
+    pratique le PM ne déclare pas deux fichiers homonymes) : le candidat
+    `crud.py` n'est pas résolvable avec certitude, il est ignoré plutôt
+    que deviné.
+    """
+    feedback = "`crud.py` a un problème."
+    known_files = ["backend/crud.py", "backend/legacy/crud.py"]
+    assert architect_node._extract_feedback_files(feedback, known_files) == []
+
+
+def test_extract_feedback_files_no_match_returns_empty():
+    feedback = "Le module ne respecte pas le brief architectural."
+    known_files = ["backend/schemas.py"]
+    assert architect_node._extract_feedback_files(feedback, known_files) == []
+
+
+def test_extract_feedback_files_deduplicates_across_exact_and_bare():
+    feedback = "`backend/crud.py` importe mal. Voir aussi `crud.py` ligne 4."
+    known_files = ["backend/crud.py"]
+    assert architect_node._extract_feedback_files(feedback, known_files) == ["backend/crud.py"]
