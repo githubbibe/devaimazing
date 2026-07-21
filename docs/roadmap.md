@@ -1,6 +1,6 @@
 # Feuille de route - devaimazing
 
-**Dernière mise à jour** : 2026-07-20
+**Dernière mise à jour** : 2026-07-21
 
 ## État actuel
 
@@ -10,10 +10,24 @@ Le runtime devaimazing est **fonctionnellement complet et testé de bout en bout
 closer), `metrics.py` et `cli.py` (`run`, `resume`, `retry`, `run-agent`, `runs`,
 `metrics`, `new-project`, `projects`, `doctor`) sont tous implémentés — voir
 `CLAUDE.md` pour la convention (stub-first reste appliquée par le pipeline aux
-projets *cibles*, pas à ce dépôt). **361/362 tests verts** sur `runtime/tests/`
-(seul échec : `test_new_project_target_exists_not_git_repo_prints_error`,
-préexistant sans rapport, dû au retour à la ligne du terminal dans les
-sorties Rich).
+projets *cibles*, pas à ce dépôt). **368/368 tests verts** sur `runtime/tests/`
+(2026-07-21, machine Linux, largeur de terminal par défaut 80 colonnes) —
+`test_new_project_target_exists_not_git_repo_prints_error`, précédemment signalé
+en échec à cause du retour à la ligne Rich dépendant de la largeur du terminal,
+passe dans cet environnement ; sa sensibilité à la largeur du terminal n'est pas
+corrigée dans le code, donc un échec ponctuel sur une autre machine/largeur reste
+possible.
+
+**2026-07-21 — nettoyage code mort + fiches projet.** Scan AST croisé
+définitions/usages sur tout `runtime/studio/**` et `runtime/tests/**` : aucune
+fonction/classe/méthode Python morte trouvée. 5 imports/variable inutilisés
+retirés (ruff F401/F841) dans `metrics.py`, `test_architect_node.py`,
+`test_pm_node.py`, `test_tracer.py`. `README.md` resynchronisé (template
+`card-root-import.md.template` et fichier `config/projects/todo-list2.yml`
+manquaient de la liste de la structure du repo). `templates/architect-map.md.template`
+examiné et **conservé** : comme `card-root.md.template`/`card-agent.md.template`,
+il sert de référence de conception pour les auteurs de prompts (cité dans
+`docs/adr/0010-...md`), pas d'artefact lu au runtime — ce n'est pas du code mort.
 
 **2026-07-20 — bug fondamental d'indexation router/phase_agent_sequence
 résolu (explique l'anomalie d'identité git back-tu, chantier 5 de la

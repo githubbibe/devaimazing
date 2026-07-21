@@ -9,7 +9,7 @@ import pytest
 import yaml
 
 import studio.nodes.architect as architect_node
-from studio.state import AgentResult, Phase, RunStatus, StudioState
+from studio.state import Phase, RunStatus, StudioState
 
 
 def _write_yaml(path: Path, data: dict) -> None:

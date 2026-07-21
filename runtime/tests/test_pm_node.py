@@ -129,7 +129,7 @@ async def test_cadrage_rejection_loops_again(monkeypatch: pytest.MonkeyPatch, re
     monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
 
     state = StudioState(run_id="run-042", objective_raw="x", current_phase=Phase.CADRAGE)
-    updates = await pm_node.run(state)
+    await pm_node.run(state)
 
     content = (repo / "specs" / "run-042" / "card-root.md").read_text(encoding="utf-8")
     assert content.endswith("v2")

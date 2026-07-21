@@ -6,10 +6,8 @@ import json
 from pathlib import Path
 from unittest.mock import Mock
 
-import pytest
-
 from studio.state import Phase
-from studio.tools.tracer import AgentTracer, RunTracer
+from studio.tools.tracer import RunTracer
 
 
 def _read_events(trace_path: Path) -> list[dict]:

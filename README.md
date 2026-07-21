@@ -202,6 +202,7 @@ devaimazing/
 │   └── scalability.md
 ├── templates/                   # Squelettes de fiches generiques
 │   ├── card-root.md.template
+│   ├── card-root-import.md.template  # Squelette import de fiche root existante
 │   ├── card-agent.md.template
 │   ├── project-map.md.template
 │   ├── architect-map.md.template
@@ -233,7 +234,8 @@ devaimazing/
 │   └── projects/                # Config par projet cible
 │       ├── webaimazing-v2.yml   # repo_path, branche, params
 │       ├── demo-todo-app.yml    # idem, pour le projet de demo
-│       └── todo-list.yml        # idem, premier run reel de bout en bout
+│       ├── todo-list.yml        # idem, premier run reel de bout en bout
+│       └── todo-list2.yml       # idem, run bout en bout post-fix troncature Ollama (num_ctx)
 ├── interfaces/
 │   └── telegram-bridge/         # Configuration OpenClaw skills
 ├── infra/
