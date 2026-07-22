@@ -92,16 +92,13 @@ l'observabilité est externe au core.
 
 **Notifications (ntfy)**
 
-Le daemon devaimazing envoie une notification via ntfy à chaque point de sortie
+Le node Closer (phase 10) envoie une notification via ntfy à chaque point de sortie
 du flux : échec d'un agent, checkpoint humain en attente, fin de run. Canal retenu :
 ntfy.sh (service public), pour une portabilité maximale sans setup serveur dédié.
 
 Les notifications ne contiennent jamais de lien : le message est auto-suffisant
 (constat brut de l'erreur, sans suggestion d'action). Voir `docs/workflow.md` pour
 le détail des formats par point de sortie.
-
-Ce canal est une solution transitoire. La cible à terme est une PWA avec push natif
-(Web Push API), qui remplacera ntfy quand l'interface web sera construite.
 
 **Observabilité centralisée (Loki + Grafana Alloy)**
 
@@ -117,11 +114,10 @@ sans avoir besoin d'un environnement de test connecté à la production. Voir
 
 **Interface de pilotage**
 
-Aucune interface de pilotage riche n'existe à ce stade (CLI minimale uniquement,
-`devaimazing run <feature>`). Une application web (PWA) est envisagée comme cible
-à terme : interface conversationnelle avec le PM (pas de formulaires), boutons
-réservés à l'urgence (stop) et à l'affichage passif (métriques, progression, durée,
-tokens consommés). Cette PWA n'est pas développée dans la version actuelle.
+Le pilotage se fait exclusivement via la CLI (`devaimazing run`, `resume`, `retry`,
+`run-agent`, `runs`, `metrics`, `new-project`, `projects`, `doctor`) — voir
+`README.md` section Usage. Pas d'interface graphique ni de canal de contrôle à
+distance.
 
 ## Décisions clés
 

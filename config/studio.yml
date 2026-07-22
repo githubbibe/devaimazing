@@ -79,7 +79,7 @@ git:
   branch_prefix: studio/          # studio/<slug-feature>-<hash5>
   commit_per_task: true           # commit à la fin de chaque tâche d'agent, pas seulement en phase 10
 
-# Notifications (ntfy - solution transitoire avant PWA push natif)
+# Notifications (ntfy)
 notifications:
   provider: ntfy
   ntfy:

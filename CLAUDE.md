@@ -49,10 +49,10 @@ et identité Git avec Back/Front, voir `docs/agents.md`) à travers 10 phases po
 implémenter, tester, sécuriser et documenter une fonctionnalité dans un projet *cible* — pas
 dans ce dépôt. Ce dépôt est le studio/orchestrateur lui-même.
 
-**État actuel (mis à jour 2026-07-15) : le runtime est entièrement implémenté**, pas en phase
+**État actuel (mis à jour 2026-07-22) : le runtime est entièrement implémenté**, pas en phase
 stub-first. Tous les fichiers sous `runtime/studio/` (`graph.py`, `config.py`, `cli.py`,
 `routing.py`, tous les `nodes/*.py` et `tools/*.py`) contiennent une logique réelle — plus aucun
-corps de fonction `...`. `runtime/tests/` compte 256 tests, tous avec de vraies assertions (voir
+corps de fonction `...`. `runtime/tests/` compte 368 tests, tous avec de vraies assertions (voir
 `docs/roadmap.md` pour le détail chronologique des chantiers). Quand on te demande
 d'« implémenter » ou de corriger quelque chose ici, il s'agit d'une évolution du code existant —
 vérifier l'état réel du fichier avant de supposer qu'il s'agit d'un stub à remplir.

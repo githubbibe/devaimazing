@@ -38,9 +38,7 @@ L'objectif : produire du code de qualité production tout en **minimisant la con
 ## Architecture
 
 ```
-Toi (Telegram, mobile)
-    |
-OpenClaw (daemon Mac mini, passerelle Telegram)
+Toi (CLI, `devaimazing run <projet>`)
     |
 Runtime LangGraph (Python, orchestrateur)
     |
@@ -77,7 +75,7 @@ Runtime LangGraph (Python, orchestrateur)
 ## Workflow (10 phases)
 
 ```
-Phase 0   Reception          Toi → Telegram → OpenClaw → PM
+Phase 0   Reception          Toi → CLI (`devaimazing run <projet>`) → PM
 Phase 1   Cadrage            PM (Opus) : fiche racine, objectif, criteres, contraintes
                              → checkpoint validation humaine
 Phase 2   Audit amont        Architecte : contraintes non-fonctionnelles, carte fichiers,
@@ -98,7 +96,7 @@ Phase 9   Audit aval         Architecte : conformite non-fonctionnelle, factoris
                              documentation complete
                              → checkpoint validation humaine
 Phase 10  Cloture            Python pur : MAJ project-map, commit Git signe
-                             par agent, notification Telegram. 0 token.
+                             par agent, notification ntfy. 0 token.
 ```
 
 **Boucle de feedback erreur** : si l'agent N+1 detecte une erreur de l'agent N, il annote la fiche de l'agent N et le relance avec les annotations en contexte. L'agent N corrige, N+1 reprend.
@@ -116,9 +114,8 @@ Phase 10  Cloture            Python pur : MAJ project-map, commit Git signe
 | Agents producteurs | Back, Front, Test | Ollama + Qwen 2.5 7B Instruct |
 | Agents auditeurs | Architecte, Secu | Claude Sonnet (API) |
 | Persistance etat | Checkpointer PM | SQLite |
-| Metriques | Tokens, temps, RAM, latence | SQLite + Prometheus |
-| Observabilite | Dashboards | Grafana (datasource dev dedié) |
-| Interface utilisateur | Pilotage mobile | OpenClaw + Telegram |
+| Metriques | Tokens, temps, RAM (process), instrumentation Prometheus (non exposee via serveur HTTP) | SQLite + prometheus_client |
+| Interface utilisateur | Pilotage | CLI (`devaimazing run/resume/retry/...`) |
 | Gestionnaire deps | Python | uv |
 | Versioning | Commits par agent | Git (identite par agent) |
 
@@ -214,7 +211,7 @@ devaimazing/
 │   │   ├── routing.py           # Routage phases/agents, checkpoints, max_iterations
 │   │   ├── state.py             # Schema etat
 │   │   ├── config.py            # Chargement projet cible, modeles
-│   │   ├── metrics.py           # Collecte + export Prometheus
+│   │   ├── metrics.py           # Collecte metriques (SQLite + instrumentation Prometheus)
 │   │   ├── nodes/               # Un node par agent
 │   │   │   ├── pm.py
 │   │   │   ├── architect.py
@@ -227,7 +224,8 @@ devaimazing/
 │   │       ├── claude_code.py   # Wrapper subprocess Claude Code CLI
 │   │       ├── ollama.py        # Wrapper LLM local
 │   │       ├── git.py           # Ops Git (commits signes par agent)
-│   │       └── filesystem.py    # Lecture/ecriture fiches
+│   │       ├── filesystem.py    # Lecture/ecriture fiches
+│   │       └── pyenv.py         # Verif syntaxe/import (venv dedie par projet cible)
 │   └── tests/
 ├── config/
 │   ├── studio.yml               # Config globale (modeles, paths)
@@ -236,8 +234,6 @@ devaimazing/
 │       ├── demo-todo-app.yml    # idem, pour le projet de demo
 │       ├── todo-list.yml        # idem, premier run reel de bout en bout
 │       └── todo-list2.yml       # idem, run bout en bout post-fix troncature Ollama (num_ctx)
-├── interfaces/
-│   └── telegram-bridge/         # Configuration OpenClaw skills
 ├── infra/
 │   ├── podman/                  # Compose files Prometheus dev
 │   └── ollama/                  # Config modeles a pull
@@ -259,7 +255,6 @@ devaimazing/
   a l'emplacement du venv dans ce cas aussi, voir Setup ci-dessous)
 - [Ollama](https://ollama.ai/) installe et operationnel
 - [Claude Code CLI](https://claude.ai/code) installe et configure
-- [OpenClaw](https://openclaw.ai/) installe (optionnel, interface Telegram)
 - Git configure avec SSH
 
 ### Setup
@@ -321,7 +316,13 @@ devaimazing runs <project-name>
 devaimazing metrics <run-id>
 
 # Reprendre un run apres un checkpoint humain
-devaimazing resume <run-id>
+devaimazing resume <run-id> --project <project-name>
+
+# Reprendre un run apres un crash mi-noeud (distinct de resume)
+devaimazing retry <run-id> --project <project-name>
+
+# Rejouer un seul agent de facon isolee (debug/validation)
+devaimazing run-agent <project-name> <run-id> <agent> --phase <PHASE>
 
 # Initialiser un nouveau projet cible
 devaimazing new-project <project-name>
@@ -434,4 +435,4 @@ Voir le fichier [LICENSE](LICENSE) pour le texte complet.
 
 ---
 
-*devaimazing est un projet independant, non affilie a Anthropic, LangChain, Ollama ou OpenClaw.*
+*devaimazing est un projet independant, non affilie a Anthropic, LangChain ou Ollama.*

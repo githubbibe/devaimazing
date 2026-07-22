@@ -64,4 +64,4 @@ Opus est invoqué hors phase 1 uniquement si :
 - L'utilisateur demande explicitement une révision architecturale
 - Une contradiction majeure est détectée entre fiches
 
-La décision d'escalader est prise par l'utilisateur (notification Telegram), pas automatiquement.
+La décision d'escalader est prise par l'utilisateur (notification ntfy), pas automatiquement.

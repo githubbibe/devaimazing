@@ -1,7 +1,7 @@
 # ADR 0006 - Stratégie LLM Opus/Sonnet/Qwen
 
 **Date** : 2026-06  
-**Mis à jour** : 2026-07 (correction auditeurs)  
+**Mis à jour** : 2026-07 (correction auditeurs), 2026-07-22 (canal de notification ntfy)  
 **Statut** : Accepté
 
 ## Contexte
@@ -81,7 +81,7 @@ Les tokens sont comptés séparément :
 - Les runs sont plus coûteux en tokens API qu'une architecture tout-local : Opus au
   démarrage (phase 1), puis Sonnet à chaque run pour Architecte et Sécu (correction de
   2026-07). Choix délibéré : qualité d'audit > économie maximale de tokens.
-- Si Ollama OOM pendant un run, l'agent marque sa fiche en échec et notifie via Telegram.
+- Si Ollama OOM pendant un run, l'agent marque sa fiche en échec et notifie via ntfy.
 - Benchmarking des modèles Ollama à faire après stabilisation du pipeline LangGraph.
 
 ## Alternatives rejetées

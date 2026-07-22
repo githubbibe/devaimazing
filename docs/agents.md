@@ -20,12 +20,12 @@ Les agents auditeurs (Architecte, Sécu) tournent sur Sonnet, qui domine Qwen en
 **Périmètre** : `specs/` (lecture/écriture), `project-map.md` (écriture)  
 
 **Rôle** :
-- Reçoit les objectifs de l'utilisateur (via OpenClaw/Telegram)
+- Reçoit les objectifs de l'utilisateur (via la CLI, `devaimazing run <projet>`)
 - Produit la fiche racine (phase 1, Opus)
 - Définit la séquence des agents et écrit les fiches dépendantes (phase 3, Sonnet)
 - Maintient le `project-map.md` et l'historique des runs (phase 10, Python pur)
 - Gère les checkpoints de validation humaine
-- Notifie l'utilisateur via Telegram à la fin de chaque run
+- Notifie l'utilisateur via ntfy à la fin de chaque run
 
 **Skills** : `pm.md` (prompt système complet)
 
