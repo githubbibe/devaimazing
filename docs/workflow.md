@@ -67,6 +67,27 @@ Utilisateur : je n'y avais pas pensé.
 PM : je le note comme point en suspens, ça remonte à la validation humaine.
 ```
 
+**Checklist sécurité et gestion des secrets (mécanisme distinct de la checklist
+d'intention)** : toujours en phase 1, le PM anime une seconde checklist, sur les
+secrets du projet cible (mots de passe admin, certificats, clés API). Les deux
+checklists tournent au même moment, sous la responsabilité du même agent, mais ne
+fusionnent pas : la checklist d'intention porte sur le contrôle utilisateur par
+dimension produit, la checklist sécurité porte sur des contraintes légales et des
+exigences de sponsor — un type de question différent. Voir ADR 0012 pour le
+raisonnement complet, notamment pourquoi ce sujet est traité au cadrage et non en audit
+Sécu après coup (phase 8) : une fois le brief Architecte produit (phase 2), le niveau de
+sécurité est déjà implicitement contraint par les choix faits, il est trop tard pour le
+poser.
+
+Le PM force quatre questions : une contrainte légale s'applique-t-elle (RGPD, secteur
+réglementé, contractuelle) ; le sponsor a-t-il une exigence au-delà du minimum légal ;
+cette exigence implique-t-elle un niveau de gestion des secrets particulier (rotation,
+chiffrement au repos, séparation des environnements, audit d'accès) ; et à défaut de
+toute contrainte identifiée, le niveau par défaut de l'ADR 0012 s'applique (secrets
+jamais en clair dans le repo, gérés via un outil tiers de gestion de secrets). Le choix
+de l'outil tiers concret n'est pas tranché en phase 1 : c'est une décision de
+l'Architecte, projet par projet (voir phase 2 ci-dessous).
+
 **Contenu de la fiche racine, une fois validée** :
 - Nom de la feature (fourni par l'utilisateur)
 - Objectif reformulé et précisé
@@ -74,9 +95,11 @@ PM : je le note comme point en suspens, ça remonte à la validation humaine.
 - Périmètre (ce qui est inclus et ce qui est explicitement exclu)
 - Dimensions de contrôle identifiées (checklist d'intention) et pour chacune :
   explicite/implicite, qui décide
-- Contraintes non-fonctionnelles connues (performance, sécurité, compatibilité)
+- Contraintes non-fonctionnelles connues (performance, compatibilité), avec une
+  sous-section dédiée Sécurité et gestion des secrets (checklist sécurité, ADR 0012)
 - Risques identifiés
-- Questions en suspens (raffinement ET dette d'intention potentielle)
+- Questions en suspens (raffinement, dette d'intention potentielle ET contrainte de
+  sécurité non tranchée)
 
 **Le run ne démarre pas et aucune branche n'est créée tant que la fiche racine n'est
 pas validée.** Les échanges de cadrage n'ont pas de trace Git.
@@ -95,7 +118,9 @@ L'Architecte lit la fiche racine et le contexte projet pour produire le brief ar
 **Contenu du brief architectural** :
 - Liste exhaustive des fichiers à créer ou modifier (chemin + rôle + raison)
 - Doublons potentiels avec le code existant (comparaison avec `project-map.md`)
-- Contraintes non-fonctionnelles à imposer aux agents codants
+- Contraintes non-fonctionnelles à imposer aux agents codants, dont la contrainte de
+  sécurité et gestion des secrets posée en phase 1 (`card-root.md`) — reprise telle
+  quelle, jamais redéfinie par l'Architecte (voir ADR 0012)
 - Zones d'impact pour les tests de non-régression
 - Dépendances entre fichiers (ordre de création recommandé)
 
@@ -181,6 +206,9 @@ ci-dessous), et une validation humaine est requise avant de reprendre.
 
 Deux passes : le SAST déterministe tourne en premier (zéro token), puis l'agent Sécu
 audite ce que le SAST ne couvre pas (logique métier, cohérence globale, autorisation).
+Sur la gestion des secrets, l'agent Sécu audite la **conformité** à la contrainte posée
+en phase 1 et déclinée en phase 2 — il ne définit, ne choisit et ne propose aucune
+politique de sécurité lui-même (voir ADR 0012).
 
 ---
 

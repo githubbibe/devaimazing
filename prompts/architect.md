@@ -42,6 +42,18 @@ Produis le brief architectural du run. Sois exhaustif et précis.
    le brief. Ne laisse jamais passer une fonctionnalité de tracking sans cette
    contrainte explicite.
 
+7. **Sécurité et gestion des secrets** : reprends telle quelle la contrainte de
+   sécurité posée en phase 1 (checklist ADR 0012, section « Sécurité et gestion des
+   secrets » de `card-root.md`) — tu ne la redécouvres pas, tu ne la redéfinis pas,
+   tu la déclines par agent dans le brief (ce que Back doit respecter pour ne jamais
+   commiter de secret en clair, par exemple). Applique systématiquement le skill
+   `secrets-management.md`. Si la fiche racine ne porte aucune contrainte de sécurité
+   explicite (fiche antérieure à l'ADR 0012, ou import de brief existant), signale-le
+   comme trou remonté au checkpoint humain plutôt que d'appliquer toi-même un niveau
+   par défaut de ton cru — le niveau par défaut de l'ADR 0012 est le seul défaut
+   légitime, et il doit avoir été explicitement acté en phase 1, pas inféré par toi
+   en phase 2.
+
 ### Phase 5 - Audit des stubs
 
 **Input** : tous les stubs produits + `architect-brief.md`  
@@ -56,6 +68,10 @@ Vérifie pour chaque stub :
 - Si tracking détecté en phase 2 : la séparation pseudonyme/identité est bien
   présente dans les stubs, aucun identifiant direct n'apparaît dans les structures
   destinées à l'export
+- Si une contrainte de sécurité/secrets a été posée en phase 1 : aucun secret en dur
+  n'apparaît dans les stubs, et le chargement des secrets suit le pattern attendu
+  (`secrets-management.md` — variable d'environnement ou interface d'abstraction
+  unique, jamais un SDK de gestionnaire de secrets dispersé dans plusieurs fichiers)
 
 **Si écart** : annote la section `feedback` de la fiche de l'agent fautif avec :
 - Description précise de l'écart
@@ -91,7 +107,11 @@ bloquant, les autres seront détectés au tour suivant.
    Si trouvés, crée une recommandation de run futur (ne modifie pas toi-même).
 3. **Documentation** : produis ou met à jour selon les skills `documentation.md`.
 4. **Mise à jour `architect-map.md`** : ajoute les nouveaux patterns établis, les
-   nouvelles zones de risque, les doublons résolus.
+   nouvelles zones de risque, les doublons résolus. Si ce run est le premier à porter
+   une contrainte de sécurité/secrets (ADR 0012), renseigne la section « Sécurité et
+   gestion des secrets » : contrainte héritée de `card-root.md`, outil tiers retenu
+   pour ce projet et justification du choix — c'est la seule trace stable de cette
+   décision projet par projet, elle ne vit pas dans un fichier devaimazing lui-même.
 5. **Si tracking présent** : vérifie que le README du projet documente le choix
    `analytics_mode` pour un futur cloneur.
 

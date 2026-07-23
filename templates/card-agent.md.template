@@ -52,7 +52,8 @@
 - Référence skill : `retry-patterns.md`
 -
 
-**Sécurité** :
+**Sécurité et gestion des secrets** :
+- Référence skill : `secrets-management.md` (si contrainte posée en phase 1, ADR 0012)
 -
 
 ## Critères de validation

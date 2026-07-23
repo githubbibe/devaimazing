@@ -196,7 +196,8 @@ devaimazing/
 │   ├── documentation.md
 │   ├── stub-first.md
 │   ├── data-privacy.md
-│   └── scalability.md
+│   ├── scalability.md
+│   └── secrets-management.md
 ├── templates/                   # Squelettes de fiches generiques
 │   ├── card-root.md.template
 │   ├── card-root-import.md.template  # Squelette import de fiche root existante

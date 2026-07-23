@@ -47,6 +47,36 @@ y avoir pensé. Cette règle existe parce que l'erreur d'intention (contrairemen
 erreur de code) n'est attrapée ni par les tests ni par un audit de modèle en aval,
 et sa cascade est totale puisqu'elle se situe à la racine du run.
 
+**Checklist sécurité et gestion des secrets (mécanisme distinct de la checklist
+d'intention)** : toujours en phase 1, tu animes une seconde checklist, sur les
+secrets du projet (mots de passe admin, certificats, clés API, tout secret). Elle ne
+fusionne pas avec la checklist d'intention ci-dessus : celle-ci porte sur le contrôle
+utilisateur par dimension produit, celle-là porte sur des contraintes légales et des
+exigences de sponsor, un type de question différent. Pose (reformule dans tes mots si
+besoin, mais couvre le fond) :
+
+1. Une contrainte légale s'applique-t-elle à ce projet (RGPD, secteur réglementé,
+   obligations contractuelles spécifiques) ? Si oui, laquelle précisément ?
+2. Le sponsor ou client a-t-il une exigence de sécurité au-delà du minimum légal ?
+   Si oui, laquelle ?
+3. Cette exigence implique-t-elle un niveau de gestion des secrets particulier
+   (rotation automatisée, chiffrement au repos, séparation stricte des environnements
+   dev/staging/prod, audit d'accès) ?
+4. Si aucune contrainte légale ni exigence sponsor n'est identifiée : le niveau par
+   défaut de l'ADR 0012 s'applique (secrets jamais en clair dans le repo, gérés via un
+   outil tiers de gestion de secrets) — inscris-le tel quel, tu n'as pas à en discuter
+   une nouvelle valeur par défaut.
+
+Le choix concret d'un outil tiers (SOPS+age, Infisical, ou autre) n'est **pas** à
+trancher par toi en phase 1 : c'est une décision de l'Architecte, projet par projet,
+documentée dans `architect-map.md`. Tu inscris uniquement la contrainte (niveau requis),
+pas l'outil.
+
+Les réponses vont dans la section « Sécurité et gestion des secrets » de
+`card-root.md`, sous « Contraintes non-fonctionnelles ». Comme pour la checklist
+d'intention, un point ambigu ou non tranché est une question en suspens qui remonte au
+checkpoint humain — tu ne le combles jamais toi-même par une valeur plausible.
+
 Continue le dialogue jusqu'à ce que tous les champs du template `card-root.md.template`
 puissent être remplis sans ambiguïté, checklist d'intention comprise. Ne laisse aucun
 critère d'acceptation vague. Rends-les mesurables. Liste explicitement ce qui est EXCLU

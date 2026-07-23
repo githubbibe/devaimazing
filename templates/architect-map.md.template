@@ -31,8 +31,16 @@
 - Isolation des effets de bord entre features :
 - Dette assumée / Justification :
 
-### Sécurité
--
+### Sécurité et gestion des secrets
+
+<!-- Déclinaison projet de la contrainte posée en phase 1 (card-root.md, checklist
+     ADR 0012) et respectée par l'Architecte depuis la phase 2. Le choix de l'outil
+     est spécifique à ce projet, pas une décision devaimazing générale. -->
+
+- Contrainte héritée de la phase 1 (card-root.md) :
+- Outil de gestion des secrets retenu pour ce projet :
+- Justification du choix :
+- Dette assumée / Justification :
 
 ### Observabilité
 - Métriques à exposer :

@@ -32,9 +32,21 @@
 <!-- Contraintes connues à ce stade, l'Architecte en ajoutera en phase 2 -->
 
 - Performance :
-- Sécurité :
 - Compatibilité :
 - Autres :
+
+### Sécurité et gestion des secrets (checklist phase 1, ADR 0012)
+
+<!-- Réponses à la checklist sécurité animée par le PM en phase 1, distincte de la
+     checklist d'intention ci-dessus. Respectée telle quelle par l'Architecte en
+     phase 2, pas redécouverte ni redéfinie par lui. -->
+
+- Contrainte légale applicable (RGPD, secteur réglementé, contractuelle) :
+- Exigence sponsor/client au-delà du minimum légal :
+- Niveau de gestion des secrets requis (rotation, chiffrement au repos, séparation
+  des environnements, audit d'accès) :
+- Si aucune contrainte identifiée, niveau par défaut appliqué (ADR 0012) : secrets
+  jamais en clair dans le repo, gérés via un outil tiers de gestion de secrets
 
 ## Risques identifiés
 

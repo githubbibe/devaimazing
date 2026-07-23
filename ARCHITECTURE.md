@@ -84,6 +84,21 @@ industriels mais explicitement hors champ au stade POC/LVP : notées comme dette
 périmètre connue et différée, pas comme trou silencieux, à réintégrer au garde-fou
 quand le projet dépasse ce stade. Voir ADR 0010.
 
+**11. Checklist sécurité et gestion des secrets en phase 1, distincte de la checklist
+d'intention**
+Le PM anime en phase 1, en plus de la checklist d'intention (principe 8), une seconde
+checklist portant sur les secrets du projet cible (mots de passe admin, certificats,
+clés API) : contrainte légale applicable, exigence sponsor au-delà du minimum légal,
+niveau de gestion des secrets requis — ou, à défaut de contrainte identifiée, le niveau
+par défaut (secrets jamais en clair dans le repo, gérés via un outil tiers de gestion de
+secrets). Les deux checklists ne fusionnent pas : l'une porte sur le contrôle
+utilisateur par dimension produit, l'autre sur des contraintes légales/contractuelles
+externes. La réponse est inscrite dans `card-root.md` et **respectée** par l'Architecte
+en phase 2, jamais redécouverte ni redéfinie par lui. L'agent Sécu audite la conformité
+à cette contrainte en phase 8, il ne définit aucune politique de sécurité lui-même.
+Symétrique au principe 8 (l'erreur naît à la racine du run, pas en audit aval). Voir
+ADR 0012.
+
 ## Composants externes
 
 devaimazing core est strictement le runtime LangGraph + ses 6 nodes (8 rôles d'agent) +
@@ -134,3 +149,4 @@ Voir `docs/adr/` pour le détail de chaque décision :
 - [0009 - Pseudonymisation et traçabilité anti-fraude](docs/adr/0009-pseudonymisation-anti-fraude.md)
 - [0010 - Quatre piliers non-fonctionnels obligatoires et dette justifiée](docs/adr/0010-quatre-piliers-non-fonctionnels-dette-justifiee.md)
 - [0011 - Orchestrateur custom plutôt que Claude Code remote/subagents](docs/adr/0011-orchestrateur-custom-vs-claude-remote.md)
+- [0012 - Checklist sécurité et gestion des secrets en Phase 1](docs/adr/0012-checklist-secrets-phase1.md)
