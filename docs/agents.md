@@ -10,6 +10,12 @@ Chaque agent a un périmètre strict et un LLM assigné. Tous sont stateless sau
 lui-même produite. Les agents producteurs (Back, Front, Test) tournent sur Qwen 2.5 7B.
 Les agents auditeurs (Architecte, Sécu) tournent sur Sonnet, qui domine Qwen en capacité.
 
+Un neuvième rôle, **Devaimazing**, existe en dehors de ce pipeline de run : c'est une
+interface conversationnelle transverse (Telegram), pas un agent de production ou
+d'audit — il ne compte ni dans les 8 rôles ni dans les 6 nodes du graphe LangGraph
+(ADR 0005). **Décidé (ADR 0013), pas encore implémenté** : voir sa section dédiée
+en fin de document.
+
 ---
 
 ## PM - Project Manager
@@ -142,6 +148,41 @@ Les agents auditeurs (Architecte, Sécu) tournent sur Sonnet, qui domine Qwen en
 - Production du rapport de sécurité
 
 **Skills** : `security.md`, `error-handling.md`
+
+---
+
+## Devaimazing (rôle transverse, hors pipeline de run)
+
+**Statut** : décidé (ADR 0013), pas encore implémenté — aucun node LangGraph, aucun
+bot Telegram, aucun registre d'outils ne tourne à ce jour. Cette section documente la
+conception cible.
+
+**LLM** : Ollama, Qwen 2.5 7B Instruct (pas d'audit ni de cadrage haut niveau, le
+principe auditeur/producteur ci-dessus ne s'applique pas à lui)
+**Stateful** : non — pas de checkpointer dédié (contrairement au PM). Mémoire portée
+par `config/projects/*.yml` (`thread_id` du topic associé à chaque projet, une fois
+implémenté) et par sa présence dans tous les topics du groupe Telegram
+**Identité Git** : aucune — n'écrit jamais de code, ne commite jamais
+**Périmètre** : lecture transverse (`project-map.md`, `specs/`, README des projets) ;
+écriture limitée à `IMPROVEMENTS.md` et aux appels du registre d'outils partagé avec
+les commandes slash Telegram
+
+**Rôle** :
+- Interface conversationnelle principale du studio pour le pilotage à distance, via
+  un bot Telegram unique (un groupe, topics activés, un topic = un projet, plus un
+  topic « General » transverse)
+- Crée/ferme les topics-projet, oriente les demandes vers le bon topic, répond aux
+  questions factuelles sur l'état d'un projet sans solliciter le PM
+- Transfère au PM du projet concerné toute question nécessitant un jugement — le PM
+  répond alors dans le topic du projet, jamais dans General
+- Comprend des demandes d'action en langage naturel et déclenche les outils
+  correspondants, avec confirmation systématique pour toute action destructrice
+  (propriété de l'outil, pas du canal d'appel — voir ADR 0013, Décision 4)
+
+**Skills** : `prompts/devaimazing.md` (prompt système complet)
+
+Voir ADR 0013 pour le détail complet (modèle d'outils, architecture Telegram,
+raisons du choix Qwen).
 
 ---
 

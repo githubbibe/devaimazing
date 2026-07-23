@@ -115,6 +115,34 @@ Les notifications ne contiennent jamais de lien : le message est auto-suffisant
 (constat brut de l'erreur, sans suggestion d'action). Voir `docs/workflow.md` pour
 le détail des formats par point de sortie.
 
+**Statut vis-à-vis de l'interface Telegram (ADR 0013)** : `ntfy` reste le canal actif
+tant que l'interface Telegram n'est pas implémentée — elle couvrira nativement une
+partie du besoin de notification une fois construite (push natif du groupe/topics),
+mais `ntfy` n'est pas retiré pour autant : il deviendra un canal de secours
+documenté (si Telegram est indisponible) plutôt que d'être supprimé avant qu'un
+remplaçant fonctionnel existe.
+
+**Interface Telegram (décidée le 2026-07-23, ADR 0013 — pas encore implémentée)**
+
+Un groupe Telegram unique avec topics (un topic par projet piloté, plus un topic
+« General » transverse) porte l'interface de pilotage à distance. Un seul bot
+Telegram (un seul token), membre du groupe, actif dans tous les topics, ne répond
+qu'au `chat_id` de l'utilisateur du studio (mono-utilisateur). Droit admin minimal :
+`can_manage_topics` uniquement.
+
+Le rôle **Devaimazing** (Qwen local, voir `docs/agents.md`) porte l'interface
+conversationnelle : création/fermeture de topics-projet, orientation des demandes,
+réponses factuelles sans solliciter le PM, transfert au PM pour tout ce qui nécessite
+un jugement. Il tourne hors du graphe LangGraph à 6 nodes (ADR 0005) : ce n'est pas
+un 7ᵉ node du pipeline de run, mais un rôle transverse indépendant.
+
+**Modèle d'outils et confirmation universelle** : les commandes slash Telegram et les
+intentions comprises en langage naturel par Devaimazing appellent le même registre
+d'outils. Chaque outil déclare `destructif`, `requiert_confirmation`,
+`sauvegarde_avant` (commit + push automatique avant toute action destructrice) — la
+confirmation est une propriété de l'outil, jamais du canal d'appel. Voir ADR 0013
+pour le détail complet et la classification des outils identifiés.
+
 **Observabilité centralisée (Loki + Grafana Alloy)**
 
 L'observabilité repose sur Grafana Alloy (agent unifié, successeur de Promtail —
@@ -129,10 +157,20 @@ sans avoir besoin d'un environnement de test connecté à la production. Voir
 
 **Interface de pilotage**
 
-Le pilotage se fait exclusivement via la CLI (`devaimazing run`, `resume`, `retry`,
-`run-agent`, `runs`, `metrics`, `new-project`, `projects`, `doctor`) — voir
-`README.md` section Usage. Pas d'interface graphique ni de canal de contrôle à
-distance.
+Le pilotage réel aujourd'hui se fait exclusivement via la CLI (`devaimazing run`,
+`resume`, `retry`, `run-agent`, `runs`, `metrics`, `new-project`, `projects`,
+`doctor`) — voir `README.md` section Usage. Pas d'interface graphique ni de canal de
+contrôle à distance en exécution à ce jour.
+
+**Décidé, pas encore implémenté (ADR 0013)** : une interface Telegram redevient
+l'interface principale de pilotage à part entière, y compris à distance (AFK/mobile).
+Ce choix révise la suppression du 2026-07-22 (commit `bf8e0ab`) qui avait retiré la
+vision OpenClaw/Telegram/PWA comme non tranchée ; l'abandon de la PWA comme prochaine
+étape est confirmé, pour la même raison de fond (minimisation du code pour un niveau
+de fiabilité acceptable — Telegram fournit nativement ce qu'une PWA demanderait de
+coder à la main). Voir « Interface Telegram » ci-dessous et `docs/agents.md` pour le
+rôle Devaimazing qui la porte. Tant que cette interface n'est pas construite, la CLI
+reste le seul canal de pilotage réel.
 
 ## Décisions clés
 
@@ -150,3 +188,4 @@ Voir `docs/adr/` pour le détail de chaque décision :
 - [0010 - Quatre piliers non-fonctionnels obligatoires et dette justifiée](docs/adr/0010-quatre-piliers-non-fonctionnels-dette-justifiee.md)
 - [0011 - Orchestrateur custom plutôt que Claude Code remote/subagents](docs/adr/0011-orchestrateur-custom-vs-claude-remote.md)
 - [0012 - Checklist sécurité et gestion des secrets en Phase 1](docs/adr/0012-checklist-secrets-phase1.md)
+- [0013 - Interface Telegram native, agent Devaimazing, modèle d'outils à confirmation universelle](docs/adr/0013-interface-telegram-agent-devaimazing.md)

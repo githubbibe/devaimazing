@@ -19,6 +19,11 @@ leur tour selon la séquence définie par le PM en phase 3.
 L'utilisateur envoie un objectif en langage libre. Le PM engage le dialogue de cadrage
 (phase 1). Aucune branche Git n'est créée à ce stade.
 
+**Décidé, pas encore implémenté (ADR 0013)** : une interface Telegram (groupe à
+topics, rôle transverse Devaimazing) est prévue comme canal de réception
+supplémentaire, notamment pour le pilotage à distance. Aujourd'hui, l'unique canal de
+réception réel est la CLI (`devaimazing run <projet>`).
+
 ---
 
 ## Phase 1 - Cadrage (itératif + checklist d'intention)

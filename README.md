@@ -179,14 +179,17 @@ devaimazing/
 │       ├── 0008-checklist-intention-phase1.md
 │       ├── 0009-pseudonymisation-anti-fraude.md
 │       ├── 0010-quatre-piliers-non-fonctionnels-dette-justifiee.md
-│       └── 0011-orchestrateur-custom-vs-claude-remote.md
+│       ├── 0011-orchestrateur-custom-vs-claude-remote.md
+│       ├── 0012-checklist-secrets-phase1.md
+│       └── 0013-interface-telegram-agent-devaimazing.md
 ├── prompts/                     # Prompts systeme des agents
 │   ├── pm.md
 │   ├── architect.md
 │   ├── backend.md
 │   ├── frontend.md
 │   ├── test.md
-│   └── security.md
+│   ├── security.md
+│   └── devaimazing.md           # Role transverse decide (ADR 0013), pas encore implemente
 ├── skills/                      # Skills partages (references par prompts)
 │   ├── error-handling.md
 │   ├── logging-conventions.md
