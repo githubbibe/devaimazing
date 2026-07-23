@@ -181,7 +181,8 @@ devaimazing/
 │       ├── 0010-quatre-piliers-non-fonctionnels-dette-justifiee.md
 │       ├── 0011-orchestrateur-custom-vs-claude-remote.md
 │       ├── 0012-checklist-secrets-phase1.md
-│       └── 0013-interface-telegram-agent-devaimazing.md
+│       ├── 0013-interface-telegram-agent-devaimazing.md
+│       └── 0014-whisper-transcription-vocale.md
 ├── prompts/                     # Prompts systeme des agents
 │   ├── pm.md
 │   ├── architect.md

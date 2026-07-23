@@ -181,8 +181,13 @@ les commandes slash Telegram
 
 **Skills** : `prompts/devaimazing.md` (prompt système complet)
 
+**Messages vocaux (décidé, ADR 0014 — pas encore implémenté)** : un message vocal
+Telegram est transcrit par Whisper (ASR local, pur prétraitement) avant d'atteindre
+Devaimazing, qui traite le texte résultant exactement comme un message tapé — aucune
+branche de logique dédiée à l'origine du message.
+
 Voir ADR 0013 pour le détail complet (modèle d'outils, architecture Telegram,
-raisons du choix Qwen).
+raisons du choix Qwen), ADR 0014 pour la transcription vocale.
 
 ---
 

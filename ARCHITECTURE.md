@@ -143,6 +143,13 @@ d'outils. Chaque outil déclare `destructif`, `requiert_confirmation`,
 confirmation est une propriété de l'outil, jamais du canal d'appel. Voir ADR 0013
 pour le détail complet et la classification des outils identifiés.
 
+**Messages vocaux (décidé, ADR 0014 — pas encore implémenté)** : un message vocal
+Telegram est transcrit par Whisper (ASR local, prétraitement pur, aucune
+compréhension) avant d'atteindre Devaimazing, qui reçoit alors un texte traité de
+façon strictement identique à un message tapé. Whisper tourne en local (Ollama si
+suffisamment mature à l'implémentation, sinon `whisper.cpp`), jamais via l'API
+OpenAI payante.
+
 **Observabilité centralisée (Loki + Grafana Alloy)**
 
 L'observabilité repose sur Grafana Alloy (agent unifié, successeur de Promtail —
@@ -189,3 +196,4 @@ Voir `docs/adr/` pour le détail de chaque décision :
 - [0011 - Orchestrateur custom plutôt que Claude Code remote/subagents](docs/adr/0011-orchestrateur-custom-vs-claude-remote.md)
 - [0012 - Checklist sécurité et gestion des secrets en Phase 1](docs/adr/0012-checklist-secrets-phase1.md)
 - [0013 - Interface Telegram native, agent Devaimazing, modèle d'outils à confirmation universelle](docs/adr/0013-interface-telegram-agent-devaimazing.md)
+- [0014 - Transcription vocale (Whisper) en amont de l'agent Devaimazing](docs/adr/0014-whisper-transcription-vocale.md)
