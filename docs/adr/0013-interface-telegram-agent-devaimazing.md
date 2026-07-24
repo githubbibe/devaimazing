@@ -114,14 +114,17 @@ ne répond jamais lui-même à une question de jugement (transfert systématique
 n'exécute jamais d'action destructrice sans passer par le mécanisme de confirmation
 (Décision 4).
 
-**LLM retenu : Qwen local**, comme les agents producteurs (Back/Front/Test), pas
-Sonnet ni Opus. Son rôle est de l'orientation et de la lecture factuelle, pas de
-l'audit ni du cadrage de haut niveau : le principe « l'auditeur doit dominer le
-producteur » (principe 4, `ARCHITECTURE.md`) ne s'applique pas à lui, puisqu'il
-n'audite ni ne produit de code. L'objectif de minimisation des tokens payants
-s'applique pleinement : Devaimazing fait lui-même tout ce qu'il peut faire sans
-monter en compétence coûteuse, et ne sollicite le PM (Sonnet ou Opus selon la phase)
-que lorsque c'est réellement nécessaire.
+**LLM retenu : Gemma local** (Ollama), pas Qwen, ni Sonnet, ni Opus. Contrairement
+aux agents producteurs (Back/Front/Test, Qwen 2.5 7B, orienté code), Devaimazing n'écrit
+et n'audite jamais de code : son cœur de métier est la conversation naturelle
+(compréhension d'intention, gestion de l'ambiguïté, ton). Un modèle généraliste comme
+Gemma est jugé mieux adapté à cet usage qu'un modèle orienté code comme Qwen, dont la
+force est ailleurs. Le principe « l'auditeur doit dominer le producteur » (principe 4,
+`ARCHITECTURE.md`) ne s'applique pas à Devaimazing, puisqu'il n'audite ni ne produit
+de code. L'objectif de minimisation des tokens payants s'applique pleinement :
+Devaimazing fait lui-même tout ce qu'il peut faire sans monter en compétence coûteuse,
+et ne sollicite le PM (Sonnet ou Opus selon la phase) que lorsque c'est réellement
+nécessaire.
 
 **Mémoire** : pas de checkpointer dédié séparé (contrairement au PM). Tient en deux
 choses : (1) les fichiers de config existants `config/projects/*.yml`, qui porteront
@@ -182,7 +185,7 @@ outils s'avèrent nécessaires) :
 
 **Implémentation attendue** : un registre d'outils unique, consommé de façon
 identique que l'appel vienne du parsing des commandes slash Telegram ou du
-function-calling de l'agent Devaimazing (Qwen). Pas de duplication de logique entre
+function-calling de l'agent Devaimazing (Gemma). Pas de duplication de logique entre
 les deux voies d'entrée. Ce registre n'existe pas encore dans
 `runtime/studio/tools/` au moment de cet ADR — les fichiers actuels de ce dossier
 (`claude_code.py`, `filesystem.py`, `git.py`, `ollama.py`, `pyenv.py`, `tracer.py`)
@@ -249,3 +252,7 @@ métadonnées de confirmation.
   d'une confirmation propriété de l'outil, uniforme quel que soit le canal (voir
   Décision 4) — la sécurité d'une action ne doit pas dépendre de la façon dont
   l'utilisateur l'a formulée.
+- **Qwen comme LLM de Devaimazing** (cohérence avec les agents producteurs
+  Back/Front/Test) : rejeté au profit de Gemma, plus généraliste — le cœur de métier
+  de Devaimazing est la conversation naturelle, pas la production de code, terrain
+  où Qwen n'a pas d'avantage particulier (voir Décision 3).

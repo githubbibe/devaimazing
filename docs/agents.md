@@ -157,8 +157,10 @@ en fin de document.
 bot Telegram, aucun registre d'outils ne tourne à ce jour. Cette section documente la
 conception cible.
 
-**LLM** : Ollama, Qwen 2.5 7B Instruct (pas d'audit ni de cadrage haut niveau, le
-principe auditeur/producteur ci-dessus ne s'applique pas à lui)
+**LLM** : Ollama, Gemma (généraliste, préféré à Qwen pour ce rôle car son cœur de
+métier est la conversation naturelle, pas la production de code — pas d'audit ni de
+cadrage haut niveau non plus, le principe auditeur/producteur ci-dessus ne s'applique
+pas à lui)
 **Stateful** : non — pas de checkpointer dédié (contrairement au PM). Mémoire portée
 par `config/projects/*.yml` (`thread_id` du topic associé à chaque projet, une fois
 implémenté) et par sa présence dans tous les topics du groupe Telegram
@@ -187,7 +189,7 @@ Devaimazing, qui traite le texte résultant exactement comme un message tapé �
 branche de logique dédiée à l'origine du message.
 
 Voir ADR 0013 pour le détail complet (modèle d'outils, architecture Telegram,
-raisons du choix Qwen), ADR 0014 pour la transcription vocale.
+raisons du choix Gemma), ADR 0014 pour la transcription vocale.
 
 ---
 

@@ -130,7 +130,7 @@ Telegram (un seul token), membre du groupe, actif dans tous les topics, ne répo
 qu'au `chat_id` de l'utilisateur du studio (mono-utilisateur). Droit admin minimal :
 `can_manage_topics` uniquement.
 
-Le rôle **Devaimazing** (Qwen local, voir `docs/agents.md`) porte l'interface
+Le rôle **Devaimazing** (Gemma local, voir `docs/agents.md`) porte l'interface
 conversationnelle : création/fermeture de topics-projet, orientation des demandes,
 réponses factuelles sans solliciter le PM, transfert au PM pour tout ce qui nécessite
 un jugement. Il tourne hors du graphe LangGraph à 6 nodes (ADR 0005) : ce n'est pas
