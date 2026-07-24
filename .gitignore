@@ -90,3 +90,6 @@ coverage.xml
 # runtime/studio/config.py, StudioConfig charge ce fichier s'il existe,
 # jamais commité, dépôt public)
 config/local.yml
+
+# Fichiers personnels de suivi (prompts déjà traités, journal, etc.)
+ignore/
