@@ -13,6 +13,7 @@ Usage:
                                          frère, repo Git, config/projects/<name>.yml)
     devaimazing projects                Liste les projets configurés
     devaimazing doctor                  Vérifie l'environnement
+    devaimazing telegram-bot            Démarre le bot Telegram (ADR 0013, tranche S2)
 """
 
 import asyncio
@@ -36,6 +37,7 @@ from studio.nodes import architect, backend, closer, frontend, pm, security
 from studio.nodes import test as test_node
 from studio.routing import AGENT_TO_NODE
 from studio.state import Phase, RunStatus, StudioState
+from studio.telegram.bot import run_bot
 from studio.tools.git import (
     checkout_branch,
     create_github_remote,
@@ -914,3 +916,21 @@ async def _doctor_async(project: Optional[str]) -> None:
     for name, ok, detail in checks:
         symbol = "[green]OK[/green]" if ok else "[red]KO[/red]"
         console.print(f"{symbol} {name} — {detail}")
+
+
+@main.command(name="telegram-bot")
+def telegram_bot():
+    """
+    Démarre le bot Telegram (ADR 0013, tranche S2) — process long-running,
+    bloque jusqu'à interruption (Ctrl+C).
+    """
+    asyncio.run(_telegram_bot_async())
+
+
+async def _telegram_bot_async() -> None:
+    config_dir = _resolve_config_dir()
+    try:
+        console.print("[dim]Bot Telegram démarré — Ctrl+C pour arrêter.[/dim]")
+        await run_bot(config_dir)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")

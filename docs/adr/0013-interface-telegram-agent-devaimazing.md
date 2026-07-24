@@ -1,10 +1,11 @@
 # ADR 0013 - Interface Telegram native, agent Devaimazing, modèle d'outils à confirmation universelle
 
 **Date** : 2026-07
-**Statut** : Accepté — implémentation commencée le 2026-07-24 (tranche S1 :
-registre d'outils + lecture seule, voir `docs/roadmap.md`). Bot Telegram,
-function-calling Gemma et confirmation rendue à un canal restent à faire
-(tranches S2-S5, voir « Conséquences »).
+**Statut** : Accepté — implémentation commencée le 2026-07-24 (tranches S1 :
+registre d'outils + lecture seule, et S2 : bot Telegram fonctionnel en
+lecture seule, voir `docs/roadmap.md`). Confirmation rendue à un canal,
+actions d'écriture (créer/archiver un projet) et function-calling Gemma
+restent à faire (tranches S3-S5, voir « Conséquences »).
 
 ## Contexte et retournement assumé
 
@@ -220,20 +221,25 @@ métadonnées de confirmation.
   (fichiers réels sur disque). Aucune section aspirational (diagramme d'architecture,
   tableau stack technique) n'est modifiée : ces sections décrivent le système
   réellement en exécution aujourd'hui, pas les décisions non encore implémentées.
-- **Non fait par cet ADR lui-même — fait séparément le 2026-07-24, tranche S1
-  (voir `docs/roadmap.md`)** : le registre d'outils avec métadonnées de
-  confirmation (`runtime/studio/tools/registry.py`), les 3 handlers de lecture
-  seule (`lire_statut`, `lire_progression`, `lister_projets`, dans
+- **Non fait par cet ADR lui-même — fait séparément le 2026-07-24, tranches
+  S1 et S2 (voir `docs/roadmap.md`)** : le registre d'outils avec métadonnées
+  de confirmation (`runtime/studio/tools/registry.py`), les 3 handlers de
+  lecture seule (`lire_statut`, `lire_progression`, `lister_projets`, dans
   `runtime/studio/tools/queries.py`), l'écriture ciblée de `thread_id` dans
-  `config/projects/<nom>.yml` (`runtime/studio/tools/project_config.py`).
-  **Reste non fait, tranches S2-S5** : le bot Telegram lui-même, tout appel
-  réseau Telegram, le function-calling Gemma, la confirmation *rendue* à un
-  canal (le court-circuit existe dans `execute_tool`, rien ne l'affiche
-  encore), les handlers de `creer_projet`/`archive_projet`/
-  `reject_checkpoint`/`stop_run`. Ce découplage en tranches indépendantes,
-  chacune testée avant la suivante, évite de refaire l'erreur corrigée le
-  2026-07-22 (documentation décrivant un système qui n'existe pas comme s'il
-  tournait) tout en permettant une implémentation incrémentale réelle.
+  `config/projects/<nom>.yml` (`runtime/studio/tools/project_config.py`),
+  le bot Telegram lui-même en lecture seule (`runtime/studio/telegram/`,
+  commande `devaimazing telegram-bot`, dépendance `aiogram`) — allowlist
+  `chat_id`, résolution topic → projet, dispatch des commandes slash
+  `/status`, `/progression`, `/projects` vers le registre d'outils.
+  **Reste non fait, tranches S3-S5** : le function-calling Gemma (agent
+  Devaimazing lui-même, compréhension du langage naturel), la confirmation
+  *rendue* à un canal (le court-circuit existe dans `execute_tool`, rien ne
+  l'affiche encore côté Telegram), les handlers de
+  `creer_projet`/`archive_projet`/`reject_checkpoint`/`stop_run`. Ce
+  découplage en tranches indépendantes, chacune testée avant la suivante,
+  évite de refaire l'erreur corrigée le 2026-07-22 (documentation décrivant
+  un système qui n'existe pas comme s'il tournait) tout en permettant une
+  implémentation incrémentale réelle.
 
 ## Points laissés ouverts, tranchés ici par défaut faute d'être structurants
 

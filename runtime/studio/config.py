@@ -12,6 +12,56 @@ from typing import Any, Optional
 import yaml
 
 
+def default_config_dir() -> Path:
+    """Répertoire config/ par défaut (racine du dépôt devaimazing)."""
+    return Path(__file__).resolve().parents[2] / "config"
+
+
+def _read_yaml_mapping(path: Path, *, required: bool, label: str) -> dict:
+    """Charge un fichier YAML en dict, valide que c'est bien un mapping."""
+    if not path.is_file():
+        if required:
+            raise FileNotFoundError(f"{label} introuvable : {path}")
+        return {}
+    with path.open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{label} invalide (mapping attendu) : {path}")
+    return data
+
+
+def load_global_telegram_config(config_dir: Optional[Path] = None) -> dict:
+    """
+    Section telegram: de studio.yml, avec override local.yml appliqué.
+
+    Distinct de StudioConfig : le bot Telegram (ADR 0013) sert plusieurs
+    projets à la fois (un topic = un projet, voir Décision 2), il n'a donc
+    pas de project_name unique à charger au démarrage — seulement la
+    configuration transverse (token, chat_id autorisé). N'expose que la
+    section telegram:, pas toute la config globale (pas de besoin identifié
+    au-delà pour l'instant).
+
+    Args:
+        config_dir: Répertoire de config (défaut : répertoire du package devaimazing).
+
+    Returns:
+        Contenu de la clé telegram: (dict vide si absente).
+
+    Raises:
+        FileNotFoundError: Si studio.yml est introuvable.
+        ValueError: Si studio.yml ou local.yml n'est pas un mapping YAML valide.
+    """
+    resolved_config_dir = Path(config_dir) if config_dir is not None else default_config_dir()
+    global_config = _read_yaml_mapping(
+        resolved_config_dir / "studio.yml", required=True, label="Configuration globale"
+    )
+    local_config = _read_yaml_mapping(
+        resolved_config_dir / "local.yml", required=False, label="Configuration locale"
+    )
+    merged = _deep_merge(global_config, local_config)
+    return dict(merged.get("telegram", {}))
+
+
 def _deep_merge(base: dict, override: dict) -> dict:
     """
     Fusionne récursivement `override` dans une copie de `base`.
@@ -50,10 +100,7 @@ class StudioConfig:
             ValueError: Si le fichier projet ou local.yml est invalide.
         """
         self._project_name = project_name
-        self._config_dir = (
-            Path(config_dir) if config_dir is not None
-            else Path(__file__).resolve().parents[2] / "config"
-        )
+        self._config_dir = Path(config_dir) if config_dir is not None else default_config_dir()
 
         studio_yml_path = self._config_dir / "studio.yml"
         if not studio_yml_path.is_file():

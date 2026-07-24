@@ -289,6 +289,13 @@ async def execute_tool(
     if spec is None:
         return ToolResult(status="error", summary=f"Outil inconnu : {name!r}")
 
+    missing = [key for key in spec.parameters.get("required", []) if key not in args]
+    if missing:
+        return ToolResult(
+            status="error",
+            summary=f"Argument(s) manquant(s) pour {spec.name!r} : {', '.join(missing)}",
+        )
+
     if spec.requiert_confirmation and not confirmed:
         return ToolResult(
             status="needs_confirmation",

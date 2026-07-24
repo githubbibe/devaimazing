@@ -102,6 +102,13 @@ async def test_execute_tool_not_implemented_returns_error():
     assert result.status == "error"
 
 
+async def test_execute_tool_missing_required_arg_returns_error():
+    result = await execute_tool("lire_statut", {}, config=SimpleNamespace(), confirmed=False)
+
+    assert result.status == "error"
+    assert "run_id" in result.summary
+
+
 async def test_execute_tool_unknown_tool_returns_error():
     result = await execute_tool("inexistant", {}, config=SimpleNamespace(), confirmed=False)
 

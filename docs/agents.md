@@ -153,12 +153,16 @@ en fin de document.
 
 ## Devaimazing (rôle transverse, hors pipeline de run)
 
-**Statut** : décidé (ADR 0013), implémentation commencée le 2026-07-24 (tranche
-S1 : `runtime/studio/tools/registry.py`, registre d'outils avec 3 handlers de
-lecture seule réels). Aucun node LangGraph, aucun bot Telegram, aucun
-function-calling Gemma ne tournent encore à ce jour (voir `docs/roadmap.md`
-pour le détail des tranches restantes). Cette section documente la conception
-cible.
+**Statut** : décidé (ADR 0013), implémentation commencée le 2026-07-24 —
+tranche S1 (`runtime/studio/tools/registry.py`, registre d'outils avec 3
+handlers de lecture seule réels) et tranche S2 (`runtime/studio/telegram/`,
+bot Telegram fonctionnel en lecture seule via `devaimazing telegram-bot` :
+`/status`, `/progression`, `/projects`). Aucun function-calling Gemma, aucune
+confirmation rendue à un canal, aucune action d'écriture (créer/archiver un
+projet) ne tournent encore à ce jour — Devaimazing lui-même (compréhension du
+langage naturel) n'existe pas encore, seul le routage des commandes slash
+existe (voir `docs/roadmap.md` pour le détail des tranches restantes). Cette
+section documente la conception cible.
 
 **LLM** : Ollama, Gemma (généraliste, préféré à Qwen pour ce rôle car son cœur de
 métier est la conversation naturelle, pas la production de code — pas d'audit ni de

@@ -236,6 +236,10 @@ devaimazing/
 │   │       ├── registry.py      # Registre d'outils a confirmation (ADR 0013, S1)
 │   │       ├── queries.py       # Lectures run/projet, reutilisees par CLI et registre
 │   │       └── project_config.py # Ecriture ciblee config/projects/*.yml (thread_id)
+│   ├── telegram/                 # Bot Telegram (ADR 0013, S2 - lecture seule)
+│   │   ├── bot.py                # Construction Bot/Dispatcher aiogram, polling
+│   │   ├── handlers.py           # Dispatch slash commands -> registre d'outils
+│   │   └── topics.py             # Resolution topic Telegram <-> projet
 │   └── tests/
 ├── config/
 │   ├── studio.yml               # Config globale (modeles, paths)
@@ -339,6 +343,10 @@ devaimazing new-project <project-name>
 
 # Lister les projets configures
 devaimazing projects
+
+# Demarrer le bot Telegram (ADR 0013, tranche S2 : lecture seule uniquement,
+# necessite telegram.token/allowed_chat_id reels dans config/local.yml)
+devaimazing telegram-bot
 ```
 
 ---

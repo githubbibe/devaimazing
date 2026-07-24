@@ -6,16 +6,84 @@
 
 Le runtime devaimazing est **fonctionnellement complet et testé de bout en bout** :
 `state.py`, `config.py`, `tools/*.py` (filesystem, git, ollama, claude_code, tracer,
-registry, queries, project_config), `graph.py`, les 7 `nodes/*.py` (pm, architect,
-backend, frontend, test, security, closer), `metrics.py` et `cli.py` (`run`, `resume`,
-`retry`, `run-agent`, `runs`, `metrics`, `new-project`, `projects`, `doctor`) sont
-tous implémentés — voir `CLAUDE.md` pour la convention (stub-first reste appliquée
-par le pipeline aux projets *cibles*, pas à ce dépôt). **396/396 tests verts** sur
-`runtime/tests/` (2026-07-24) — `test_new_project_target_exists_not_git_repo_prints_error`,
-précédemment signalé en échec à cause du retour à la ligne Rich dépendant de la
-largeur du terminal, passe dans cet environnement ; sa sensibilité à la largeur du
-terminal n'est pas corrigée dans le code, donc un échec ponctuel sur une autre
-machine/largeur reste possible.
+registry, queries, project_config), `telegram/*.py` (bot, handlers, topics — lecture
+seule, ADR 0013 tranche S2), `graph.py`, les 7 `nodes/*.py` (pm, architect, backend,
+frontend, test, security, closer), `metrics.py` et `cli.py` (`run`, `resume`,
+`retry`, `run-agent`, `runs`, `metrics`, `new-project`, `projects`, `doctor`,
+`telegram-bot`) sont tous implémentés — voir `CLAUDE.md` pour la convention
+(stub-first reste appliquée par le pipeline aux projets *cibles*, pas à ce dépôt).
+**415/415 tests verts** sur `runtime/tests/` (2026-07-24) —
+`test_new_project_target_exists_not_git_repo_prints_error`, précédemment signalé
+en échec à cause du retour à la ligne Rich dépendant de la largeur du terminal,
+passe dans cet environnement ; sa sensibilité à la largeur du terminal n'est pas
+corrigée dans le code, donc un échec ponctuel sur une autre machine/largeur reste
+possible.
+
+**2026-07-24 — ADR 0013, tranche S2 : bot Telegram fonctionnel en lecture
+seule.** Suite directe de la tranche S1 ci-dessous, même chantier de session.
+Ajout de la dépendance `aiogram>=3.10,<4` (`uv add`, `uv.lock` créé — première
+dépendance de ce type dans le dépôt).
+
+Livré :
+- `runtime/studio/telegram/bot.py` : `build_bot_and_dispatcher`/`run_bot` —
+  premier process long-running du dépôt (voir entrée S1 ci-dessous et
+  « Reste à faire »). Pas de gestion de signal ajoutée : `aiogram.Dispatcher.
+  start_polling` gère SIGINT/SIGTERM nativement (`handle_signals=True` par
+  défaut), vérifié dans le code source installé avant d'écrire quoi que ce
+  soit — évite de dupliquer une gestion de signal maison inutile.
+- `runtime/studio/telegram/topics.py` : `load_topic_map`/`resolve_project` —
+  scanne `config/projects/*.yml` pour `telegram.thread_id` (écrit par
+  `set_project_thread_id`, S1) et résout quel projet un `message_thread_id`
+  Telegram concerne.
+- `runtime/studio/telegram/handlers.py` : `handle_slash_command` (logique de
+  dispatch pure, testable sans construire de vrais objets `Message` aiogram)
+  + `build_router` (câblage aiogram mince autour). Allowlist `chat_id`,
+  résolution topic → projet, appel du registre d'outils (S1) — `/status`,
+  `/progression` (topic-projet, nécessitent le topic déjà associé au
+  projet), `/projects` (topic General, scope global).
+- `runtime/studio/cli.py` : commande `telegram-bot`.
+- `runtime/studio/config.py` : `load_global_telegram_config` (section
+  `telegram:` de `studio.yml` + `local.yml`, sans charger de projet — le bot
+  sert plusieurs projets à la fois, pas de `project_name` unique au
+  démarrage) et `default_config_dir` (factorisée, réutilisée aussi par
+  `StudioConfig.__init__`, refactor à comportement inchangé).
+- `runtime/studio/tools/registry.py` : `execute_tool` valide désormais les
+  arguments requis (`spec.parameters["required"]`) avant d'appeler le
+  handler — trouvé en concevant le dispatch slash : `/status` sans `run_id`
+  aurait fait planter le handler avec un `TypeError` brut plutôt qu'un
+  message clair.
+
+**Limitation assumée, non résolue** : une commande slash dans un
+topic-projet doit encore préciser explicitement le `run_id` (ex. `/status
+run-042`) — l'ADR 0013 (Décision 4) prévoit que le topic seul détermine le
+run sans ambiguïté, ce qui suppose une résolution « run actif/dernier run de
+ce projet » non implémentée (nécessiterait de lire `project-map.md` ou
+`state.db`, pas fait dans cette tranche, pas dans le plan initial de S2 non
+plus). Corrigible séparément sans redécouper les tranches suivantes.
+
+**Non testé en conditions réelles** : aucun vrai groupe/bot Telegram
+disponible au moment d'écrire cette entrée — tous les tests automatisés
+mockent `aiogram` (comme `ollama.AsyncClient` dans `test_ollama.py`) ou
+appellent `handle_slash_command` directement avec des types simples. La
+construction de `Bot()` ne fait pas d'appel réseau (vérifié), donc les tests
+de validation de config passent sans réseau, mais le polling réel
+(`dispatcher.start_polling`) n'a jamais tourné contre l'API Telegram.
+
+**Bug évité avant tout usage réel** : `Bot()` avait initialement
+`parse_mode="HTML"` (`DefaultBotProperties`), alors que les réponses
+(`handlers.py::_format_result`) sont du texte brut non échappé —
+`intervention_reason` d'un run peut contenir `<`/`>`/`&`, ce qui aurait fait
+échouer l'envoi Telegram (« can't parse entities ») dès le premier
+caractère spécial. Aucun test mocké ne pouvait le détecter (aiogram mocké
+ne valide pas la syntaxe HTML réelle) — trouvé en relecture avant push,
+corrigé (`Bot()` sans parse_mode, texte brut par défaut).
+
+**`/help` non câblé** : listé dans l'ADR 0013 (Décision 4) et prévu dans le
+plan initial de S2, mais `parse_slash_command` ne le reconnaît pas encore
+(`SLASH_COMMAND_TO_TOOL` ne contient que les commandes des 3 outils avec
+handler réel) — un `/help` tapé est aujourd'hui silencieusement ignoré.
+Décision assumée de le reporter à S3 plutôt que d'écrire un handler
+statique isolé du reste du registre.
 
 **2026-07-24 — ADR 0013 (Telegram + Devaimazing), tranche S1 : registre
 d'outils + lecture seule, sans bot ni Gemma.** L'ADR 0013 (interface Telegram,
@@ -58,11 +126,12 @@ Livré (S1, zéro dépendance réseau externe, zéro appel Telegram/Ollama) :
   valeurs réelles attendues dans `config/local.yml`, même traitement que
   `notifications.ntfy.topic`).
 
-**Gardé hors scope explicitement** (voir ADR 0013, tranches S2-S5) : aucun bot
-Telegram, aucune dépendance `aiogram`, aucun function-calling Gemma réel,
-aucune confirmation *rendue* à un canal (le court-circuit existe dans
-`execute_tool`, rien ne l'affiche encore). `reject_checkpoint`/`stop_run`
-demandent en plus une décision de conception séparée avant d'être câblés :
+**Gardé hors scope explicitement pour cette tranche S1** (le bot Telegram
+lui-même arrive dans la tranche S2, voir entrée suivante, même chantier de
+session) : aucun function-calling Gemma réel, aucune confirmation *rendue* à
+un canal (le court-circuit existe dans `execute_tool`, rien ne l'affiche
+encore). `reject_checkpoint`/`stop_run` demandent en plus une décision de
+conception séparée avant d'être câblés :
 aucun mécanisme d'annulation de run ni de rejet de checkpoint n'existe dans le
 runtime actuel (`resume` n'implémente que l'acceptation) — pas un simple
 handler à écrire, un nouveau comportement de state machine à concevoir.
@@ -468,20 +537,20 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    supposant `claude` installé sur l'hôte), accès réseau à Ollama
    (`localhost:11434` en dur), montage du repo projet cible en volume,
    persistance de `state.db`/`metrics.db`.
-6. **ADR 0013, tranches S2-S5** (voir entrée 2026-07-24 ci-dessus, plan complet
-   dans l'historique de session) : S2 bot Telegram (`aiogram`, process
-   long-running — premier de ce type dans le dépôt, nouveau pattern de gestion
-   de signal SIGINT/SIGTERM à écrire) + slash commands en lecture seule ; S3
-   `creer_projet`/`archive_projet` avec confirmation rendue (inline keyboard) ;
-   S4 agent Devaimazing (function-calling Gemma via `ollama.AsyncClient.chat
-   (tools=...)`, à valider empiriquement avant d'écrire le code de
-   production — fallback structured-output déjà identifié si le
-   function-calling Gemma s'avère peu fiable, voir issue ollama/ollama#7051
-   citée dans `tools/ollama.py`) ; S5 transfert General → topic-projet +
-   `IMPROVEMENTS.md`. `stop_run`/`reject_checkpoint` (déjà déclarés dans
-   `TOOL_REGISTRY` avec leurs métadonnées, handler `NotImplementedError`)
-   demandent une décision de conception séparée avant d'être câblés (voir
-   ci-dessus).
+6. **ADR 0013, tranches S3-S5** (S1 et S2 livrées le 2026-07-24, voir entrées
+   ci-dessus) : S3 `creer_projet`/`archive_projet` avec confirmation rendue
+   (inline keyboard aiogram) ; S4 agent Devaimazing (function-calling Gemma
+   via `ollama.AsyncClient.chat(tools=...)`, à valider empiriquement avec le
+   tag Gemma réellement retenu avant d'écrire le code de production —
+   fallback structured-output déjà identifié si le function-calling Gemma
+   s'avère peu fiable, voir issue ollama/ollama#7051 citée dans
+   `tools/ollama.py`) ; S5 transfert General → topic-projet + `IMPROVEMENTS.md`.
+   `stop_run`/`reject_checkpoint` (déjà déclarés dans `TOOL_REGISTRY` avec
+   leurs métadonnées, handler `NotImplementedError`) demandent une décision
+   de conception séparée avant d'être câblés (voir ci-dessus). Résolution
+   « run actif d'un projet » (limitation notée dans l'entrée S2 du
+   2026-07-24 : `run_id` doit encore être tapé explicitement dans les
+   commandes slash) à trancher aussi, indépendamment des tranches S3-S5.
 
 Pas d'ordre de priorité déjà acté entre ces points au-delà de leur numérotation
 ci-dessus — à trancher avec l'utilisateur en début de prochaine session.

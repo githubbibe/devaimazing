@@ -6,8 +6,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-
-from studio.config import StudioConfig
+from studio.config import StudioConfig, load_global_telegram_config
 
 
 def _write_yaml(path: Path, data: dict) -> None:
@@ -150,3 +149,33 @@ def test_config_from_env_reads_environment(config_dir: Path, monkeypatch: pytest
     config = StudioConfig.from_env()
 
     assert config.project_name == "demo"
+
+
+def test_load_global_telegram_config_returns_section(config_dir: Path):
+    _write_yaml(config_dir / "studio.yml", {
+        "telegram": {"token": "<PLACEHOLDER_TELEGRAM_TOKEN>", "allowed_chat_id": "<PLACEHOLDER>"},
+    })
+
+    telegram_config = load_global_telegram_config(config_dir)
+
+    assert telegram_config["token"] == "<PLACEHOLDER_TELEGRAM_TOKEN>"
+
+
+def test_load_global_telegram_config_missing_section_returns_empty(config_dir: Path):
+    assert load_global_telegram_config(config_dir) == {}
+
+
+def test_load_global_telegram_config_local_yml_overrides(config_dir: Path):
+    _write_yaml(config_dir / "studio.yml", {
+        "telegram": {"token": "<PLACEHOLDER_TELEGRAM_TOKEN>", "allowed_chat_id": 1},
+    })
+    _write_yaml(config_dir / "local.yml", {"telegram": {"token": "vrai-token-secret"}})
+
+    telegram_config = load_global_telegram_config(config_dir)
+
+    assert telegram_config == {"token": "vrai-token-secret", "allowed_chat_id": 1}
+
+
+def test_load_global_telegram_config_missing_studio_yml_raises(tmp_path: Path):
+    with pytest.raises(FileNotFoundError):
+        load_global_telegram_config(tmp_path / "inexistant")
