@@ -14,13 +14,16 @@ tous construits sur l'API Gemini payante (pas d'équivalent direct en local
 aujourd'hui) :
 
 - **[Building Knowledge Graphs with Gemini](https://github.com/GoogleCloudPlatform/generative-ai/blob/main/gemini/use-cases/knowledge-graph/knowledge_graph_generation.ipynb)**
+  ([ouvrir dans Colab](https://colab.research.google.com/github/GoogleCloudPlatform/generative-ai/blob/main/gemini/use-cases/knowledge-graph/knowledge_graph_generation.ipynb))
   — extraction d'entités/relations depuis du texte non structuré, sortie
   structurée JSON/TSV, passage à l'échelle (livres, contrats), visualisation en
   graphe réseau.
 - **[Generating Consistent Imagery with Gemini](https://github.com/GoogleCloudPlatform/generative-ai/blob/main/gemini/use-cases/media-generation/consistent_imagery_generation.ipynb)**
+  ([ouvrir dans Colab](https://colab.research.google.com/github/GoogleCloudPlatform/generative-ai/blob/main/gemini/use-cases/media-generation/consistent_imagery_generation.ipynb))
   — génération d'images cohérentes (personnages/scènes récurrents), feuille de
   personnage, graphe de dépendances entre assets générés.
 - **[Unlocking Multimodal Video Transcription with Gemini](https://github.com/GoogleCloudPlatform/generative-ai/blob/main/gemini/use-cases/video-analysis/multimodal_video_transcription.ipynb)**
+  ([ouvrir dans Colab](https://colab.research.google.com/github/GoogleCloudPlatform/generative-ai/blob/main/gemini/use-cases/video-analysis/multimodal_video_transcription.ipynb))
   — transcription vidéo multimodale (qui a dit quoi et quand, identification des
   locuteurs) directement depuis la vidéo, sans pipeline ASR + diarisation classique.
 
