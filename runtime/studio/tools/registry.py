@@ -2,17 +2,22 @@
 Registre d'outils partagé (ADR 0013, Décision 4).
 
 Point d'appel unique consommé de façon identique par le parsing des
-commandes slash Telegram et par le function-calling de l'agent Devaimazing
-(tranches S2/S4, pas encore implémentées) — pas de duplication de logique
-entre les deux voies d'entrée. La confirmation avant exécution n'est pas une
-propriété du canal d'appel, c'est une propriété de l'outil lui-même
+commandes slash Telegram (tranche S2) et par le function-calling de l'agent
+Devaimazing (tranche S4, pas encore implémentée) — pas de duplication de
+logique entre les deux voies d'entrée. La confirmation avant exécution n'est
+pas une propriété du canal d'appel, c'est une propriété de l'outil lui-même
 (`ToolSpec.requiert_confirmation`).
 
-Tranche S1 (voir docs/roadmap.md) : seuls `lire_statut`, `lire_progression`
-et `lister_projets` ont un handler réel. `creer_projet`, `archive_projet`,
-`reject_checkpoint` et `stop_run` sont déclarés avec leurs métadonnées
-définitives (table ADR 0013, Décision 4) mais lèvent NotImplementedError —
-câblés dans une tranche ultérieure.
+`reject_checkpoint` et `stop_run` restent NotImplementedError (tranche S3) :
+ils demandent une décision de conception séparée (aucun mécanisme
+d'annulation de run ni de rejet de checkpoint n'existe dans le runtime
+actuel — `resume` n'implémente que l'acceptation), pas juste un handler à
+écrire.
+
+`bot`/`chat_id` (execute_tool) : contexte Telegram optionnel, transmis aux
+handlers qui en ont besoin (creer_projet, archive_projet — appellent l'API
+Telegram directement). Typé Any plutôt qu'aiogram.Bot pour ne pas coupler ce
+module, transport-agnostic en intention, à une lib de bot précise.
 """
 
 from dataclasses import dataclass, field
@@ -20,6 +25,8 @@ from typing import Any, Awaitable, Callable, Optional
 
 from studio.config import StudioConfig
 from studio.tools import queries
+from studio.tools.git import commit_safety_snapshot, current_branch, push_branch
+from studio.tools.project_config import set_project_thread_id
 
 
 @dataclass(frozen=True)
@@ -81,17 +88,72 @@ def _no_args_schema() -> dict[str, Any]:
     return {"type": "object", "properties": {}, "required": []}
 
 
-async def _handle_lire_statut(config: StudioConfig, *, run_id: str) -> dict[str, Any]:
+async def _handle_lire_statut(config: StudioConfig, *, run_id: str, **_: Any) -> dict[str, Any]:
     return await queries.get_run_snapshot(config, run_id)
 
 
-async def _handle_lire_progression(config: StudioConfig, *, run_id: str) -> dict[str, Any]:
+async def _handle_lire_progression(
+    config: StudioConfig, *, run_id: str, **_: Any
+) -> dict[str, Any]:
     return await queries.get_run_progression(config, run_id)
 
 
 async def _handle_lister_projets(config: StudioConfig, **_: Any) -> dict[str, Any]:
     names = await queries.list_projects(config.config_dir)
     return {"projects": names}
+
+
+async def _handle_creer_projet(
+    config: StudioConfig, *, name: str, bot: Optional[Any] = None,
+    chat_id: Optional[int] = None, **_: Any,
+) -> dict[str, Any]:
+    """
+    Crée le topic Telegram d'un projet déjà initialisé (`devaimazing
+    new-project`) et enregistre son thread_id (voir ADR 0013, Décision 3).
+    """
+    if bot is None or chat_id is None:
+        raise RuntimeError("creer_projet nécessite un contexte Telegram (bot, chat_id).")
+
+    project_yml = config.config_dir / "projects" / f"{name}.yml"
+    if not project_yml.is_file():
+        raise ValueError(
+            f"Projet {name!r} inconnu — créez-le d'abord avec "
+            f"`devaimazing new-project {name}` avant de lui associer un topic."
+        )
+
+    topic = await bot.create_forum_topic(chat_id=chat_id, name=name)
+    await set_project_thread_id(project_yml, thread_id=topic.message_thread_id)
+    return {"project": name, "thread_id": topic.message_thread_id}
+
+
+async def _handle_archive_projet(
+    config: StudioConfig, *, name: str, bot: Optional[Any] = None,
+    chat_id: Optional[int] = None, **_: Any,
+) -> dict[str, Any]:
+    """
+    Archive (ferme, réversible) le topic Telegram d'un projet — sauvegarde
+    (commit + push) préalable des changements non commités du repo cible,
+    sous l'identité système devaimazing-bot (sauvegarde_avant, voir ADR
+    0013, Décision 4). Ne supprime jamais le topic ni son historique.
+    """
+    if bot is None or chat_id is None:
+        raise RuntimeError("archive_projet nécessite un contexte Telegram (bot, chat_id).")
+
+    project_config = StudioConfig(project_name=name, config_dir=config.config_dir)
+    thread_id = project_config.get("telegram", {}).get("thread_id")
+    if thread_id is None:
+        raise ValueError(f"Projet {name!r} n'a pas de topic Telegram associé (thread_id manquant).")
+
+    repo_path = project_config.repo_path
+    commit_hash = await commit_safety_snapshot(
+        repo_path, message="chore: sauvegarde avant archivage du projet (Devaimazing)",
+    )
+    if commit_hash is not None:
+        branch = await current_branch(repo_path)
+        await push_branch(repo_path, branch)
+
+    await bot.close_forum_topic(chat_id=chat_id, message_thread_id=int(thread_id))
+    return {"project": name, "commit": commit_hash, "thread_id": thread_id}
 
 
 async def _not_implemented(_config: StudioConfig, **_: Any) -> dict[str, Any]:
@@ -151,7 +213,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         destructif=False,
         requiert_confirmation=False,
         sauvegarde_avant=False,
-        handler=_not_implemented,
+        handler=_handle_creer_projet,
         slash_command="/new",
     ),
     "archive_projet": ToolSpec(
@@ -165,7 +227,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         destructif=True,
         requiert_confirmation=True,
         sauvegarde_avant=True,
-        handler=_not_implemented,
+        handler=_handle_archive_projet,
         slash_command="/archive",
     ),
     "reject_checkpoint": ToolSpec(
@@ -263,6 +325,8 @@ async def execute_tool(
     *,
     config: StudioConfig,
     confirmed: bool = False,
+    bot: Optional[Any] = None,
+    chat_id: Optional[int] = None,
 ) -> ToolResult:
     """
     Point d'appel unique du registre — identique que l'appel vienne du
@@ -274,6 +338,10 @@ async def execute_tool(
         config: Configuration du projet concerné.
         confirmed: True si l'utilisateur a déjà confirmé l'action (ignoré
             si l'outil ne requiert pas de confirmation).
+        bot: Contexte Telegram optionnel, transmis aux handlers qui en ont
+            besoin (creer_projet, archive_projet). None pour les outils qui
+            n'appellent pas l'API Telegram.
+        chat_id: chat_id du groupe Telegram, transmis avec bot.
 
     Returns:
         ToolResult — voir sa docstring pour la sémantique des statuts.
@@ -303,8 +371,10 @@ async def execute_tool(
         )
 
     try:
-        data = await spec.handler(config, **args)
+        data = await spec.handler(config, bot=bot, chat_id=chat_id, **args)
     except NotImplementedError as exc:
+        return ToolResult(status="error", summary=str(exc))
+    except (ValueError, RuntimeError) as exc:
         return ToolResult(status="error", summary=str(exc))
 
     return ToolResult(status="ok", summary=f"{spec.name} exécuté avec succès.", data=data)

@@ -25,6 +25,7 @@ from studio.tools.git import (
     create_github_remote,
     create_initial_commit,
     create_run_branch,
+    current_branch,
     generate_branch_name,
     init_repo,
     merge_run_branch,
@@ -376,3 +377,11 @@ async def test_create_github_remote_failure_raises(monkeypatch: pytest.MonkeyPat
 
     with pytest.raises(RuntimeError, match="name already taken"):
         await create_github_remote(repo_path, "mon-projet")
+
+
+async def test_current_branch_returns_active_branch(repo: Path):
+    assert await current_branch(repo) == "develop"
+
+    await create_run_branch(repo, "ma-feature", base_branch="develop")
+
+    assert (await current_branch(repo)).startswith("studio/ma-feature")

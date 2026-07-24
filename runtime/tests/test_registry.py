@@ -2,11 +2,13 @@
 Tests de studio.tools.registry (ADR 0013, Décision 4).
 """
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import studio.tools.queries as queries_module
 import studio.tools.registry as registry_module
+import yaml
 from studio.tools.registry import (
     TOOL_REGISTRY,
     ToolSpec,
@@ -14,6 +16,12 @@ from studio.tools.registry import (
     parse_slash_command,
     to_ollama_tool,
 )
+
+
+def _write_yaml(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
 
 # Table de l'ADR 0013, Décision 4 — un des points les plus structurants de
 # l'ADR, vérifié explicitement outil par outil pour ne pas dériver en
@@ -74,7 +82,25 @@ async def test_execute_tool_confirmed_calls_handler(monkeypatch: pytest.MonkeyPa
     )
 
     assert result.status == "ok"
-    assert result.data == {"echo": {"run_id": "run-1"}}
+    assert result.data == {"echo": {"run_id": "run-1", "bot": None, "chat_id": None}}
+
+
+async def test_execute_tool_forwards_bot_and_chat_id_to_handler(monkeypatch: pytest.MonkeyPatch):
+    async def handler(config, **kwargs):
+        return {"echo": kwargs}
+
+    spec = ToolSpec(
+        name="test_tool", description="x", parameters={"type": "object", "properties": {}},
+        destructif=False, requiert_confirmation=False, sauvegarde_avant=False, handler=handler,
+    )
+    monkeypatch.setitem(registry_module.TOOL_REGISTRY, "test_tool", spec)
+    fake_bot = object()
+
+    result = await execute_tool(
+        "test_tool", {}, config=SimpleNamespace(), bot=fake_bot, chat_id=42
+    )
+
+    assert result.data == {"echo": {"bot": fake_bot, "chat_id": 42}}
 
 
 async def test_execute_tool_no_confirmation_required_calls_handler_directly(
@@ -96,7 +122,7 @@ async def test_execute_tool_no_confirmation_required_calls_handler_directly(
 
 async def test_execute_tool_not_implemented_returns_error():
     result = await execute_tool(
-        "creer_projet", {"name": "x"}, config=SimpleNamespace(), confirmed=False
+        "stop_run", {"run_id": "run-1"}, config=SimpleNamespace(), confirmed=True
     )
 
     assert result.status == "error"
@@ -168,3 +194,174 @@ async def test_lister_projets_handler_delegates_to_queries(monkeypatch: pytest.M
 
     assert result.status == "ok"
     assert result.data == {"projects": ["demo"]}
+
+
+# --- creer_projet ---
+
+async def test_creer_projet_creates_topic_and_writes_thread_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    config_dir = tmp_path / "config"
+    _write_yaml(config_dir / "projects" / "demo.yml", {"name": "demo"})
+
+    async def fake_create_forum_topic(chat_id, name):
+        assert chat_id == 111
+        assert name == "demo"
+        return SimpleNamespace(message_thread_id=999)
+
+    fake_bot = SimpleNamespace(create_forum_topic=fake_create_forum_topic)
+
+    captured = {}
+
+    async def fake_set_project_thread_id(path, thread_id):
+        captured["path"] = path
+        captured["thread_id"] = thread_id
+
+    monkeypatch.setattr(registry_module, "set_project_thread_id", fake_set_project_thread_id)
+
+    result = await execute_tool(
+        "creer_projet", {"name": "demo"},
+        config=SimpleNamespace(config_dir=config_dir),
+        bot=fake_bot, chat_id=111,
+    )
+
+    assert result.status == "ok"
+    assert result.data == {"project": "demo", "thread_id": 999}
+    assert captured["thread_id"] == 999
+
+
+async def test_creer_projet_unknown_project_returns_error(tmp_path: Path):
+    config_dir = tmp_path / "config"
+    (config_dir / "projects").mkdir(parents=True)
+
+    result = await execute_tool(
+        "creer_projet", {"name": "inconnu"},
+        config=SimpleNamespace(config_dir=config_dir),
+        bot=SimpleNamespace(), chat_id=111,
+    )
+
+    assert result.status == "error"
+
+
+async def test_creer_projet_without_bot_context_returns_error(tmp_path: Path):
+    result = await execute_tool(
+        "creer_projet", {"name": "demo"}, config=SimpleNamespace(config_dir=tmp_path),
+    )
+
+    assert result.status == "error"
+
+
+# --- archive_projet ---
+
+@pytest.fixture
+def demo_config_dir(tmp_path: Path) -> Path:
+    config_dir = tmp_path / "config"
+    _write_yaml(config_dir / "studio.yml", {"models": {}})
+    _write_yaml(config_dir / "projects" / "demo.yml", {
+        "repo_path": str(tmp_path / "demo-repo"),
+        "telegram": {"thread_id": 777},
+    })
+    return config_dir
+
+
+def _patch_archive_git(monkeypatch: pytest.MonkeyPatch, *, commit_hash):
+    calls: dict = {}
+
+    async def fake_commit_safety_snapshot(repo_path, message, tracer=None):
+        calls["commit_repo_path"] = repo_path
+        return commit_hash
+
+    async def fake_current_branch(repo_path):
+        return "studio/demo-feature"
+
+    async def fake_push_branch(repo_path, branch, remote="origin"):
+        calls["push"] = (repo_path, branch)
+
+    monkeypatch.setattr(registry_module, "commit_safety_snapshot", fake_commit_safety_snapshot)
+    monkeypatch.setattr(registry_module, "current_branch", fake_current_branch)
+    monkeypatch.setattr(registry_module, "push_branch", fake_push_branch)
+    return calls
+
+
+async def test_archive_projet_requires_confirmation(demo_config_dir: Path):
+    result = await execute_tool(
+        "archive_projet", {"name": "demo"},
+        config=SimpleNamespace(config_dir=demo_config_dir),
+        bot=SimpleNamespace(), chat_id=222,
+    )
+
+    assert result.status == "needs_confirmation"
+
+
+async def test_archive_projet_commits_pushes_and_closes_topic(
+    monkeypatch: pytest.MonkeyPatch, demo_config_dir: Path
+):
+    calls = _patch_archive_git(monkeypatch, commit_hash="abc123")
+
+    async def fake_close_forum_topic(chat_id, message_thread_id):
+        calls["closed"] = (chat_id, message_thread_id)
+        return True
+
+    fake_bot = SimpleNamespace(close_forum_topic=fake_close_forum_topic)
+
+    result = await execute_tool(
+        "archive_projet", {"name": "demo"},
+        config=SimpleNamespace(config_dir=demo_config_dir),
+        bot=fake_bot, chat_id=222, confirmed=True,
+    )
+
+    assert result.status == "ok"
+    assert result.data == {"project": "demo", "commit": "abc123", "thread_id": 777}
+    assert calls["push"] == (calls["commit_repo_path"], "studio/demo-feature")
+    assert calls["closed"] == (222, 777)
+
+
+async def test_archive_projet_no_changes_skips_push(
+    monkeypatch: pytest.MonkeyPatch, demo_config_dir: Path
+):
+    calls = _patch_archive_git(monkeypatch, commit_hash=None)
+
+    async def fake_close_forum_topic(chat_id, message_thread_id):
+        calls["closed"] = (chat_id, message_thread_id)
+        return True
+
+    fake_bot = SimpleNamespace(close_forum_topic=fake_close_forum_topic)
+
+    result = await execute_tool(
+        "archive_projet", {"name": "demo"},
+        config=SimpleNamespace(config_dir=demo_config_dir),
+        bot=fake_bot, chat_id=222, confirmed=True,
+    )
+
+    assert result.status == "ok"
+    assert result.data["commit"] is None
+    assert "push" not in calls
+    assert calls["closed"] == (222, 777)
+
+
+async def test_archive_projet_missing_thread_id_returns_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    config_dir = tmp_path / "config"
+    _write_yaml(config_dir / "studio.yml", {"models": {}})
+    _write_yaml(config_dir / "projects" / "sans-topic.yml", {
+        "repo_path": str(tmp_path / "repo"),
+    })
+
+    result = await execute_tool(
+        "archive_projet", {"name": "sans-topic"},
+        config=SimpleNamespace(config_dir=config_dir),
+        bot=SimpleNamespace(), chat_id=222, confirmed=True,
+    )
+
+    assert result.status == "error"
+
+
+async def test_archive_projet_without_bot_context_returns_error(demo_config_dir: Path):
+    result = await execute_tool(
+        "archive_projet", {"name": "demo"},
+        config=SimpleNamespace(config_dir=demo_config_dir),
+        confirmed=True,
+    )
+
+    assert result.status == "error"

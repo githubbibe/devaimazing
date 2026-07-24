@@ -6,18 +6,79 @@
 
 Le runtime devaimazing est **fonctionnellement complet et testé de bout en bout** :
 `state.py`, `config.py`, `tools/*.py` (filesystem, git, ollama, claude_code, tracer,
-registry, queries, project_config), `telegram/*.py` (bot, handlers, topics — lecture
-seule, ADR 0013 tranche S2), `graph.py`, les 7 `nodes/*.py` (pm, architect, backend,
-frontend, test, security, closer), `metrics.py` et `cli.py` (`run`, `resume`,
-`retry`, `run-agent`, `runs`, `metrics`, `new-project`, `projects`, `doctor`,
+registry, queries, project_config), `telegram/*.py` (bot, handlers, topics —
+lecture seule + création/archivage de projet avec confirmation, ADR 0013
+tranches S2-S3), `graph.py`, les 7 `nodes/*.py` (pm, architect, backend, frontend,
+test, security, closer), `metrics.py` et `cli.py` (`run`, `resume`, `retry`,
+`run-agent`, `runs`, `metrics`, `new-project`, `projects`, `doctor`,
 `telegram-bot`) sont tous implémentés — voir `CLAUDE.md` pour la convention
 (stub-first reste appliquée par le pipeline aux projets *cibles*, pas à ce dépôt).
-**415/415 tests verts** sur `runtime/tests/` (2026-07-24) —
+**433/433 tests verts** sur `runtime/tests/` (2026-07-24) —
 `test_new_project_target_exists_not_git_repo_prints_error`, précédemment signalé
 en échec à cause du retour à la ligne Rich dépendant de la largeur du terminal,
 passe dans cet environnement ; sa sensibilité à la largeur du terminal n'est pas
 corrigée dans le code, donc un échec ponctuel sur une autre machine/largeur reste
 possible.
+
+**2026-07-24 — ADR 0013, tranche S3 : `creer_projet`/`archive_projet` avec
+confirmation rendue (clavier Oui/Non).** Suite directe de S1/S2, même
+chantier de session.
+
+Livré :
+- `runtime/studio/tools/registry.py` : handlers réels pour `creer_projet`
+  (`bot.create_forum_topic` + `set_project_thread_id`) et `archive_projet`
+  (`commit_safety_snapshot` puis, si un commit a été créé, `current_branch`
+  + `push_branch`, puis `bot.close_forum_topic` — jamais de suppression du
+  topic ni de son historique). `execute_tool` gagne `bot`/`chat_id`
+  (contexte Telegram optionnel transmis aux handlers, typé `Any` plutôt
+  qu'`aiogram.Bot` pour ne pas coupler `tools/` à une lib de bot précise) et
+  catche désormais `(ValueError, RuntimeError)` en plus de
+  `NotImplementedError`, pour que les erreurs métier des nouveaux handlers
+  (projet inconnu, topic manquant, contexte Telegram absent) redescendent
+  proprement en `ToolResult(status="error")` plutôt qu'en exception brute.
+- `runtime/studio/tools/git.py` : `current_branch` (manquait pour pousser
+  après le commit de sauvegarde).
+- `runtime/studio/telegram/handlers.py` : `HandlerReply` (texte +
+  `confirmation_id` optionnel), `handle_confirmation_callback` (traite le
+  tap Oui/Non), `build_confirmation_keyboard`. Confirmations en attente
+  gardées en mémoire process (`_pending_confirmations`, jamais persistées —
+  même choix que l'absence de checkpointer dédié pour Devaimazing, ADR
+  0013 Décision 3) : perdues si le bot redémarre entre la question et la
+  réponse. `creer_projet`/`archive_projet` ajoutés aux outils "General
+  scope" (le nom du projet vient de l'argument de la commande, pas du
+  topic — cohérent avec la Décision 4 de l'ADR, qui place `/new` et
+  `/archive` dans le topic General, pas dans les topics-projets).
+
+**Non testé en conditions réelles** : comme S2, tout est mocké
+(`Bot.create_forum_topic`/`close_forum_topic`, `commit_safety_snapshot`/
+`push_branch`) — pas de vrai groupe Telegram, pas de vrai repo cible avec
+remote pour valider le push réel.
+
+**Bug trouvé et corrigé avant push (relecture, aucun test mocké ne pouvait
+le voir)** : `handle_slash_command` appelait `execute_tool(...)` sans
+`bot`/`chat_id` — sans conséquence pour les outils `requiert_confirmation`
+(le handler ne s'exécute qu'au moment du callback Oui/Non, où `bot` est
+bien transmis), mais `creer_projet` (`requiert_confirmation=False`)
+s'exécute dès ce premier appel : `/new demo` retournait systématiquement
+« creer_projet nécessite un contexte Telegram », jamais de topic créé.
+`test_creer_projet_*` (registry) passait car il appelle `execute_tool`
+directement avec `bot=`/`chat_id=` — aucun test ne passait par
+`handle_slash_command` pour `/new`. Corrigé : `handle_slash_command` gagne
+un paramètre `bot`, transmis à `execute_tool` ; `build_router` passe
+`message.bot`. Test de régression ajouté
+(`test_new_command_creates_topic_through_handler`) qui échoue sans le fix.
+
+**Limitation documentée, pas un bug** : si `push_branch` échoue (pas de
+remote, pas de réseau — cas réel envisagé : éditer à 42, exécuter le studio
+ailleurs sans accès réseau à ce moment), `archive_projet` échoue
+entièrement et **le topic reste ouvert** (le commit local, lui, a réussi).
+Comportement fail-safe voulu (pas d'archivage sans la sauvegarde complète
+promise par l'ADR — « commit + push »), pas un compromis silencieux.
+
+**Reste, tranches S4-S5** : function-calling Gemma (agent Devaimazing
+lui-même), transfert General → topic-projet, `IMPROVEMENTS.md`.
+`reject_checkpoint`/`stop_run` toujours `NotImplementedError`, décision de
+conception séparée requise (voir « Reste à faire »).
 
 **2026-07-24 — ADR 0013, tranche S2 : bot Telegram fonctionnel en lecture
 seule.** Suite directe de la tranche S1 ci-dessous, même chantier de session.
@@ -78,12 +139,12 @@ caractère spécial. Aucun test mocké ne pouvait le détecter (aiogram mocké
 ne valide pas la syntaxe HTML réelle) — trouvé en relecture avant push,
 corrigé (`Bot()` sans parse_mode, texte brut par défaut).
 
-**`/help` non câblé** : listé dans l'ADR 0013 (Décision 4) et prévu dans le
-plan initial de S2, mais `parse_slash_command` ne le reconnaît pas encore
-(`SLASH_COMMAND_TO_TOOL` ne contient que les commandes des 3 outils avec
-handler réel) — un `/help` tapé est aujourd'hui silencieusement ignoré.
-Décision assumée de le reporter à S3 plutôt que d'écrire un handler
-statique isolé du reste du registre.
+**`/help` toujours pas câblé** : listé dans l'ADR 0013 (Décision 4), mais
+`parse_slash_command` ne le reconnaît toujours pas (`SLASH_COMMAND_TO_TOOL`
+ne contient que les commandes des outils avec handler réel) — un `/help`
+tapé reste silencieusement ignoré, y compris après la tranche S3 (voir
+entrée ci-dessus). Décision assumée de le reporter encore, plutôt que
+d'écrire un handler statique isolé du reste du registre.
 
 **2026-07-24 — ADR 0013 (Telegram + Devaimazing), tranche S1 : registre
 d'outils + lecture seule, sans bot ni Gemma.** L'ADR 0013 (interface Telegram,
@@ -537,20 +598,20 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    supposant `claude` installé sur l'hôte), accès réseau à Ollama
    (`localhost:11434` en dur), montage du repo projet cible en volume,
    persistance de `state.db`/`metrics.db`.
-6. **ADR 0013, tranches S3-S5** (S1 et S2 livrées le 2026-07-24, voir entrées
-   ci-dessus) : S3 `creer_projet`/`archive_projet` avec confirmation rendue
-   (inline keyboard aiogram) ; S4 agent Devaimazing (function-calling Gemma
-   via `ollama.AsyncClient.chat(tools=...)`, à valider empiriquement avec le
+6. **ADR 0013, tranches S4-S5** (S1, S2 et S3 livrées le 2026-07-24, voir
+   entrées ci-dessus) : S4 agent Devaimazing (function-calling Gemma via
+   `ollama.AsyncClient.chat(tools=...)`, à valider empiriquement avec le
    tag Gemma réellement retenu avant d'écrire le code de production —
    fallback structured-output déjà identifié si le function-calling Gemma
    s'avère peu fiable, voir issue ollama/ollama#7051 citée dans
    `tools/ollama.py`) ; S5 transfert General → topic-projet + `IMPROVEMENTS.md`.
    `stop_run`/`reject_checkpoint` (déjà déclarés dans `TOOL_REGISTRY` avec
    leurs métadonnées, handler `NotImplementedError`) demandent une décision
-   de conception séparée avant d'être câblés (voir ci-dessus). Résolution
-   « run actif d'un projet » (limitation notée dans l'entrée S2 du
-   2026-07-24 : `run_id` doit encore être tapé explicitement dans les
-   commandes slash) à trancher aussi, indépendamment des tranches S3-S5.
+   de conception séparée avant d'être câblés (voir ci-dessus). `/help` non
+   câblé (voir entrée S3). Résolution « run actif d'un projet » (limitation
+   notée dans l'entrée S2 du 2026-07-24 : `run_id` doit encore être tapé
+   explicitement dans les commandes slash) à trancher aussi, indépendamment
+   des tranches S4-S5.
 
 Pas d'ordre de priorité déjà acté entre ces points au-delà de leur numérotation
 ci-dessus — à trancher avec l'utilisateur en début de prochaine session.

@@ -123,16 +123,18 @@ documenté (si Telegram est indisponible) plutôt que d'être supprimé avant qu
 remplaçant fonctionnel existe.
 
 **Interface Telegram (décidée le 2026-07-23, ADR 0013 — implémentation
-commencée le 2026-07-24, lecture seule uniquement, voir `docs/roadmap.md`)**
+commencée le 2026-07-24, voir `docs/roadmap.md`)**
 
 Un groupe Telegram unique avec topics (un topic par projet piloté, plus un topic
 « General » transverse) porte l'interface de pilotage à distance. Un seul bot
 Telegram (un seul token), membre du groupe, actif dans tous les topics, ne répond
 qu'au `chat_id` de l'utilisateur du studio (mono-utilisateur). Droit admin minimal :
 `can_manage_topics` uniquement. Le bot (`runtime/studio/telegram/`, `aiogram`,
-commande `devaimazing telegram-bot`) route aujourd'hui `/status`, `/progression`
-et `/projects` vers le registre d'outils ; créer/archiver un projet et toute
-confirmation rendue à l'utilisateur restent à faire.
+commande `devaimazing telegram-bot`) route `/status`, `/progression`,
+`/projects` vers le registre d'outils, et `/new`/`/archive` (création/archivage
+de topic-projet) avec confirmation rendue en clavier Oui/Non — sauvegarde
+(commit + push) automatique avant tout archivage. Function-calling Gemma
+(compréhension du langage naturel par Devaimazing) reste à faire.
 
 Le rôle **Devaimazing** (Gemma local, voir `docs/agents.md`) porte l'interface
 conversationnelle : création/fermeture de topics-projet, orientation des demandes,

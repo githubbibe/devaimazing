@@ -576,6 +576,22 @@ async def create_github_remote(repo_path: Path, name: str, private: bool = True)
         )
 
 
+async def current_branch(repo_path: Path) -> str:
+    """
+    Nom de la branche courante du repo.
+
+    Args:
+        repo_path: Chemin absolu vers le repo projet.
+
+    Returns:
+        Nom de la branche courante.
+
+    Raises:
+        RuntimeError: Si la commande git échoue (repo invalide).
+    """
+    return await _run_git(repo_path, "rev-parse", "--abbrev-ref", "HEAD")
+
+
 async def push_branch(repo_path: Path, branch: str, remote: str = "origin") -> None:
     """
     Pousse branch vers remote en configurant le suivi amont (-u).
