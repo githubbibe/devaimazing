@@ -169,6 +169,7 @@ devaimazing/
 │   ├── infra-topology.md        # Topologie reseau Podman
 │   ├── roadmap.md               # Feuille de route runtime
 │   ├── references-externes.md   # Sources externes fiables (notebooks Gemini, etc.)
+│   ├── references-externes/     # Copies locales des notebooks references
 │   └── adr/                     # Architecture Decision Records
 │       ├── 0001-stateless-agents.md
 │       ├── 0002-stub-first.md
