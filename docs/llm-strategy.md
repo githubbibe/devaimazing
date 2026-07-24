@@ -51,9 +51,18 @@ minimisation des tokens API.
 ## Benchmarking Ollama
 
 Une fois le pipeline LangGraph stable, benchmarker sur une même fiche exemple :
-- Qwen 2.5 7B Instruct (baseline)
-- Qwen 2.5 Coder 7B Instruct (meilleur en code ?)
-- Qwen 2.5 14B Instruct (si RAM disponible)
+- Qwen 2.5 7B Instruct / Qwen 2.5 Coder 7B Instruct (baseline actuelle, orienté code)
+- Codestral / Codestral Mamba (Mistral, orienté code)
+- DeepSeek Coder V2 Lite 16B (tendu en RAM mais existe en quant serrée)
+- Gemma 2 9B (généraliste, moins orienté code)
+- Llama 3.1 8B Instruct (généraliste)
+- StarCoder2 7B/15B (orienté code)
+
+**Précision** : un LLM orienté code n'a pas une performance uniforme entre langages —
+elle dépend des proportions de langages dans son corpus d'entraînement (ex. StarCoder2
+couvre large via The Stack, DeepSeek Coder est réputé fort en Python). Le benchmark
+doit donc être mené sur le ou les langages réellement utilisés par les projets cibles
+pilotés par devaimazing, pas sur un score générique multi-langages.
 
 Critères : qualité stubs, qualité implémentation, qualité audit, latence, RAM peak.
 
