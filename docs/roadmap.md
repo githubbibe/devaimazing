@@ -20,6 +20,62 @@ passe dans cet environnement ; sa sensibilité à la largeur du terminal n'est p
 corrigée dans le code, donc un échec ponctuel sur une autre machine/largeur reste
 possible.
 
+**2026-07-24 — ADR 0013, tranche S4 : gate empirique fait, résultat négatif,
+aucun code de production écrit.** Avant d'écrire `runtime/studio/devaimazing/`
+(agent Devaimazing, function-calling Gemma), vérification empirique exigée par
+l'entrée S3 ci-dessous et par l'issue ollama/ollama#7051 citée dans
+`tools/ollama.py`.
+
+**Résultat 1 — function-calling natif Ollama : Gemma 3 ne le supporte pas du
+tout (pas juste « peu fiable »).** `AsyncClient.chat(model="gemma3:1b",
+tools=[...])` lève `ollama._types.ResponseError: ... does not support tools
+(status code: 400)`. Confirmé aussi sur `gemma3:4b` (`curl /api/show` :
+capacités `["completion", "vision"]`, jamais `tools`) et via la page officielle
+https://ollama.com/library/gemma3 (et `gemma3n`) : aucune variante (1b/4b/12b/
+27b/QAT/e2b/e4b) n'affiche le badge « Tools ». Seuls les modèles Qwen de cet
+environnement l'ont (`qwen2.5:7b-instruct`, `qwen2.5:1.5b-instruct` :
+`"capabilities":["completion","tools"]`, vérifié via `/api/tags`). Le
+« à re-vérifier » de l'ADR 0013 (Décision 3) est donc tranché : le
+function-calling Gemma n'est pas une option, sur aucune taille de modèle
+Gemma 3 disponible.
+
+**Résultat 2 — fallback structured-output (`format=` JSON schema, même
+mécanisme que `FILE_OUTPUT_SCHEMA`) : JSON toujours valide, mais sélection
+d'outil pas fiable sur `gemma3:1b`.** Schéma testé :
+`{"reply": str, "tool_call": {"name": str, "arguments": dict} | null}`, avec
+2 outils décrits en texte dans le system prompt. Sur 3 questions (2
+nécessitant un outil, 1 conversationnelle) : le cas conversationnel est
+correct, mais les 2 cas outil produisent un nom d'outil halluciné/mal
+orthographié (`lire_statutu` au lieu de `lire_statut`, `listere_projets` au
+lieu de `lister_projets`) et des `arguments` vides alors qu'un `run_id` était
+fourni dans la question. Le JSON est syntaxiquement exploitable
+(`json.loads` ne lève jamais), mais le contenu ne l'est pas sans validation
+supplémentaire (vérifier que `tool_call.name` existe dans `TOOL_REGISTRY`
+avant tout appel — nécessaire de toute façon, mais pas suffisant : un nom
+inconnu se détecte, un nom halluciné qui *coïncide* avec un autre outil du
+registre ne se détecterait pas par ce seul contrôle).
+
+**Résultat 3 — `gemma3:4b` : premier essai planté (OOM), cause confirmée
+non liée au disque.** Un premier test du même fallback sur `gemma3:4b` a fait
+planter `llama-server` (`signal: killed`, status 500) — machine à 7,7Gi de
+RAM, très peu de marge libre au moment du test (concurrence avec d'autres
+process). Vérifié après coup : ce n'est pas un problème de disque —
+`/goinfre/sgraebli/Ollama` (9,2G utilisés, 292G libres) reçoit bien les
+modèles, `infra/ollama/.env` et le symlink `/home/sgraebli/goinfre →
+/goinfre/sgraebli` sont corrects ; le home (`/dev/sdb`, 4,7G, 89% plein) est
+occupé par du bloat préexistant (`.local`, `.config`, `.var`) sans rapport
+avec Ollama. Logs kernel non consultables (permission refusée sur cette
+machine) pour confirmer formément l'OOM-kill, mais la signature correspond.
+`gemma3:4b` n'a pas été retesté proprement sur le fallback structured-output
+après ce crash (RAM redevenue disponible, mais session interrompue avant de
+relancer) — à refaire avant toute décision sur la taille de modèle à retenir.
+
+**Conséquence : aucun code de production S4 écrit.** Le fallback
+structured-output reste la seule voie viable (function-calling natif exclu),
+mais sa fiabilité sur la sélection d'outil n'est pas encore établie — testé
+seulement sur `gemma3:1b`, avec un taux d'échec de 2/2 sur les cas nécessitant
+un outil. Voir « Reste à faire » pour la suite concrète.
+
 **2026-07-24 — ADR 0013, tranche S3 : `creer_projet`/`archive_projet` avec
 confirmation rendue (clavier Oui/Non).** Suite directe de S1/S2, même
 chantier de session.
@@ -598,20 +654,45 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    supposant `claude` installé sur l'hôte), accès réseau à Ollama
    (`localhost:11434` en dur), montage du repo projet cible en volume,
    persistance de `state.db`/`metrics.db`.
-6. **ADR 0013, tranches S4-S5** (S1, S2 et S3 livrées le 2026-07-24, voir
-   entrées ci-dessus) : S4 agent Devaimazing (function-calling Gemma via
-   `ollama.AsyncClient.chat(tools=...)`, à valider empiriquement avec le
-   tag Gemma réellement retenu avant d'écrire le code de production —
-   fallback structured-output déjà identifié si le function-calling Gemma
-   s'avère peu fiable, voir issue ollama/ollama#7051 citée dans
-   `tools/ollama.py`) ; S5 transfert General → topic-projet + `IMPROVEMENTS.md`.
-   `stop_run`/`reject_checkpoint` (déjà déclarés dans `TOOL_REGISTRY` avec
-   leurs métadonnées, handler `NotImplementedError`) demandent une décision
-   de conception séparée avant d'être câblés (voir ci-dessus). `/help` non
-   câblé (voir entrée S3). Résolution « run actif d'un projet » (limitation
-   notée dans l'entrée S2 du 2026-07-24 : `run_id` doit encore être tapé
-   explicitement dans les commandes slash) à trancher aussi, indépendamment
-   des tranches S4-S5.
+6. **ADR 0013, tranche S4 — agent Devaimazing (function-calling)** (S1, S2 et
+   S3 livrées le 2026-07-24 ; gate empirique S4 fait le 2026-07-24, résultat
+   négatif sur le function-calling natif, voir entrée ci-dessus). Function-
+   calling natif Gemma **exclu** (aucune variante Gemma 3 ne le supporte,
+   confirmé empiriquement et via la doc officielle) — pas la peine de
+   retester. Prochaines étapes concrètes, dans l'ordre :
+   1. Reproduire le test structured-output (`format=` JSON schema) sur
+      `gemma3:4b` proprement (RAM libre vérifiée avant lancement — le
+      premier essai a planté par manque de RAM, pas retesté depuis) ; élargir
+      le jeu de questions de test (au-delà des 3 déjà essayées) pour avoir un
+      taux d'échec plus significatif que 2/2.
+   2. Si `gemma3:4b` ne fiabilise pas la sélection d'outil : tester un prompt
+      système plus directif (lister les noms d'outils *exacts* de façon plus
+      visible, ex. une énumération stricte plutôt qu'une description en
+      prose) avant d'abandonner Gemma — ne pas conclure sur la seule base du
+      prompt déjà essayé.
+   3. Si ça ne suffit toujours pas : reposer explicitement à l'utilisateur la
+      question tranchée le 2026-07-24 (« non gemma comme llm en devaimazing »)
+      — la justification retenue (conversationnel > code) reste valable pour
+      le *ton*, mais la Décision 4 de l'ADR 0013 dépend d'une sélection
+      d'outil fiable, pas juste conversationnelle ; envisager Qwen (qui
+      supporte `tools` nativement) uniquement pour l'étape de sélection
+      d'outil, avec Gemma gardé pour la formulation de la réponse — à évaluer
+      comme option parmi d'autres, pas comme conclusion déjà actée.
+   4. Une fois une méthode fiable retenue : écrire
+      `runtime/studio/devaimazing/agent.py` (`run_devaimazing_turn`) et
+      généraliser `runtime/studio/tools/ollama.py` (`_select_tool_call`),
+      selon le plan initial. Valider systématiquement `tool_call.name` contre
+      `TOOL_REGISTRY` avant tout appel (nécessaire même avec une méthode
+      fiabilisée — voir résultat 2 de l'entrée ci-dessus : un JSON
+      syntaxiquement valide ne garantit pas un nom d'outil correct).
+   **S5** (transfert General → topic-projet + `IMPROVEMENTS.md`) : non
+   commencée, dépend de S4. `stop_run`/`reject_checkpoint` (déjà déclarés
+   dans `TOOL_REGISTRY` avec leurs métadonnées, handler `NotImplementedError`)
+   demandent une décision de conception séparée avant d'être câblés (voir
+   ci-dessus). `/help` non câblé (voir entrée S3). Résolution « run actif
+   d'un projet » (limitation notée dans l'entrée S2 du 2026-07-24 : `run_id`
+   doit encore être tapé explicitement dans les commandes slash) à trancher
+   aussi, indépendamment des tranches S4-S5.
 
 Pas d'ordre de priorité déjà acté entre ces points au-delà de leur numérotation
 ci-dessus — à trancher avec l'utilisateur en début de prochaine session.

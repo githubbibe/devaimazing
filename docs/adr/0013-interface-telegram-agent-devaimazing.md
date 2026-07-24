@@ -130,6 +130,19 @@ Devaimazing fait lui-même tout ce qu'il peut faire sans monter en compétence c
 et ne sollicite le PM (Sonnet ou Opus selon la phase) que lorsque c'est réellement
 nécessaire.
 
+**Mise à jour empirique (2026-07-24, gate S4, voir `docs/roadmap.md`)** : le
+function-calling natif Ollama (`tools=` de `AsyncClient.chat`) n'est supporté
+par **aucune** variante de Gemma 3 (1b/4b/12b/27b/QAT/e2b/e4b) — confirmé
+empiriquement (erreur 400 explicite) et via la documentation officielle
+Ollama. Seuls des modèles orientés code comme Qwen le supportent dans cet
+environnement. La Décision 4 ci-dessous repose donc sur un fallback
+structured-output (JSON schema via `format=`), pas sur du function-calling
+réel — ce fallback est lui-même en cours de validation (résultats mitigés à
+ce stade, voir `docs/roadmap.md`). Cela ne remet pas en cause le choix de
+Gemma pour le *ton* de la conversation, mais rend la fiabilité de la
+*sélection d'outil* une question ouverte distincte, pas déjà tranchée par ce
+choix de LLM.
+
 **Mémoire** : pas de checkpointer dédié séparé (contrairement au PM). Tient en deux
 choses : (1) les fichiers de config existants `config/projects/*.yml`, qui porteront
 le `thread_id` du topic Telegram associé à chaque projet ; (2) sa présence dans la
@@ -235,9 +248,11 @@ métadonnées de confirmation.
   dépendance `aiogram`) — allowlist `chat_id`, résolution topic → projet,
   dispatch des commandes slash, rendu de la confirmation en clavier
   Oui/Non pour les outils `requiert_confirmation`.
-  **Reste non fait, tranches S4-S5** : le function-calling Gemma (agent
-  Devaimazing lui-même, compréhension du langage naturel), le transfert
-  General → topic-projet, les handlers de
+  **Reste non fait, tranches S4-S5** : l'agent Devaimazing lui-même
+  (compréhension du langage naturel — gate empirique fait le 2026-07-24,
+  function-calling natif Gemma exclu, fallback structured-output en cours de
+  validation, voir mise à jour empirique ci-dessus et `docs/roadmap.md`), le
+  transfert General → topic-projet, les handlers de
   `reject_checkpoint`/`stop_run` (décision de conception séparée requise).
   Ce découplage en tranches indépendantes, chacune testée avant la
   suivante, évite de refaire l'erreur corrigée le 2026-07-22 (documentation
