@@ -168,6 +168,7 @@ devaimazing/
 │   ├── llm-strategy.md          # Opus/Sonnet/Qwen : quand quoi
 │   ├── infra-topology.md        # Topologie reseau Podman
 │   ├── roadmap.md               # Feuille de route runtime
+│   ├── references-externes.md   # Sources externes fiables (notebooks Gemini, etc.)
 │   └── adr/                     # Architecture Decision Records
 │       ├── 0001-stateless-agents.md
 │       ├── 0002-stub-first.md
