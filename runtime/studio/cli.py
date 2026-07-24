@@ -44,6 +44,7 @@ from studio.tools.git import (
     push_branch,
 )
 from studio.tools.ollama import ExternalServiceError
+from studio.tools.queries import build_progression_summary, list_projects, parse_run_history_table
 from studio.tools.tracer import RunTracer
 
 console = Console()
@@ -293,31 +294,27 @@ def _print_retry_diagnostic(run_id: str, state: dict) -> None:
     """
     Diagnostic affiché avant de rejouer un run planté — champs déjà
     présents dans StudioState, aucun ajout de champ (pas d'horodatage,
-    décision actée dans docs/roadmap.md).
+    décision actée dans docs/roadmap.md). Extraction déléguée à
+    tools.queries.build_progression_summary (réutilisée par le registre
+    d'outils, ADR 0013) pour ne pas dupliquer cette logique.
     """
-    agent_sequence = state.get("agent_sequence") or []
-    current_agent_index = state.get("current_agent_index", 0)
-    if 0 <= current_agent_index < len(agent_sequence):
-        current_agent = agent_sequence[current_agent_index]
-    else:
-        current_agent = "inconnu"
+    summary = build_progression_summary(state)
 
     console.print(f"[bold]Diagnostic — run {run_id}[/bold]")
-    console.print(f"  Phase courante : {state.get('current_phase')}")
-    console.print(f"  Agent courant : {current_agent}")
-    console.print(f"  Statut : {state.get('status')}")
+    console.print(f"  Phase courante : {summary['current_phase']}")
+    console.print(f"  Agent courant : {summary['current_agent'] or 'inconnu'}")
+    console.print(f"  Statut : {summary['status']}")
 
-    agent_results = state.get("agent_results") or []
-    if agent_results:
-        last_result = agent_results[-1]
+    if summary["last_result"]:
+        last_result = summary["last_result"]
         console.print(
-            f"  Dernier résultat : {last_result.agent} — {last_result.status} "
-            f"(itération {last_result.iteration})"
+            f"  Dernier résultat : {last_result['agent']} — {last_result['status']} "
+            f"(itération {last_result['iteration']})"
         )
 
-    if state.get("requires_manual_intervention"):
+    if summary["requires_manual_intervention"]:
         console.print(
-            f"  [red]Intervention manuelle requise : {state.get('intervention_reason')}[/red]"
+            f"  [red]Intervention manuelle requise : {summary['intervention_reason']}[/red]"
         )
 
 
@@ -629,33 +626,10 @@ def _compare_to_reference(repo_path: Path, reference_dir: Path, updates: dict) -
         console.print("".join(diff) or "(fichiers vides tous les deux)")
 
 
-def _parse_run_history_table(content: str) -> list[list[str]]:
-    """
-    Parse les lignes de données de la section "Historique des runs" d'un
-    project-map.md (voir studio.nodes.closer._insert_table_rows — même
-    structure de tableau, lue en sens inverse ici).
-    """
-    heading_index = content.find("## Historique des runs")
-    if heading_index == -1:
-        return []
-    separator_index = content.find("\n|---", heading_index)
-    if separator_index == -1:
-        return []
-    next_heading_index = content.find("\n## ", separator_index)
-    section_end = next_heading_index if next_heading_index != -1 else len(content)
-    section = content[separator_index:section_end]
-
-    rows = []
-    for line in section.splitlines():
-        line = line.strip()
-        if not line.startswith("|"):
-            continue
-        cells = [cell.strip() for cell in line.strip("|").split("|")]
-        is_separator_row = all(set(cell) <= {"-"} for cell in cells)
-        if is_separator_row or not any(cells):
-            continue
-        rows.append(cells)
-    return rows
+# Alias conservé pour compatibilité (tools.queries.parse_run_history_table
+# porte désormais l'implémentation réelle, partagée avec le registre
+# d'outils, ADR 0013) — évite de dupliquer la logique de parsing ici.
+_parse_run_history_table = parse_run_history_table
 
 
 @main.command()
@@ -675,7 +649,7 @@ async def _runs_async(project: str, limit: int) -> None:
         return
 
     content = project_map_path.read_text(encoding="utf-8")
-    rows = _parse_run_history_table(content)[-limit:]
+    rows = parse_run_history_table(content)[-limit:]
     if not rows:
         console.print(f"[yellow]Aucun run enregistré pour {project}.[/yellow]")
         return
@@ -808,11 +782,15 @@ async def _new_project_async(name: str, private: bool, skip_github: bool) -> Non
 @main.command()
 def projects():
     """Liste les projets configurés dans config/projects/."""
-    config_dir = _config_projects_dir()
-    if not config_dir.is_dir():
+    asyncio.run(_projects_async())
+
+
+async def _projects_async() -> None:
+    if not _config_projects_dir().is_dir():
         console.print("[yellow]Aucun répertoire config/projects/ trouvé.[/yellow]")
         return
-    names = sorted(p.stem for p in config_dir.glob("*.yml"))
+    base_config_dir = _resolve_config_dir() or _devaimazing_root() / "config"
+    names = await list_projects(base_config_dir)
     if not names:
         console.print("[yellow]Aucun projet configuré.[/yellow]")
         return

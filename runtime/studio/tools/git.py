@@ -26,6 +26,15 @@ AGENT_GIT_IDENTITIES = {
     "security":  ("security-aimazing",  "security@aimazing.fr"),
 }
 
+# Identités git système, distinctes des agents du pipeline de run ci-dessus.
+# Devaimazing (ADR 0013) n'a « aucune identité Git » en tant qu'agent — un
+# commit de sauvegarde qu'il déclenche (sauvegarde_avant, voir
+# studio.tools.registry) doit malgré tout être attribué à quelqu'un, sous
+# une identité qui ne prétend pas être celle d'un des 8 rôles du pipeline.
+SYSTEM_GIT_IDENTITIES = {
+    "devaimazing-bot": ("devaimazing-bot", "bot@aimazing.fr"),
+}
+
 # Fiche (specs/<run-id>/<fichier>) -> agent propriétaire, pour attribuer
 # correctement un commit de sauvegarde automatique (voir checkout_branch) à
 # l'identité Git de l'agent concerné plutôt qu'à une identité générique.
@@ -385,6 +394,57 @@ async def commit_as_agent(
     commit_hash = await _run_git(repo_path, "rev-parse", "HEAD")
     if tracer is not None:
         tracer.emit("commit", hash=commit_hash, git_identity=agent, files=files)
+    return commit_hash
+
+
+async def commit_safety_snapshot(
+    repo_path: Path,
+    message: str,
+    tracer: Optional[AgentTracer] = None,
+) -> Optional[str]:
+    """
+    Commit de sauvegarde sous une identité système (SYSTEM_GIT_IDENTITIES),
+    déclenché avant une action destructrice (sauvegarde_avant, voir
+    studio.tools.registry et ADR 0013, Décision 4) — pas encore appelé par
+    aucun handler à ce stade (préparé pour la tranche qui câblera
+    archive_projet), volontairement indépendant de commit_as_agent : il
+    committe tout l'état courant du repo (pas une liste de fichiers d'un
+    agent précis), sous l'identité système "devaimazing-bot" puisque
+    Devaimazing n'a aucune identité Git en tant qu'agent.
+
+    Args:
+        repo_path: Chemin absolu vers le repo projet.
+        message: Message de commit (format conventional commits).
+        tracer: AgentTracer optionnel — émet un événement "commit" une fois
+            le commit créé. None (défaut) : aucune trace émise.
+
+    Returns:
+        Hash du commit créé, ou None si le repo n'avait rien à committer.
+
+    Raises:
+        RuntimeError: Si le commit Git échoue.
+
+    Side effects:
+        Crée un commit dans le repo projet si des changements sont présents.
+    """
+    paths = await _dirty_paths(repo_path)
+    if not paths:
+        return None
+
+    name, email = SYSTEM_GIT_IDENTITIES["devaimazing-bot"]
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": name,
+        "GIT_AUTHOR_EMAIL": email,
+        "GIT_COMMITTER_NAME": name,
+        "GIT_COMMITTER_EMAIL": email,
+    }
+
+    await _run_git(repo_path, "add", "--", *paths)
+    await _run_git(repo_path, "commit", "-m", message, env=env)
+    commit_hash = await _run_git(repo_path, "rev-parse", "HEAD")
+    if tracer is not None:
+        tracer.emit("commit", hash=commit_hash, git_identity="devaimazing-bot", files=paths)
     return commit_hash
 
 

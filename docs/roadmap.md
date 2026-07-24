@@ -1,22 +1,71 @@
 # Feuille de route - devaimazing
 
-**Dernière mise à jour** : 2026-07-21
+**Dernière mise à jour** : 2026-07-24
 
 ## État actuel
 
 Le runtime devaimazing est **fonctionnellement complet et testé de bout en bout** :
-`state.py`, `config.py`, `tools/*.py` (filesystem, git, ollama, claude_code, tracer),
-`graph.py`, les 7 `nodes/*.py` (pm, architect, backend, frontend, test, security,
-closer), `metrics.py` et `cli.py` (`run`, `resume`, `retry`, `run-agent`, `runs`,
-`metrics`, `new-project`, `projects`, `doctor`) sont tous implémentés — voir
-`CLAUDE.md` pour la convention (stub-first reste appliquée par le pipeline aux
-projets *cibles*, pas à ce dépôt). **368/368 tests verts** sur `runtime/tests/`
-(2026-07-21, machine Linux, largeur de terminal par défaut 80 colonnes) —
-`test_new_project_target_exists_not_git_repo_prints_error`, précédemment signalé
-en échec à cause du retour à la ligne Rich dépendant de la largeur du terminal,
-passe dans cet environnement ; sa sensibilité à la largeur du terminal n'est pas
-corrigée dans le code, donc un échec ponctuel sur une autre machine/largeur reste
-possible.
+`state.py`, `config.py`, `tools/*.py` (filesystem, git, ollama, claude_code, tracer,
+registry, queries, project_config), `graph.py`, les 7 `nodes/*.py` (pm, architect,
+backend, frontend, test, security, closer), `metrics.py` et `cli.py` (`run`, `resume`,
+`retry`, `run-agent`, `runs`, `metrics`, `new-project`, `projects`, `doctor`) sont
+tous implémentés — voir `CLAUDE.md` pour la convention (stub-first reste appliquée
+par le pipeline aux projets *cibles*, pas à ce dépôt). **396/396 tests verts** sur
+`runtime/tests/` (2026-07-24) — `test_new_project_target_exists_not_git_repo_prints_error`,
+précédemment signalé en échec à cause du retour à la ligne Rich dépendant de la
+largeur du terminal, passe dans cet environnement ; sa sensibilité à la largeur du
+terminal n'est pas corrigée dans le code, donc un échec ponctuel sur une autre
+machine/largeur reste possible.
+
+**2026-07-24 — ADR 0013 (Telegram + Devaimazing), tranche S1 : registre
+d'outils + lecture seule, sans bot ni Gemma.** L'ADR 0013 (interface Telegram,
+agent Devaimazing, registre d'outils à confirmation universelle) et l'ADR 0014
+(transcription vocale Whisper) ont été actées comme décisions de conception
+(2026-07-23). Ce chantier commence leur implémentation, découpée en 5 tranches
+verticales indépendantes (S1 à S5) — décision utilisateur : implémenter
+uniquement S1 dans ce chantier, S2-S5 restent à faire.
+
+Livré (S1, zéro dépendance réseau externe, zéro appel Telegram/Ollama) :
+- `runtime/studio/tools/registry.py` : `ToolSpec`/`ToolResult`/`TOOL_REGISTRY`
+  (les 6 outils de la table ADR 0013 Décision 4 : `lire_statut`,
+  `lire_progression`, `lister_projets`, `creer_projet`, `archive_projet`,
+  `reject_checkpoint`, `stop_run` — 7 en comptant `lister_projets`, ajouté au-delà
+  de la table de l'ADR pour couvrir la commande `/projects` existante), `to_ollama_tool`
+  (traduction function-calling, préparée pour S4), `parse_slash_command`,
+  `execute_tool` (point d'appel unique — court-circuite le handler si
+  `requiert_confirmation` et pas confirmé, jamais de duplication entre voie
+  slash et voie langage naturel). Seuls `lire_statut`/`lire_progression`/
+  `lister_projets` ont un handler réel ; les 4 autres lèvent `NotImplementedError`
+  jusqu'à leur tranche.
+- `runtime/studio/tools/queries.py` : `get_run_snapshot`, `get_run_progression`,
+  `build_progression_summary` (extraction pure, réutilisée par
+  `cli.py::_print_retry_diagnostic` pour ne pas dupliquer la logique existante),
+  `parse_run_history_table` et `list_projects` — extraites/généralisées depuis
+  `cli.py` (refactor à comportement strictement inchangé, `test_cli.py` passe
+  sans modification d'assertion).
+- `runtime/studio/tools/project_config.py` : `set_project_thread_id` — écrit
+  `telegram.thread_id` dans `config/projects/<nom>.yml` par édition de texte
+  ciblée (pas de round-trip YAML complet) pour préserver les commentaires
+  existants du fichier, validé par `yaml.safe_load` avant écriture.
+- `runtime/studio/tools/git.py` : `SYSTEM_GIT_IDENTITIES` (distinct de
+  `AGENT_GIT_IDENTITIES` — Devaimazing n'a aucune identité Git en tant qu'agent)
+  et `commit_safety_snapshot` (commit de tout l'état dirty sous l'identité
+  système `devaimazing-bot`, prépare `sauvegarde_avant` pour S3, pas encore
+  appelé).
+- `runtime/studio/config.py` : nouvelle property `config_dir` (nécessaire pour
+  que `lister_projets` retrouve `config/projects/` sans dépendre du CLI).
+- `config/studio.yml` : section `telegram:` (token/chat_id en placeholder,
+  valeurs réelles attendues dans `config/local.yml`, même traitement que
+  `notifications.ntfy.topic`).
+
+**Gardé hors scope explicitement** (voir ADR 0013, tranches S2-S5) : aucun bot
+Telegram, aucune dépendance `aiogram`, aucun function-calling Gemma réel,
+aucune confirmation *rendue* à un canal (le court-circuit existe dans
+`execute_tool`, rien ne l'affiche encore). `reject_checkpoint`/`stop_run`
+demandent en plus une décision de conception séparée avant d'être câblés :
+aucun mécanisme d'annulation de run ni de rejet de checkpoint n'existe dans le
+runtime actuel (`resume` n'implémente que l'acceptation) — pas un simple
+handler à écrire, un nouveau comportement de state machine à concevoir.
 
 **2026-07-21 — nettoyage code mort + fiches projet.** Scan AST croisé
 définitions/usages sur tout `runtime/studio/**` et `runtime/tests/**` : aucune
@@ -419,6 +468,20 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    supposant `claude` installé sur l'hôte), accès réseau à Ollama
    (`localhost:11434` en dur), montage du repo projet cible en volume,
    persistance de `state.db`/`metrics.db`.
+6. **ADR 0013, tranches S2-S5** (voir entrée 2026-07-24 ci-dessus, plan complet
+   dans l'historique de session) : S2 bot Telegram (`aiogram`, process
+   long-running — premier de ce type dans le dépôt, nouveau pattern de gestion
+   de signal SIGINT/SIGTERM à écrire) + slash commands en lecture seule ; S3
+   `creer_projet`/`archive_projet` avec confirmation rendue (inline keyboard) ;
+   S4 agent Devaimazing (function-calling Gemma via `ollama.AsyncClient.chat
+   (tools=...)`, à valider empiriquement avant d'écrire le code de
+   production — fallback structured-output déjà identifié si le
+   function-calling Gemma s'avère peu fiable, voir issue ollama/ollama#7051
+   citée dans `tools/ollama.py`) ; S5 transfert General → topic-projet +
+   `IMPROVEMENTS.md`. `stop_run`/`reject_checkpoint` (déjà déclarés dans
+   `TOOL_REGISTRY` avec leurs métadonnées, handler `NotImplementedError`)
+   demandent une décision de conception séparée avant d'être câblés (voir
+   ci-dessus).
 
 Pas d'ordre de priorité déjà acté entre ces points au-delà de leur numérotation
 ci-dessus — à trancher avec l'utilisateur en début de prochaine session.

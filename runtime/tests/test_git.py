@@ -18,8 +18,10 @@ import pytest
 import studio.tools.git as git_tool
 from studio.tools.git import (
     AGENT_GIT_IDENTITIES,
+    SYSTEM_GIT_IDENTITIES,
     checkout_branch,
     commit_as_agent,
+    commit_safety_snapshot,
     create_github_remote,
     create_initial_commit,
     create_run_branch,
@@ -226,6 +228,40 @@ async def test_commit_as_agent_unknown_agent_raises(repo: Path):
 async def test_commit_as_agent_empty_files_raises(repo: Path):
     with pytest.raises(ValueError):
         await commit_as_agent(repo, agent="back", message="x", files=[])
+
+
+async def test_commit_safety_snapshot_creates_commit_with_system_identity(repo: Path):
+    (repo / "backend").mkdir()
+    (repo / "backend" / "endpoint.py").write_text("# stub\n", encoding="utf-8")
+
+    commit_hash = await commit_safety_snapshot(repo, message="chore: sauvegarde avant archivage")
+
+    assert commit_hash is not None
+    assert re.fullmatch(r"[0-9a-f]{40}", commit_hash)
+    author = _git(repo, "log", "-1", "--format=%an <%ae>")
+    name, email = SYSTEM_GIT_IDENTITIES["devaimazing-bot"]
+    assert author == f"{name} <{email}>"
+    assert _git(repo, "log", "-1", "--format=%s") == "chore: sauvegarde avant archivage"
+
+
+async def test_commit_safety_snapshot_no_changes_returns_none(repo: Path):
+    commit_hash = await commit_safety_snapshot(repo, message="chore: rien à sauvegarder")
+
+    assert commit_hash is None
+
+
+async def test_commit_safety_snapshot_emits_commit_event(repo: Path, tmp_path: Path):
+    (repo / "notes.txt").write_text("idée\n", encoding="utf-8")
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
+
+    commit_hash = await commit_safety_snapshot(repo, message="chore: sauvegarde", tracer=tracer)
+
+    events = [json.loads(l) for l in tracer._tracer.trace_path.read_text(encoding="utf-8").splitlines()]
+    assert len(events) == 1
+    assert events[0]["event"] == "commit"
+    assert events[0]["hash"] == commit_hash
+    assert events[0]["git_identity"] == "devaimazing-bot"
+    assert events[0]["files"] == ["notes.txt"]
 
 
 async def test_merge_run_branch(repo: Path):

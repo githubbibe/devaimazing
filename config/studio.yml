@@ -91,6 +91,15 @@ notifications:
     - checkpoint_pending
     - run_completed
 
+# Interface Telegram (ADR 0013, socle uniquement — bot pas encore implémenté,
+# voir docs/roadmap.md). Token et chat_id réels dans config/local.yml
+# (gitignoré), jamais ici — même traitement que notifications.ntfy.topic
+# ci-dessus.
+telegram:
+  token: <PLACEHOLDER_TELEGRAM_TOKEN>
+  allowed_chat_id: <PLACEHOLDER_CHAT_ID>  # mono-utilisateur, tout autre chat_id est ignoré
+  general_topic_alias: "General"
+
 # Logging
 logging:
   level: INFO

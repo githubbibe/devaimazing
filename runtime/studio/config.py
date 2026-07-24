@@ -91,6 +91,11 @@ class StudioConfig:
         self._raw = merged
 
     @property
+    def config_dir(self) -> Path:
+        """Répertoire de config effectivement utilisé (studio.yml, projects/, local.yml)."""
+        return self._config_dir
+
+    @property
     def repo_path(self) -> Path:
         """Chemin absolu vers le repo du projet cible."""
         raw = self._raw.get("repo_path")
