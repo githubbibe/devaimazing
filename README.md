@@ -232,7 +232,10 @@ devaimazing/
 │   │       ├── ollama.py        # Wrapper LLM local
 │   │       ├── git.py           # Ops Git (commits signes par agent)
 │   │       ├── filesystem.py    # Lecture/ecriture fiches
-│   │       └── pyenv.py         # Verif syntaxe/import (venv dedie par projet cible)
+│   │       ├── pyenv.py         # Verif syntaxe/import (venv dedie par projet cible)
+│   │       ├── registry.py      # Registre d'outils a confirmation (ADR 0013, S1)
+│   │       ├── queries.py       # Lectures run/projet, reutilisees par CLI et registre
+│   │       └── project_config.py # Ecriture ciblee config/projects/*.yml (thread_id)
 │   └── tests/
 ├── config/
 │   ├── studio.yml               # Config globale (modeles, paths)
