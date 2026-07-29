@@ -841,10 +841,7 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    capturés dans `state.agent_card_metadata` mais jamais vérifiés : rien
    n'empêche aujourd'hui Back/Front d'écrire hors du périmètre qu'ils ont
    eux-mêmes déclaré.
-3. **Notification ntfy sur échec de test** — non câblée dans `nodes/test.py`
-   (le mécanisme d'override local `config/local.yml` existe déjà, mais l'appel
-   n'est fait nulle part sur un échec de non-régression).
-4. **Visibilité sur l'avancement d'un run / texte brut généré par les agents**
+3. **Visibilité sur l'avancement d'un run / texte brut généré par les agents**
    — besoin exprimé le 2026-07-15. Partiellement couvert le 2026-07-16 : un
    message "exécution en cours" + pointeur `tail -f trace.jsonl` répond à
    "est-ce vivant / comment suivre en direct" (voir entrée du même jour
@@ -852,13 +849,13 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    qui formaterait trace.jsonl (au lieu de le laisser en JSONL brut à lire
    via `tail`) ; tous les agents ou seulement PM ; cas de succès inclus (pas
    seulement `feedback_sent`).
-5. **Conteneurisation de devaimazing lui-même (Podman)** — décidée mais
+4. **Conteneurisation de devaimazing lui-même (Podman)** — décidée mais
    explicitement reportée à la toute fin du projet (2026-07-14), aucun travail
    à engager avant. Implications non câblées : Claude Code CLI (sous-process
    supposant `claude` installé sur l'hôte), accès réseau à Ollama
    (`localhost:11434` en dur), montage du repo projet cible en volume,
    persistance de `state.db`/`metrics.db`.
-6. **ADR 0013, tranche S4 — agent Devaimazing (function-calling)** — **livrée
+5. **ADR 0013, tranche S4 — agent Devaimazing (function-calling)** — **livrée
    le 2026-07-29** (S1-S3 le 2026-07-24 ; gate empirique le 2026-07-24 ;
    résultat consolidé, code de production et câblage dans le bot le
    2026-07-29, voir entrées ci-dessus). Function-calling natif Gemma reste
@@ -898,7 +895,7 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    d'un projet » (limitation notée dans l'entrée S2 du 2026-07-24 : `run_id`
    doit encore être tapé explicitement dans les commandes slash) à trancher
    aussi, indépendamment des tranches S4-S5.
-7. **ADR 0014 — transcription vocale (Whisper), livrée le 2026-07-29** :
+6. **ADR 0014 — transcription vocale (Whisper), livrée le 2026-07-29** :
    code écrit, testé unitairement, câblé et validé en conditions réelles
    (message vocal réel → transcription → `lister_projets` → données
    correctes, voir entrée dédiée ci-dessus). Reste :

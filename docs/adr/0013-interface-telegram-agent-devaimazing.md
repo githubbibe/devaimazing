@@ -59,6 +59,16 @@ Telegram est indisponible) plutôt qu'être supprimé sèchement. Ce séquenceme
 de reproduire, en sens inverse, le problème que la suppression du 2026-07-22 a
 justement corrigé (documentation en avance sur une implémentation qui ne suit pas).
 
+**Transition actée le 2026-07-29** : l'interface Telegram étant désormais
+implémentée et validée en conditions réelles (voir `docs/roadmap.md`), le
+canal considéré pour toute nouvelle notification (ex. échec de test,
+retiré de « Reste à faire » dans `docs/roadmap.md` à cette date) est
+Telegram, pas `ntfy`. `ntfy` reste en place tel quel dans `nodes/closer.py`
+(pas retiré, code existant non touché) mais devient le secours documenté
+prévu ci-dessus plutôt qu'un canal à étendre — toute future notification
+(succès/échec de run, alerte) doit être envisagée côté bot Telegram
+d'abord.
+
 ## Décision 2 — Un groupe Telegram unique avec topics
 
 **Retenu** : un seul groupe Telegram, topics activés, un topic = un projet piloté.
