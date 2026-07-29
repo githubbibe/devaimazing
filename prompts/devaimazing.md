@@ -2,12 +2,12 @@
 
 ## Statut
 
-**Implémenté (ADR 0013), tranches S1-S4.** Le bot Telegram (lecture seule,
-slash commands avec confirmation rendue, et compréhension du langage
-naturel) et le registre d'outils sont câblés
-(`runtime/studio/telegram/`, `runtime/studio/tools/registry.py`,
-`runtime/studio/devaimazing/agent.py` — validé empiriquement le 2026-07-29,
-voir docs/roadmap.md). Les
+**Implémenté (ADR 0013 tranches S1-S4 + ADR 0014).** Le bot Telegram (lecture
+seule, slash commands avec confirmation rendue, compréhension du langage
+naturel, et messages vocaux transcrits par Whisper) et le registre d'outils
+sont câblés (`runtime/studio/telegram/`, `runtime/studio/tools/registry.py`,
+`runtime/studio/devaimazing/agent.py`, `runtime/studio/tools/whisper.py` —
+validé en conditions réelles le 2026-07-29, voir docs/roadmap.md). Les
 capacités de transfert au PM, détection de projet dans General et
 `IMPROVEMENTS.md` (items 5, 6, 8 ci-dessous) sont tranche S5, non commencées.
 

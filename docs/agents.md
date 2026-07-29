@@ -13,7 +13,7 @@ Les agents auditeurs (Architecte, Sécu) tournent sur Sonnet, qui domine Qwen en
 Un neuvième rôle, **Devaimazing**, existe en dehors de ce pipeline de run : c'est une
 interface conversationnelle transverse (Telegram), pas un agent de production ou
 d'audit — il ne compte ni dans les 8 rôles ni dans les 6 nodes du graphe LangGraph
-(ADR 0005). **Décidé (ADR 0013), pas encore implémenté** : voir sa section dédiée
+(ADR 0005). **Implémenté (ADR 0013 + ADR 0014)** : voir sa section dédiée
 en fin de document.
 
 ---
@@ -153,24 +153,25 @@ en fin de document.
 
 ## Devaimazing (rôle transverse, hors pipeline de run)
 
-**Statut** : décidé (ADR 0013), implémentation commencée le 2026-07-24 —
-tranche S1 (`runtime/studio/tools/registry.py`, registre d'outils), tranche
-S2 (`runtime/studio/telegram/`, bot Telegram fonctionnel via `devaimazing
-telegram-bot`) et tranche S3 (`/new`, `/archive` avec confirmation rendue en
-clavier Oui/Non — création/archivage de topic-projet, sauvegarde
-commit+push avant archivage). Aucun function-calling Gemma ne tourne encore
-à ce jour — Devaimazing lui-même (compréhension du langage naturel) n'existe
-pas encore, seul le routage des commandes slash existe (voir
-`docs/roadmap.md` pour le détail des tranches restantes). Cette section
-documente la conception cible.
+**Statut** : implémenté (ADR 0013 + ADR 0014), tranches S1-S4 livrées le
+2026-07-29 et validées en conditions réelles sur un vrai bot Telegram —
+registre d'outils (`runtime/studio/tools/registry.py`), bot fonctionnel
+(`runtime/studio/telegram/`, `devaimazing telegram-bot`), `/new`/`/archive`
+avec confirmation rendue en clavier Oui/Non, compréhension du langage
+naturel (`runtime/studio/devaimazing/agent.py` — fallback structured-output
+sur Gemma, function-calling natif exclu, non supporté par Gemma 3) et
+transcription vocale (`runtime/studio/tools/whisper.py`, `whisper.cpp`
+local). Reste non fait (tranche S5, voir `docs/roadmap.md`) : le transfert
+au PM pour du jugement/cadrage et la détection automatique de projet dans
+General — décrits ci-dessous comme cible, pas encore câblés.
 
 **LLM** : Ollama, Gemma (généraliste, préféré à Qwen pour ce rôle car son cœur de
 métier est la conversation naturelle, pas la production de code — pas d'audit ni de
 cadrage haut niveau non plus, le principe auditeur/producteur ci-dessus ne s'applique
 pas à lui)
 **Stateful** : non — pas de checkpointer dédié (contrairement au PM). Mémoire portée
-par `config/projects/*.yml` (`thread_id` du topic associé à chaque projet, une fois
-implémenté) et par sa présence dans tous les topics du groupe Telegram
+par `config/projects/*.yml` (`thread_id` du topic associé à chaque projet) et par
+sa présence dans tous les topics du groupe Telegram
 **Identité Git** : aucune — n'écrit jamais de code, ne commite jamais
 **Périmètre** : lecture transverse (`project-map.md`, `specs/`, README des projets) ;
 écriture limitée à `IMPROVEMENTS.md` et aux appels du registre d'outils partagé avec
@@ -182,11 +183,13 @@ les commandes slash Telegram
   topic « General » transverse)
 - Crée/ferme les topics-projet, oriente les demandes vers le bon topic, répond aux
   questions factuelles sur l'état d'un projet sans solliciter le PM
-- Transfère au PM du projet concerné toute question nécessitant un jugement — le PM
-  répond alors dans le topic du projet, jamais dans General
-- Comprend des demandes d'action en langage naturel et déclenche les outils
-  correspondants, avec confirmation systématique pour toute action destructrice
-  (propriété de l'outil, pas du canal d'appel — voir ADR 0013, Décision 4)
+- Comprend des demandes d'action en langage naturel (tapées ou dictées, transcrites
+  par Whisper — ADR 0014) et déclenche les outils correspondants, avec confirmation
+  systématique pour toute action destructrice (propriété de l'outil, pas du canal
+  d'appel — voir ADR 0013, Décision 4)
+- **Cible, pas encore câblé (S5)** : transfère au PM du projet concerné toute
+  question nécessitant un jugement — le PM répondrait alors dans le topic du
+  projet, jamais dans General
 
 **Skills** : `prompts/devaimazing.md` (prompt système complet)
 

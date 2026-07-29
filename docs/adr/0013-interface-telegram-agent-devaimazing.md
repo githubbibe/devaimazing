@@ -1,12 +1,14 @@
 # ADR 0013 - Interface Telegram native, agent Devaimazing, modèle d'outils à confirmation universelle
 
 **Date** : 2026-07
-**Statut** : Accepté — implémentation commencée le 2026-07-24 (tranches S1 :
-registre d'outils + lecture seule ; S2 : bot Telegram fonctionnel en lecture
-seule ; S3 : création/archivage de projet avec confirmation rendue — voir
-`docs/roadmap.md`). Function-calling Gemma (agent Devaimazing lui-même) et
-transfert General → topic-projet restent à faire (tranches S4-S5, voir
-« Conséquences »).
+**Statut** : Accepté et implémenté — tranches S1 (registre d'outils + lecture
+seule), S2 (bot Telegram fonctionnel), S3 (création/archivage de projet avec
+confirmation rendue) le 2026-07-24, puis S4 (compréhension du langage
+naturel par l'agent Devaimazing, fallback structured-output sur Gemma —
+function-calling natif exclu) le 2026-07-29, validées en conditions réelles
+sur un vrai bot Telegram — voir `docs/roadmap.md`. Seule la tranche S5
+(transfert General → topic-projet, `IMPROVEMENTS.md`) reste à faire, voir
+« Conséquences ».
 
 ## Contexte et retournement assumé
 
@@ -226,13 +228,16 @@ métadonnées de confirmation.
   responsabilités, ce qu'il ne fait pas, format de sortie), sur le modèle des
   prompts d'agent existants.
 - `docs/agents.md` gagne une section Devaimazing, explicitement marquée « décidé,
-  pas encore implémenté », distincte des 8 rôles du pipeline de run (elle ne
-  modifie ni le compte ni la séquence de ce pipeline — Devaimazing n'est pas un
+  pas encore implémenté » (mise à jour au fil des tranches livrées, voir « Fait
+  le 2026-07-24/29 » ci-dessous — la section reflète maintenant l'implémentation
+  réelle, plus ce statut initial), distincte des 8 rôles du pipeline de run (elle
+  ne modifie ni le compte ni la séquence de ce pipeline — Devaimazing n'est pas un
   node du graphe LangGraph à 6 nodes, voir ADR 0005).
 - `ARCHITECTURE.md` : la section « Interface de pilotage » documente ce choix comme
-  décidé mais non implémenté, sans remplacer la description de la CLI comme unique
-  canal réel aujourd'hui. Un nouveau composant externe « Interface Telegram » est
-  ajouté avec le même statut. La section Notifications (ntfy) est mise à jour pour
+  décidé mais non implémenté à l'origine (même mise à jour au fil des tranches),
+  sans remplacer la description de la CLI comme unique canal réel à l'époque.
+  Un nouveau composant externe « Interface Telegram » est ajouté avec le même
+  statut initial. La section Notifications (ntfy) est mise à jour pour
   refléter le statut transitoire de `ntfy` décrit en Décision 1. La liste des
   décisions clés gagne cette entrée.
 - `docs/workflow.md` (Phase 0 - Réception) gagne une note sur ce canal d'entrée

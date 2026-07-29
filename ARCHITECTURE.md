@@ -122,8 +122,8 @@ mais `ntfy` n'est pas retiré pour autant : il deviendra un canal de secours
 documenté (si Telegram est indisponible) plutôt que d'être supprimé avant qu'un
 remplaçant fonctionnel existe.
 
-**Interface Telegram (décidée le 2026-07-23, ADR 0013 — implémentation
-commencée le 2026-07-24, voir `docs/roadmap.md`)**
+**Interface Telegram (décidée le 2026-07-23, ADR 0013 — implémentée et
+validée en conditions réelles le 2026-07-29, voir `docs/roadmap.md`)**
 
 Un groupe Telegram unique avec topics (un topic par projet piloté, plus un topic
 « General » transverse) porte l'interface de pilotage à distance. Un seul bot
@@ -133,8 +133,11 @@ qu'au `chat_id` de l'utilisateur du studio (mono-utilisateur). Droit admin minim
 commande `devaimazing telegram-bot`) route `/status`, `/progression`,
 `/projects` vers le registre d'outils, et `/new`/`/archive` (création/archivage
 de topic-projet) avec confirmation rendue en clavier Oui/Non — sauvegarde
-(commit + push) automatique avant tout archivage. Function-calling Gemma
-(compréhension du langage naturel par Devaimazing) reste à faire.
+(commit + push) automatique avant tout archivage. La compréhension du langage
+naturel par Devaimazing (fallback structured-output, function-calling natif
+exclu — Gemma 3 ne le supporte pas, voir ADR 0013) est câblée et validée en
+conditions réelles : mêmes commandes possibles en texte libre, dans le topic
+General ou un topic-projet.
 
 Le rôle **Devaimazing** (Gemma local, voir `docs/agents.md`) porte l'interface
 conversationnelle : création/fermeture de topics-projet, orientation des demandes,
@@ -172,20 +175,19 @@ sans avoir besoin d'un environnement de test connecté à la production. Voir
 
 **Interface de pilotage**
 
-Le pilotage réel aujourd'hui se fait exclusivement via la CLI (`devaimazing run`,
-`resume`, `retry`, `run-agent`, `runs`, `metrics`, `new-project`, `projects`,
-`doctor`) — voir `README.md` section Usage. Pas d'interface graphique ni de canal de
-contrôle à distance en exécution à ce jour.
+Le pilotage se fait via la CLI (`devaimazing run`, `resume`, `retry`, `run-agent`,
+`runs`, `metrics`, `new-project`, `projects`, `doctor`) — voir `README.md` section
+Usage — et, depuis le 2026-07-29 (ADR 0013), via un bot Telegram
+(`devaimazing telegram-bot`) qui redevient un canal de pilotage à part entière, y
+compris à distance (AFK/mobile), commandes slash et langage naturel (Devaimazing).
+Pas d'interface graphique (PWA) à ce jour.
 
-**Décidé, pas encore implémenté (ADR 0013)** : une interface Telegram redevient
-l'interface principale de pilotage à part entière, y compris à distance (AFK/mobile).
-Ce choix révise la suppression du 2026-07-22 (commit `bf8e0ab`) qui avait retiré la
-vision OpenClaw/Telegram/PWA comme non tranchée ; l'abandon de la PWA comme prochaine
-étape est confirmé, pour la même raison de fond (minimisation du code pour un niveau
-de fiabilité acceptable — Telegram fournit nativement ce qu'une PWA demanderait de
-coder à la main). Voir « Interface Telegram » ci-dessous et `docs/agents.md` pour le
-rôle Devaimazing qui la porte. Tant que cette interface n'est pas construite, la CLI
-reste le seul canal de pilotage réel.
+Ce choix Telegram révise la suppression du 2026-07-22 (commit `bf8e0ab`) qui avait
+retiré la vision OpenClaw/Telegram/PWA comme non tranchée ; l'abandon de la PWA
+comme prochaine étape est confirmé, pour la même raison de fond (minimisation du
+code pour un niveau de fiabilité acceptable — Telegram fournit nativement ce
+qu'une PWA demanderait de coder à la main). Voir « Interface Telegram » ci-dessus
+et `docs/agents.md` pour le rôle Devaimazing qui la porte.
 
 ## Décisions clés
 

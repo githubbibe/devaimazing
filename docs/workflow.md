@@ -19,10 +19,14 @@ leur tour selon la séquence définie par le PM en phase 3.
 L'utilisateur envoie un objectif en langage libre. Le PM engage le dialogue de cadrage
 (phase 1). Aucune branche Git n'est créée à ce stade.
 
-**Décidé, pas encore implémenté (ADR 0013)** : une interface Telegram (groupe à
-topics, rôle transverse Devaimazing) est prévue comme canal de réception
-supplémentaire, notamment pour le pilotage à distance. Aujourd'hui, l'unique canal de
-réception réel est la CLI (`devaimazing run <projet>`).
+**Interface Telegram implémentée (ADR 0013 + ADR 0014, 2026-07-29)** : un bot
+Telegram (groupe à topics, rôle transverse Devaimazing, texte tapé ou message
+vocal transcrit par Whisper) est un canal réel pour piloter le studio (statut,
+projets, création/archivage), en plus de la CLI (`devaimazing run <projet>`).
+**Reste non câblé (S5, voir `docs/roadmap.md`)** : le transfert d'un objectif en
+langage libre vers le PM pour engager le cadrage de la phase 1 — Devaimazing
+répond aujourd'hui aux questions factuelles et pilote les outils du registre,
+mais ne déclenche pas encore de nouveau run depuis une intention conversationnelle.
 
 ---
 

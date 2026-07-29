@@ -233,12 +233,15 @@ devaimazing/
 │   │       ├── git.py           # Ops Git (commits signes par agent)
 │   │       ├── filesystem.py    # Lecture/ecriture fiches
 │   │       ├── pyenv.py         # Verif syntaxe/import (venv dedie par projet cible)
-│   │       ├── registry.py      # Registre d'outils a confirmation (ADR 0013, S1)
+│   │       ├── registry.py      # Registre d'outils a confirmation (ADR 0013)
 │   │       ├── queries.py       # Lectures run/projet, reutilisees par CLI et registre
-│   │       └── project_config.py # Ecriture ciblee config/projects/*.yml (thread_id)
-│   ├── telegram/                 # Bot Telegram (ADR 0013, S2 - lecture seule)
+│   │       ├── project_config.py # Ecriture ciblee config/projects/*.yml (thread_id)
+│   │       └── whisper.py       # Wrapper whisper.cpp, transcription vocale (ADR 0014)
+│   ├── devaimazing/               # Agent Devaimazing, langage naturel (ADR 0013, S4)
+│   │   └── agent.py              # Prompt systeme + dispatch vers le registre d'outils
+│   ├── telegram/                  # Bot Telegram (ADR 0013 + 0014)
 │   │   ├── bot.py                # Construction Bot/Dispatcher aiogram, polling
-│   │   ├── handlers.py           # Dispatch slash commands -> registre d'outils
+│   │   ├── handlers.py           # Dispatch slash commands + langage naturel + vocal
 │   │   └── topics.py             # Resolution topic Telegram <-> projet
 │   └── tests/
 ├── config/
@@ -344,8 +347,10 @@ devaimazing new-project <project-name>
 # Lister les projets configures
 devaimazing projects
 
-# Demarrer le bot Telegram (ADR 0013, tranche S2 : lecture seule uniquement,
-# necessite telegram.token/allowed_chat_id reels dans config/local.yml)
+# Demarrer le bot Telegram (ADR 0013 + 0014 : commandes slash, langage
+# naturel et messages vocaux via Devaimazing/Whisper - necessite
+# telegram.token/allowed_chat_id reels dans config/local.yml, et
+# infra/whisper/ demarre pour la transcription vocale)
 devaimazing telegram-bot
 ```
 
