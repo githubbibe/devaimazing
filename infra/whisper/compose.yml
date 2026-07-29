@@ -1,6 +1,9 @@
 services:
   whisper:
     image: ghcr.io/ggerganov/whisper.cpp:main
+    platform: linux/amd64  # image officielle amd64-only (pas de build arm64/v8 publié,
+                            # vérifié via `podman manifest inspect` le 2026-07-29) —
+                            # tourne en émulation QEMU sur Apple Silicon.
     container_name: whisper
     restart: unless-stopped
     entrypoint: /app/build/bin/whisper-server
