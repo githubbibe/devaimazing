@@ -18,9 +18,15 @@ from types import SimpleNamespace
 from typing import Any, Optional, Union
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from studio.config import StudioConfig, default_config_dir, load_global_devaimazing_config
+from studio.config import (
+    StudioConfig,
+    default_config_dir,
+    load_global_devaimazing_config,
+    load_global_whisper_config,
+)
 from studio.devaimazing.agent import dispatch_tool_call, interpret_message
 from studio.telegram.topics import load_topic_map, resolve_project
 from studio.tools.registry import (
@@ -29,6 +35,7 @@ from studio.tools.registry import (
     format_tool_result,
     parse_slash_command,
 )
+from studio.tools.whisper import ExternalServiceError, transcribe_voice_message
 
 # Outils utilisables depuis le topic General, sans résolution de projet par
 # le topic — le nom du projet vient de l'argument de la commande elle-même
@@ -157,6 +164,69 @@ async def handle_slash_command(
         return HandlerReply(result.summary, confirmation_id=confirmation_id)
 
     return HandlerReply(format_tool_result(result))
+
+
+async def resolve_message_text(
+    *,
+    text: Optional[str],
+    voice_file_id: Optional[str],
+    audio_file_id: Optional[str],
+    bot: Any,
+    config_dir: Path,
+) -> Optional[str]:
+    """
+    Résout le texte à traiter à partir d'un message Telegram (ADR 0014).
+
+    Si `text` est déjà fourni (message tapé), le renvoie tel quel — pas
+    d'appel Whisper. Sinon, si un fichier vocal/audio est présent, le
+    télécharge et le transcrit via `tools.whisper.transcribe_voice_message`.
+    Au-delà de cette fonction, Devaimazing ne fait plus AUCUNE différence
+    entre texte tapé et texte transcrit (voir ADR 0014, prompts/devaimazing.md
+    section « Origine des messages ») — c'est la seule fonction du dépôt qui
+    connaît la distinction.
+
+    Args:
+        text: `message.text` (None si le message n'est pas du texte tapé).
+        voice_file_id: `message.voice.file_id` (None si pas de message vocal).
+        audio_file_id: `message.audio.file_id` (None si pas de fichier audio).
+        bot: Contexte Telegram (aiogram.Bot ou équivalent testable exposant
+            `download(file_id) -> BinaryIO`).
+        config_dir: Répertoire de config (pour load_global_whisper_config).
+
+    Returns:
+        Le texte à traiter, ou None si rien n'est exploitable (ni texte, ni
+        vocal/audio — ex. sticker, photo) OU si la transcription échoue
+        (téléchargement impossible, serveur whisper.cpp injoignable, aucune
+        parole détectée) : ce cas de figure n'est PAS distingué de "rien à
+        traiter" par le type de retour — c'est à l'appelant (build_router)
+        de décider s'il doit prévenir l'utilisateur, en sachant lui-même si
+        un fichier vocal/audio était présent (voir _on_message).
+    """
+    if text:
+        return text
+
+    file_id = voice_file_id or audio_file_id
+    if file_id is None or bot is None:
+        return None
+
+    try:
+        buffer = await bot.download(file_id)
+    except TelegramAPIError:
+        return None
+    if buffer is None:
+        return None
+
+    whisper_config = load_global_whisper_config(config_dir)
+    try:
+        transcript = await transcribe_voice_message(
+            buffer.read(),
+            base_url=whisper_config["base_url"],
+            language=whisper_config["language"],
+        )
+    except (ExternalServiceError, TimeoutError):
+        return None
+
+    return transcript or None
 
 
 async def handle_natural_language(
@@ -290,8 +360,6 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
 
     @router.message()
     async def _on_message(message: Message) -> None:
-        if not message.text:
-            return
         if message.from_user is not None and message.from_user.is_bot:
             # Aucune commande slash n'a de sens venant d'un bot, mais
             # surtout : sans ce garde-fou, tout message de bot déclencherait
@@ -301,19 +369,11 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
             # les messages envoyés par le bot lui-même à son propre handler,
             # mais rien ne garantit l'absence d'un autre bot dans le groupe.
             return
-        reply = await handle_slash_command(
-            message.text,
-            chat_id=message.chat.id,
-            message_thread_id=message.message_thread_id,
-            allowed_chat_id=allowed_chat_id,
-            config_dir=resolved_config_dir,
-            bot=message.bot,
-        )
-        if reply is None and parse_slash_command(message.text) is None:
-            # Pas une commande slash (reconnue ou non) : tenter la
-            # compréhension du langage naturel par Devaimazing (ADR 0013,
-            # tranche S4) plutôt que d'ignorer silencieusement le message.
-            reply = await handle_natural_language(
+        if message.chat.id != allowed_chat_id:
+            return
+
+        if message.text:
+            reply = await handle_slash_command(
                 message.text,
                 chat_id=message.chat.id,
                 message_thread_id=message.message_thread_id,
@@ -321,6 +381,47 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
                 config_dir=resolved_config_dir,
                 bot=message.bot,
             )
+            if reply is None and parse_slash_command(message.text) is None:
+                # Pas une commande slash (reconnue ou non) : tenter la
+                # compréhension du langage naturel par Devaimazing (ADR
+                # 0013, tranche S4) plutôt que d'ignorer silencieusement.
+                reply = await handle_natural_language(
+                    message.text,
+                    chat_id=message.chat.id,
+                    message_thread_id=message.message_thread_id,
+                    allowed_chat_id=allowed_chat_id,
+                    config_dir=resolved_config_dir,
+                    bot=message.bot,
+                )
+        elif message.voice is not None or message.audio is not None:
+            # Message vocal/audio (ADR 0014) : jamais interprété comme une
+            # commande slash (une commande slash n'a pas vocation à être
+            # dictée à l'oral, voir ADR 0014) — transcrit puis traité
+            # exactement comme un message texte natif par Devaimazing.
+            text = await resolve_message_text(
+                text=None,
+                voice_file_id=message.voice.file_id if message.voice else None,
+                audio_file_id=message.audio.file_id if message.audio else None,
+                bot=message.bot,
+                config_dir=resolved_config_dir,
+            )
+            if text is None:
+                await message.reply(
+                    "Je n'ai pas réussi à transcrire ce message vocal, "
+                    "peux-tu réessayer ou taper ton message ?"
+                )
+                return
+            reply = await handle_natural_language(
+                text,
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id,
+                allowed_chat_id=allowed_chat_id,
+                config_dir=resolved_config_dir,
+                bot=message.bot,
+            )
+        else:
+            return
+
         if reply is None:
             return
         keyboard = (

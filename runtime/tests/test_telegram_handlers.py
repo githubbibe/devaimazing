@@ -11,15 +11,19 @@ from types import SimpleNamespace
 
 import pytest
 import studio.devaimazing.agent as agent_module
+import studio.telegram.handlers as handlers_module
 import studio.tools.queries as queries_module
 import studio.tools.registry as registry_module
 import yaml
+from aiogram.exceptions import TelegramAPIError
 from studio.telegram.handlers import (
     _pending_confirmations,
     handle_confirmation_callback,
     handle_natural_language,
     handle_slash_command,
+    resolve_message_text,
 )
+from studio.tools.whisper import ExternalServiceError
 
 _ALLOWED_CHAT_ID = 42
 
@@ -492,3 +496,144 @@ async def test_on_message_ignores_bot_authored_messages():
     await on_message(message)
 
     assert calls == []
+
+
+# --- transcription vocale (Whisper, ADR 0014) ---
+
+class _FakeBuffer:
+    def __init__(self, data: bytes):
+        self._data = data
+
+    def read(self) -> bytes:
+        return self._data
+
+
+async def test_resolve_message_text_prefers_typed_text_over_audio(config_dir: Path):
+    async def fake_download(file_id):
+        raise AssertionError("download ne doit pas être appelé si du texte est déjà présent")
+
+    bot = SimpleNamespace(download=fake_download)
+
+    text = await resolve_message_text(
+        text="salut", voice_file_id="voice123", audio_file_id=None,
+        bot=bot, config_dir=config_dir,
+    )
+
+    assert text == "salut"
+
+
+async def test_resolve_message_text_transcribes_voice(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path
+):
+    captured = {}
+
+    async def fake_download(file_id):
+        captured["file_id"] = file_id
+        return _FakeBuffer(b"audio-bytes")
+
+    async def fake_transcribe(audio_bytes, *, base_url, language):
+        captured["audio_bytes"] = audio_bytes
+        captured["base_url"] = base_url
+        captured["language"] = language
+        return "quel est le statut du run r1"
+
+    monkeypatch.setattr(handlers_module, "transcribe_voice_message", fake_transcribe)
+    bot = SimpleNamespace(download=fake_download)
+
+    text = await resolve_message_text(
+        text=None, voice_file_id="voice123", audio_file_id=None,
+        bot=bot, config_dir=config_dir,
+    )
+
+    assert text == "quel est le statut du run r1"
+    assert captured["file_id"] == "voice123"
+    assert captured["audio_bytes"] == b"audio-bytes"
+    assert captured["language"] == "fr"
+
+
+async def test_resolve_message_text_no_text_no_audio_returns_none(config_dir: Path):
+    text = await resolve_message_text(
+        text=None, voice_file_id=None, audio_file_id=None,
+        bot=SimpleNamespace(), config_dir=config_dir,
+    )
+
+    assert text is None
+
+
+async def test_resolve_message_text_download_failure_returns_none(config_dir: Path):
+    async def fake_download(file_id):
+        raise TelegramAPIError(method=None, message="fichier trop gros")
+
+    text = await resolve_message_text(
+        text=None, voice_file_id="voice123", audio_file_id=None,
+        bot=SimpleNamespace(download=fake_download), config_dir=config_dir,
+    )
+
+    assert text is None
+
+
+async def test_resolve_message_text_transcription_failure_returns_none(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path
+):
+    async def fake_download(file_id):
+        return _FakeBuffer(b"audio-bytes")
+
+    async def fake_transcribe(audio_bytes, *, base_url, language):
+        raise ExternalServiceError("whisper.cpp injoignable")
+
+    monkeypatch.setattr(handlers_module, "transcribe_voice_message", fake_transcribe)
+
+    text = await resolve_message_text(
+        text=None, voice_file_id="voice123", audio_file_id=None,
+        bot=SimpleNamespace(download=fake_download), config_dir=config_dir,
+    )
+
+    assert text is None
+
+
+async def test_resolve_message_text_empty_transcript_returns_none(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path
+):
+    async def fake_download(file_id):
+        return _FakeBuffer(b"silence")
+
+    async def fake_transcribe(audio_bytes, *, base_url, language):
+        return ""
+
+    monkeypatch.setattr(handlers_module, "transcribe_voice_message", fake_transcribe)
+
+    text = await resolve_message_text(
+        text=None, voice_file_id="voice123", audio_file_id=None,
+        bot=SimpleNamespace(download=fake_download), config_dir=config_dir,
+    )
+
+    assert text is None
+
+
+async def test_on_message_voice_with_failed_transcription_sends_error_reply():
+    router = handlers_module.build_router(config_dir=None, allowed_chat_id=_ALLOWED_CHAT_ID)
+    on_message = router.message.handlers[0].callback
+
+    async def fake_download(file_id):
+        raise TelegramAPIError(method=None, message="erreur réseau")
+
+    calls = []
+
+    async def fake_reply(text, reply_markup=None):
+        calls.append(text)
+
+    message = SimpleNamespace(
+        text=None,
+        voice=SimpleNamespace(file_id="voice123"),
+        audio=None,
+        from_user=SimpleNamespace(is_bot=False),
+        chat=SimpleNamespace(id=_ALLOWED_CHAT_ID),
+        message_thread_id=None,
+        bot=SimpleNamespace(download=fake_download),
+        reply=fake_reply,
+    )
+
+    await on_message(message)
+
+    assert len(calls) == 1
+    assert "transcrire" in calls[0]
