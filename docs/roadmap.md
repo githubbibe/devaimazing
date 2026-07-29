@@ -925,6 +925,19 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    config `config/projects/<nom>.yml` — description, contraintes, commande
    de test, etc. — depuis Telegram) : à concevoir dans le cadre de ce
    chantier.
+   **Deuxième précision ajoutée le 2026-07-29** : la fiche projet doit aussi
+   donner accès, par boutons, au cycle de vie d'un **run** — lister les runs
+   du projet, reprendre (`resume`) un run en pause sur checkpoint, relancer
+   (`retry`) un run planté, consulter ses métriques (`metrics`), en plus de
+   `/status <run_id>` et `/progression <run_id>` déjà exposés. Écart constaté
+   en conditions réelles (premier run cadré sur `webaimazing-v2`) : `devaimazing
+   runs`/`resume`/`retry`/`metrics` (`cli.py`) n'ont **aucun équivalent dans
+   `tools/registry.py`** aujourd'hui — CLI uniquement, à la différence de
+   `/status`/`/progression` qui existent déjà mais souffrent de la même
+   limitation `run_id` tapé à la main (voir entrée S2 du 2026-07-24
+   ci-dessus). Les deux manques (outils registre absents + `run_id` non
+   résolu) sont à traiter ensemble dans ce chantier de boutons, pas
+   séparément.
 8. **Idée notée le 2026-07-29, pas encore cadrée** : mécanisme d'évolution
    des agents locaux (Devaimazing, et potentiellement Back/Front/Test) par
    boucle rétroactive + benchmark, sur le modèle de ce qui a été fait
