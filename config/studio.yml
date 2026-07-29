@@ -25,6 +25,14 @@ ollama:
   # plafond du modèle, pas de marge artificielle en-deçà.
   num_ctx: 32768
 
+# Agent Devaimazing (ADR 0013). num_ctx séparé de ollama.num_ctx ci-dessus :
+# ce dernier est calibré pour le prompt Back/Front/Test (feedback cumulé,
+# voir commentaire ci-dessus), pas pour le prompt Devaimazing (persona +
+# outils), plus court — valeur testée empiriquement le 2026-07-29 (voir
+# docs/roadmap.md).
+devaimazing:
+  num_ctx: 4096
+
 # Claude Code CLI
 claude_code:
   timeout_seconds: 300

@@ -62,6 +62,41 @@ def load_global_telegram_config(config_dir: Optional[Path] = None) -> dict:
     return dict(merged.get("telegram", {}))
 
 
+def load_global_devaimazing_config(config_dir: Optional[Path] = None) -> dict:
+    """
+    Paramètres LLM globaux de l'agent Devaimazing (ADR 0013, tranche S4).
+
+    Distinct de StudioConfig pour la même raison que
+    load_global_telegram_config : Devaimazing n'est scopé à aucun projet
+    tant que le tour de conversation n'a pas déterminé quel outil (donc quel
+    projet) est concerné — voir studio.telegram.handlers.handle_natural_language.
+
+    Args:
+        config_dir: Répertoire de config (défaut : répertoire du package devaimazing).
+
+    Returns:
+        {"model": str | None, "base_url": str, "num_ctx": int}. "model" est
+        None si models.devaimazing n'est pas défini (feature non configurée).
+
+    Raises:
+        FileNotFoundError: Si studio.yml est introuvable.
+        ValueError: Si studio.yml ou local.yml n'est pas un mapping YAML valide.
+    """
+    resolved_config_dir = Path(config_dir) if config_dir is not None else default_config_dir()
+    global_config = _read_yaml_mapping(
+        resolved_config_dir / "studio.yml", required=True, label="Configuration globale"
+    )
+    local_config = _read_yaml_mapping(
+        resolved_config_dir / "local.yml", required=False, label="Configuration locale"
+    )
+    merged = _deep_merge(global_config, local_config)
+    return {
+        "model": merged.get("models", {}).get("devaimazing"),
+        "base_url": merged.get("ollama", {}).get("base_url", "http://localhost:11434"),
+        "num_ctx": merged.get("devaimazing", {}).get("num_ctx", 4096),
+    }
+
+
 def _deep_merge(base: dict, override: dict) -> dict:
     """
     Fusionne récursivement `override` dans une copie de `base`.

@@ -1,16 +1,13 @@
 """
-Handlers Telegram — dispatch des commandes slash vers le registre d'outils
-partagé (ADR 0013, Décision 4), et rendu de la confirmation pour les outils
-`requiert_confirmation` (tranche S3 : `archive_projet` — `creer_projet`
-n'en requiert pas).
+Handlers Telegram — dispatch des commandes slash ET du langage naturel
+(Devaimazing, ADR 0013 tranche S4) vers le même registre d'outils partagé
+(Décision 4), avec rendu de la confirmation pour les outils
+`requiert_confirmation`.
 
-Pas de compréhension du langage naturel par Devaimazing (tranche S4) — tout
-texte qui n'est pas une commande slash reconnue est ignoré silencieusement.
-
-La logique de dispatch (handle_slash_command, handle_confirmation_callback)
-est volontairement séparée du câblage aiogram (build_router) : elle ne
-prend que des types simples en argument, testable sans construire de vrais
-objets Message/CallbackQuery aiogram — voir
+La logique de dispatch (handle_slash_command, handle_natural_language,
+handle_confirmation_callback) est volontairement séparée du câblage aiogram
+(build_router) : elle ne prend que des types simples en argument, testable
+sans construire de vrais objets Message/CallbackQuery aiogram — voir
 runtime/tests/test_telegram_handlers.py.
 """
 
@@ -18,14 +15,20 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from studio.config import StudioConfig, default_config_dir
+from studio.config import StudioConfig, default_config_dir, load_global_devaimazing_config
+from studio.devaimazing.agent import dispatch_tool_call, interpret_message
 from studio.telegram.topics import load_topic_map, resolve_project
-from studio.tools.registry import execute_tool, format_tool_result, parse_slash_command
+from studio.tools.registry import (
+    TOOL_REGISTRY,
+    execute_tool,
+    format_tool_result,
+    parse_slash_command,
+)
 
 # Outils utilisables depuis le topic General, sans résolution de projet par
 # le topic — le nom du projet vient de l'argument de la commande elle-même
@@ -57,6 +60,44 @@ class HandlerReply:
 
     text: str
     confirmation_id: Optional[str] = None
+
+
+def _resolve_config_for_tool(
+    tool_name: str, message_thread_id: Optional[int], config_dir: Path,
+) -> Union[Any, HandlerReply]:
+    """
+    Résout la config à transmettre à execute_tool/dispatch_tool_call pour un
+    outil donné — partagé entre handle_slash_command et
+    handle_natural_language (même règle de résolution : le nom d'outil,
+    identifié différemment selon le canal, détermine si une résolution de
+    projet par topic est nécessaire).
+
+    Returns:
+        Une config utilisable (StudioConfig ou SimpleNamespace pour les
+        outils General-scope), ou un HandlerReply d'erreur à renvoyer tel
+        quel si la résolution échoue (aucun outil n'est appelé dans ce cas).
+
+    Notes:
+        Un nom d'outil absent de TOOL_REGISTRY (halluciné par Devaimazing,
+        voir docs/roadmap.md) est traité comme General-scope plutôt que de
+        tenter une résolution de projet par topic : sans ce court-circuit,
+        un nom inconnu depuis General produirait le message trompeur
+        « utilisez le topic d'un projet » au lieu du vrai message
+        « outil inconnu » qu'execute_tool produit normalement — la
+        validation du nom reste entièrement déléguée à execute_tool, cette
+        fonction ne fait que décider s'il faut résoudre un projet avant.
+    """
+    if tool_name in _GENERAL_SCOPE_TOOLS or tool_name not in TOOL_REGISTRY:
+        return SimpleNamespace(config_dir=config_dir)
+
+    topic_map = load_topic_map(config_dir)
+    project_name = resolve_project(message_thread_id, topic_map)
+    if project_name is None:
+        return HandlerReply("Cette commande doit être utilisée dans le topic d'un projet.")
+    try:
+        return StudioConfig(project_name=project_name, config_dir=config_dir)
+    except (FileNotFoundError, ValueError) as exc:
+        return HandlerReply(f"Configuration du projet {project_name!r} invalide : {exc}")
 
 
 async def handle_slash_command(
@@ -104,17 +145,9 @@ async def handle_slash_command(
 
     tool_name, args = parsed
 
-    if tool_name in _GENERAL_SCOPE_TOOLS:
-        config: Any = SimpleNamespace(config_dir=config_dir)
-    else:
-        topic_map = load_topic_map(config_dir)
-        project_name = resolve_project(message_thread_id, topic_map)
-        if project_name is None:
-            return HandlerReply("Cette commande doit être utilisée dans le topic d'un projet.")
-        try:
-            config = StudioConfig(project_name=project_name, config_dir=config_dir)
-        except (FileNotFoundError, ValueError) as exc:
-            return HandlerReply(f"Configuration du projet {project_name!r} invalide : {exc}")
+    config = _resolve_config_for_tool(tool_name, message_thread_id, config_dir)
+    if isinstance(config, HandlerReply):
+        return config
 
     result = await execute_tool(tool_name, args, config=config, bot=bot, chat_id=chat_id)
 
@@ -124,6 +157,66 @@ async def handle_slash_command(
         return HandlerReply(result.summary, confirmation_id=confirmation_id)
 
     return HandlerReply(format_tool_result(result))
+
+
+async def handle_natural_language(
+    text: str,
+    *,
+    chat_id: int,
+    message_thread_id: Optional[int],
+    allowed_chat_id: int,
+    config_dir: Path,
+    bot: Any = None,
+) -> Optional[HandlerReply]:
+    """
+    Traite un message texte Telegram qui n'est PAS une commande slash, via
+    l'agent Devaimazing (ADR 0013, tranche S4).
+
+    À la différence de handle_slash_command, le nom d'outil (donc le projet
+    concerné) n'est connu qu'*après* l'appel LLM (interpret_message) — la
+    résolution de config est donc faite ici, après coup, avec la même règle
+    que handle_slash_command (_resolve_config_for_tool), pas en amont.
+
+    Args:
+        Voir handle_slash_command — mêmes arguments, même sémantique.
+
+    Returns:
+        HandlerReply à envoyer, ou None si aucune réponse n'est due (chat_id
+        non autorisé, ou models.devaimazing non configuré dans studio.yml —
+        feature non activée sur cette installation).
+    """
+    if chat_id != allowed_chat_id:
+        return None
+
+    llm_config = load_global_devaimazing_config(config_dir)
+    if not llm_config["model"]:
+        return None
+
+    reply, tool_call = await interpret_message(
+        text,
+        model=llm_config["model"],
+        base_url=llm_config["base_url"],
+        num_ctx=llm_config["num_ctx"],
+    )
+
+    if tool_call is None:
+        return HandlerReply(reply)
+
+    tool_name, args = tool_call["name"], tool_call["arguments"]
+    config = _resolve_config_for_tool(tool_name, message_thread_id, config_dir)
+    if isinstance(config, HandlerReply):
+        return config
+
+    text_out, pending = await dispatch_tool_call(
+        tool_name, args, config=config, bot=bot, chat_id=chat_id,
+    )
+
+    if pending is not None:
+        confirmation_id = uuid.uuid4().hex[:12]
+        _pending_confirmations[confirmation_id] = (pending[0], pending[1], config)
+        return HandlerReply(text_out, confirmation_id=confirmation_id)
+
+    return HandlerReply(text_out)
 
 
 async def handle_confirmation_callback(
@@ -199,6 +292,15 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
     async def _on_message(message: Message) -> None:
         if not message.text:
             return
+        if message.from_user is not None and message.from_user.is_bot:
+            # Aucune commande slash n'a de sens venant d'un bot, mais
+            # surtout : sans ce garde-fou, tout message de bot déclencherait
+            # un appel LLM via handle_natural_language (voir plus bas) —
+            # coûteux et risque de boucle si un autre bot du groupe répond
+            # aux messages de celui-ci. Telegram ne renvoie normalement pas
+            # les messages envoyés par le bot lui-même à son propre handler,
+            # mais rien ne garantit l'absence d'un autre bot dans le groupe.
+            return
         reply = await handle_slash_command(
             message.text,
             chat_id=message.chat.id,
@@ -207,6 +309,18 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
             config_dir=resolved_config_dir,
             bot=message.bot,
         )
+        if reply is None and parse_slash_command(message.text) is None:
+            # Pas une commande slash (reconnue ou non) : tenter la
+            # compréhension du langage naturel par Devaimazing (ADR 0013,
+            # tranche S4) plutôt que d'ignorer silencieusement le message.
+            reply = await handle_natural_language(
+                message.text,
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id,
+                allowed_chat_id=allowed_chat_id,
+                config_dir=resolved_config_dir,
+                bot=message.bot,
+            )
         if reply is None:
             return
         keyboard = (

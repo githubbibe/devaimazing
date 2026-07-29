@@ -2,13 +2,12 @@
 
 ## Statut
 
-**Partiellement implémenté (ADR 0013).** Le bot Telegram (lecture seule + slash
-commands avec confirmation rendue) et le registre d'outils existent depuis les
-tranches S1-S3 (`runtime/studio/telegram/`, `runtime/studio/tools/registry.py`).
-La compréhension du langage naturel (tranche S4, ce que ce fichier décrit
-principalement) existe comme module (`runtime/studio/devaimazing/agent.py`,
-`run_devaimazing_turn`) mais n'est pas encore câblée dans le bot — validée
-empiriquement le 2026-07-29 (voir docs/roadmap.md), câblage restant. Les
+**Implémenté (ADR 0013), tranches S1-S4.** Le bot Telegram (lecture seule,
+slash commands avec confirmation rendue, et compréhension du langage
+naturel) et le registre d'outils sont câblés
+(`runtime/studio/telegram/`, `runtime/studio/tools/registry.py`,
+`runtime/studio/devaimazing/agent.py` — validé empiriquement le 2026-07-29,
+voir docs/roadmap.md). Les
 capacités de transfert au PM, détection de projet dans General et
 `IMPROVEMENTS.md` (items 5, 6, 8 ci-dessous) sont tranche S5, non commencées.
 

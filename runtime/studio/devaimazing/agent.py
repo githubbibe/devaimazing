@@ -139,26 +139,25 @@ def parse_devaimazing_turn(content: str) -> tuple[str, Optional[dict[str, Any]]]
     return data["reply"], tool_call
 
 
-async def run_devaimazing_turn(
+async def interpret_message(
     text: str,
     *,
-    config: StudioConfig,
     model: str,
     base_url: str = "http://localhost:11434",
     num_ctx: int = 4096,
-    confirmed: bool = False,
-    bot: Optional[Any] = None,
-    chat_id: Optional[int] = None,
-) -> tuple[str, Optional[tuple[str, dict[str, Any]]]]:
+) -> tuple[str, Optional[dict[str, Any]]]:
     """
-    Exécute un tour de conversation Devaimazing : appelle Gemma en sortie
-    structurée, puis dispatche vers le registre d'outils si nécessaire.
+    Appelle Gemma en sortie structurée pour interpréter un message utilisateur,
+    sans dispatcher vers le registre d'outils (voir dispatch_tool_call) — ne
+    prend donc pas de `config` en argument. Séparé de run_devaimazing_turn
+    pour permettre à l'appelant de résoudre `config` une fois le `tool_call`
+    (donc le projet concerné) connu, plutôt qu'en amont de l'appel LLM (voir
+    telegram.handlers.handle_natural_language, qui ne connaît le topic/projet
+    qu'une fois le nom d'outil déterminé).
 
     Args:
         text: Message utilisateur (déjà transcrit si vocal — voir ADR 0014,
             Devaimazing ne distingue jamais l'origine du texte).
-        config: Configuration du projet concerné (résolue par l'appelant,
-            même logique que telegram.handlers.handle_slash_command).
         model: Identifiant du modèle Ollama (voir config/studio.yml,
             models.devaimazing).
         base_url: URL de l'API Ollama.
@@ -166,27 +165,15 @@ async def run_devaimazing_turn(
             7 outils) est nettement plus long qu'un prompt agent classique à
             2048 tokens (défaut Ollama, voir tools.ollama.run_ollama) ; 4096
             est la valeur testée empiriquement le 2026-07-29 (voir
-            docs/roadmap.md), à ajuster si le registre grossit encore.
-        confirmed: True si l'utilisateur vient de confirmer une action en
-            attente (voir valeur de retour ci-dessous).
-        bot: Contexte Telegram optionnel, transmis à execute_tool.
-        chat_id: chat_id Telegram, transmis à execute_tool.
+            docs/roadmap.md et config/studio.yml, devaimazing.num_ctx), à
+            ajuster si le registre grossit encore.
 
     Returns:
-        (texte, en_attente). `texte` est le message à renvoyer tel quel.
-        `en_attente` est None sauf si l'outil sélectionné requiert une
-        confirmation non encore donnée : dans ce cas c'est (nom_outil, args),
-        à conserver par l'appelant (même mécanisme que
-        telegram.handlers._pending_confirmations) pour rappeler
-        run_devaimazing_turn avec confirmed=True après accord explicite.
-
-    Notes:
-        Le champ "reply" de la sortie du modèle n'est utilisé QUE si
-        tool_call est null. Quand un outil est sélectionné, le texte renvoyé
-        vient de ToolResult (via tools.registry.format_tool_result), jamais
-        de "reply" — la validation du 2026-07-29 a montré "reply" halluciné
-        (ex. noms de projets inventés) y compris quand tool_call.name était
-        correct.
+        (reply, tool_call). Si `tool_call` est None, `reply` est le message
+        à renvoyer tel quel (texte libre du modèle, ou message de repli si
+        la sortie n'a pas pu être parsée). Si `tool_call` est non None,
+        `reply` ne doit PAS être utilisé (voir dispatch_tool_call) — le nom
+        d'outil n'est pas encore validé contre TOOL_REGISTRY à ce stade.
     """
     system_prompt = build_system_prompt()
     result = await run_ollama(
@@ -201,16 +188,47 @@ async def run_devaimazing_turn(
     try:
         reply, tool_call = parse_devaimazing_turn(result["content"])
     except ValueError:
-        return (
-            "Je n'ai pas réussi à traiter cette demande, peux-tu reformuler ?",
-            None,
-        )
+        return "Je n'ai pas réussi à traiter cette demande, peux-tu reformuler ?", None
 
-    if tool_call is None:
-        return reply, None
+    return reply, tool_call
 
-    tool_name = tool_call["name"]
-    args = tool_call["arguments"]
+
+async def dispatch_tool_call(
+    tool_name: str,
+    args: dict[str, Any],
+    *,
+    config: StudioConfig,
+    confirmed: bool = False,
+    bot: Optional[Any] = None,
+    chat_id: Optional[int] = None,
+) -> tuple[str, Optional[tuple[str, dict[str, Any]]]]:
+    """
+    Exécute un tool_call issu d'interpret_message via le registre d'outils
+    partagé — même point d'appel (execute_tool) que
+    telegram.handlers.handle_slash_command, pour ne pas dupliquer la logique
+    de dispatch entre les deux voies d'entrée (voir ADR 0013, Décision 4).
+
+    Args:
+        tool_name: Nom d'outil renvoyé par le modèle — PAS encore validé
+            contre TOOL_REGISTRY (delégué à execute_tool : un nom inconnu ou
+            halluciné redescend en ToolResult(status="error"), jamais un
+            appel de handler).
+        args: Arguments de l'outil.
+        config: Configuration du projet concerné (résolue par l'appelant une
+            fois tool_name connu — voir interpret_message).
+        confirmed: True si l'utilisateur vient de confirmer une action en
+            attente (voir valeur de retour ci-dessous).
+        bot: Contexte Telegram optionnel, transmis à execute_tool.
+        chat_id: chat_id Telegram, transmis à execute_tool.
+
+    Returns:
+        (texte, en_attente). `texte` est le message à renvoyer tel quel.
+        `en_attente` est None sauf si l'outil sélectionné requiert une
+        confirmation non encore donnée : dans ce cas c'est (nom_outil, args),
+        à conserver par l'appelant (même mécanisme que
+        telegram.handlers._pending_confirmations) pour rappeler
+        dispatch_tool_call avec confirmed=True après accord explicite.
+    """
     tool_result = await execute_tool(
         tool_name, args, config=config, confirmed=confirmed, bot=bot, chat_id=chat_id,
     )
@@ -219,3 +237,42 @@ async def run_devaimazing_turn(
         return tool_result.summary, (tool_name, args)
 
     return format_tool_result(tool_result), None
+
+
+async def run_devaimazing_turn(
+    text: str,
+    *,
+    config: StudioConfig,
+    model: str,
+    base_url: str = "http://localhost:11434",
+    num_ctx: int = 4096,
+    confirmed: bool = False,
+    bot: Optional[Any] = None,
+    chat_id: Optional[int] = None,
+) -> tuple[str, Optional[tuple[str, dict[str, Any]]]]:
+    """
+    Exécute un tour de conversation Devaimazing complet : interpret_message
+    puis dispatch_tool_call si nécessaire — composition des deux pour les
+    appelants qui connaissent déjà `config` avant l'appel LLM (ex. un topic
+    de projet déjà résolu). Voir handle_natural_language pour le cas General,
+    où `config` n'est résolu qu'après avoir vu le tool_call.
+
+    Notes:
+        Le champ "reply" de la sortie du modèle n'est utilisé QUE si
+        tool_call est null. Quand un outil est sélectionné, le texte renvoyé
+        vient de ToolResult (via tools.registry.format_tool_result), jamais
+        de "reply" — la validation du 2026-07-29 a montré "reply" halluciné
+        (ex. noms de projets inventés) y compris quand tool_call.name était
+        correct.
+    """
+    reply, tool_call = await interpret_message(
+        text, model=model, base_url=base_url, num_ctx=num_ctx,
+    )
+
+    if tool_call is None:
+        return reply, None
+
+    return await dispatch_tool_call(
+        tool_call["name"], tool_call["arguments"],
+        config=config, confirmed=confirmed, bot=bot, chat_id=chat_id,
+    )

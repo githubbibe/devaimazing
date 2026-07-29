@@ -10,12 +10,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import studio.devaimazing.agent as agent_module
 import studio.tools.queries as queries_module
 import studio.tools.registry as registry_module
 import yaml
 from studio.telegram.handlers import (
     _pending_confirmations,
     handle_confirmation_callback,
+    handle_natural_language,
     handle_slash_command,
 )
 
@@ -30,12 +32,21 @@ def _write_yaml(path: Path, data: dict) -> None:
 @pytest.fixture
 def config_dir(tmp_path: Path) -> Path:
     config_dir = tmp_path / "config"
-    _write_yaml(config_dir / "studio.yml", {"models": {"pm_opus": "claude-opus-4-8"}})
+    _write_yaml(config_dir / "studio.yml", {
+        "models": {"pm_opus": "claude-opus-4-8", "devaimazing": "gemma3:4b"},
+    })
     _write_yaml(
         config_dir / "projects" / "demo.yml",
         {"repo_path": str(tmp_path / "demo"), "telegram": {"thread_id": 111}},
     )
     return config_dir
+
+
+def _fake_run_ollama(content: str):
+    async def _run_ollama(**_kwargs):
+        return {"content": content, "tokens_prompt": 1, "tokens_completion": 1, "duration_ms": 0}
+
+    return _run_ollama
 
 
 async def test_wrong_chat_id_returns_none(config_dir: Path):
@@ -279,3 +290,205 @@ async def test_confirmation_callback_unknown_prefix_returns_none():
     )
 
     assert result_text is None
+
+
+# --- langage naturel (Devaimazing, ADR 0013 tranche S4) ---
+
+async def test_natural_language_wrong_chat_id_returns_none(config_dir: Path):
+    reply = await handle_natural_language(
+        "bonjour",
+        chat_id=999,
+        message_thread_id=None,
+        allowed_chat_id=_ALLOWED_CHAT_ID,
+        config_dir=config_dir,
+    )
+
+    assert reply is None
+
+
+async def test_natural_language_unconfigured_model_returns_none(tmp_path: Path):
+    unconfigured_config_dir = tmp_path / "config_no_devaimazing"
+    _write_yaml(unconfigured_config_dir / "studio.yml", {"models": {"pm_opus": "x"}})
+
+    reply = await handle_natural_language(
+        "bonjour",
+        chat_id=_ALLOWED_CHAT_ID,
+        message_thread_id=None,
+        allowed_chat_id=_ALLOWED_CHAT_ID,
+        config_dir=unconfigured_config_dir,
+    )
+
+    assert reply is None
+
+
+async def test_natural_language_no_tool_call_returns_reply(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path
+):
+    monkeypatch.setattr(
+        agent_module, "run_ollama", _fake_run_ollama('{"reply": "Bonjour !", "tool_call": null}')
+    )
+
+    reply = await handle_natural_language(
+        "bonjour",
+        chat_id=_ALLOWED_CHAT_ID,
+        message_thread_id=None,
+        allowed_chat_id=_ALLOWED_CHAT_ID,
+        config_dir=config_dir,
+    )
+
+    assert reply.text == "Bonjour !"
+    assert reply.confirmation_id is None
+
+
+async def test_natural_language_general_scope_tool_works_from_general(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path
+):
+    async def fake_list_projects(config_dir):
+        return ["demo"]
+
+    monkeypatch.setattr(queries_module, "list_projects", fake_list_projects)
+    monkeypatch.setattr(
+        agent_module, "run_ollama",
+        _fake_run_ollama('{"reply": "", "tool_call": {"name": "lister_projets", "arguments": {}}}'),
+    )
+
+    reply = await handle_natural_language(
+        "liste les projets",
+        chat_id=_ALLOWED_CHAT_ID,
+        message_thread_id=None,  # General
+        allowed_chat_id=_ALLOWED_CHAT_ID,
+        config_dir=config_dir,
+    )
+
+    assert "demo" in reply.text
+
+
+async def test_natural_language_project_scoped_tool_in_general_asks_to_use_topic(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path
+):
+    monkeypatch.setattr(
+        agent_module, "run_ollama",
+        _fake_run_ollama(
+            '{"reply": "", "tool_call": {"name": "lire_statut", "arguments": {"run_id": "r1"}}}'
+        ),
+    )
+
+    reply = await handle_natural_language(
+        "statut du run r1",
+        chat_id=_ALLOWED_CHAT_ID,
+        message_thread_id=None,  # General : pas de projet résolvable pour un outil scopé
+        allowed_chat_id=_ALLOWED_CHAT_ID,
+        config_dir=config_dir,
+    )
+
+    assert "topic" in reply.text
+
+
+async def test_natural_language_project_scoped_tool_in_known_topic(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path
+):
+    async def fake_get_run_snapshot(config, run_id):
+        assert config.project_name == "demo"
+        return {"found": True, "status": "IN_PROGRESS", "current_phase": "STUBS"}
+
+    monkeypatch.setattr(queries_module, "get_run_snapshot", fake_get_run_snapshot)
+    monkeypatch.setattr(
+        agent_module, "run_ollama",
+        _fake_run_ollama(
+            '{"reply": "", "tool_call": {"name": "lire_statut", "arguments": {"run_id": "r1"}}}'
+        ),
+    )
+
+    reply = await handle_natural_language(
+        "statut du run r1",
+        chat_id=_ALLOWED_CHAT_ID,
+        message_thread_id=111,  # topic du projet "demo"
+        allowed_chat_id=_ALLOWED_CHAT_ID,
+        config_dir=config_dir,
+    )
+
+    assert "IN_PROGRESS" in reply.text
+
+
+async def test_natural_language_needs_confirmation_registers_pending(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path
+):
+    monkeypatch.setattr(
+        agent_module, "run_ollama",
+        _fake_run_ollama(
+            '{"reply": "", "tool_call": {"name": "archive_projet", "arguments": {"name": "demo"}}}'
+        ),
+    )
+
+    reply = await handle_natural_language(
+        "archive le projet demo",
+        chat_id=_ALLOWED_CHAT_ID,
+        message_thread_id=None,  # /archive est General-scope
+        allowed_chat_id=_ALLOWED_CHAT_ID,
+        config_dir=config_dir,
+    )
+
+    assert reply.confirmation_id is not None
+    assert reply.confirmation_id in _pending_confirmations
+
+    # Consomme la confirmation en attente pour ne pas polluer le dict
+    # module-level partagé entre tests (voir _pending_confirmations).
+    await handle_confirmation_callback(
+        f"confirm:{reply.confirmation_id}:no",
+        chat_id=_ALLOWED_CHAT_ID,
+        allowed_chat_id=_ALLOWED_CHAT_ID,
+        bot=object(),
+    )
+
+
+async def test_natural_language_hallucinated_tool_name_in_general_returns_error_not_topic_prompt(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path
+):
+    """
+    Régression : un nom d'outil halluciné (proche mais absent de
+    TOOL_REGISTRY, voir docs/roadmap.md) ne doit pas être traité comme un
+    outil scopé-projet en General — sans le court-circuit de
+    _resolve_config_for_tool, ce cas produisait le message trompeur
+    « utilisez le topic d'un projet » plutôt que l'erreur réelle
+    (outil inconnu).
+    """
+    monkeypatch.setattr(
+        agent_module, "run_ollama",
+        _fake_run_ollama('{"reply": "", "tool_call": {"name": "lire_projets", "arguments": {}}}'),
+    )
+
+    reply = await handle_natural_language(
+        "fais un truc",
+        chat_id=_ALLOWED_CHAT_ID,
+        message_thread_id=None,  # General
+        allowed_chat_id=_ALLOWED_CHAT_ID,
+        config_dir=config_dir,
+    )
+
+    assert "topic" not in reply.text
+    assert "lire_projets" in reply.text or "inconnu" in reply.text.lower()
+
+
+async def test_on_message_ignores_bot_authored_messages():
+    from studio.telegram.handlers import build_router
+
+    router = build_router(config_dir=None, allowed_chat_id=_ALLOWED_CHAT_ID)
+    on_message = router.message.handlers[0].callback
+
+    calls = []
+
+    async def fake_reply(text, reply_markup=None):
+        calls.append(text)
+
+    message = SimpleNamespace(
+        text="bonjour",
+        from_user=SimpleNamespace(is_bot=True),
+        chat=SimpleNamespace(id=_ALLOWED_CHAT_ID),
+        message_thread_id=None,
+        bot=None,
+        reply=fake_reply,
+    )
+
+    await on_message(message)
+
+    assert calls == []

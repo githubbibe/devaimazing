@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from studio.config import StudioConfig, load_global_telegram_config
+from studio.config import StudioConfig, load_global_devaimazing_config, load_global_telegram_config
 
 
 def _write_yaml(path: Path, data: dict) -> None:
@@ -179,3 +179,36 @@ def test_load_global_telegram_config_local_yml_overrides(config_dir: Path):
 def test_load_global_telegram_config_missing_studio_yml_raises(tmp_path: Path):
     with pytest.raises(FileNotFoundError):
         load_global_telegram_config(tmp_path / "inexistant")
+
+
+def test_load_global_devaimazing_config_returns_model_and_url(config_dir: Path):
+    _write_yaml(config_dir / "studio.yml", {
+        "models": {"devaimazing": "gemma3:4b"},
+        "ollama": {"base_url": "http://localhost:11434"},
+        "devaimazing": {"num_ctx": 4096},
+    })
+
+    devaimazing_config = load_global_devaimazing_config(config_dir)
+
+    assert devaimazing_config == {
+        "model": "gemma3:4b", "base_url": "http://localhost:11434", "num_ctx": 4096,
+    }
+
+
+def test_load_global_devaimazing_config_defaults_when_unconfigured(config_dir: Path):
+    _write_yaml(config_dir / "studio.yml", {})
+
+    devaimazing_config = load_global_devaimazing_config(config_dir)
+
+    assert devaimazing_config == {
+        "model": None, "base_url": "http://localhost:11434", "num_ctx": 4096,
+    }
+
+
+def test_load_global_devaimazing_config_local_yml_overrides(config_dir: Path):
+    _write_yaml(config_dir / "studio.yml", {"models": {"devaimazing": "gemma3:4b"}})
+    _write_yaml(config_dir / "local.yml", {"models": {"devaimazing": "gemma3:12b"}})
+
+    devaimazing_config = load_global_devaimazing_config(config_dir)
+
+    assert devaimazing_config["model"] == "gemma3:12b"

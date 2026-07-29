@@ -257,10 +257,13 @@ métadonnées de confirmation.
   **Fait le 2026-07-29** : l'agent Devaimazing lui-même
   (`runtime/studio/devaimazing/agent.py` — compréhension du langage naturel,
   fallback structured-output validé, voir mise à jour empirique ci-dessus et
-  `docs/roadmap.md`), mais **pas encore câblé** dans
-  `runtime/studio/telegram/handlers.py` : un blocage de conception distinct
-  (ordre de résolution de `config` vs identification de l'outil visé) reste à
-  trancher avant le câblage, voir `docs/roadmap.md`.
+  `docs/roadmap.md`), **câblé le même jour** dans
+  `runtime/studio/telegram/handlers.py::handle_natural_language`. Le blocage
+  de conception identifié (ordre de résolution de `config` vs identification
+  de l'outil visé) est résolu en séparant l'appel LLM (`agent.interpret_message`,
+  sans `config`) du dispatch vers le registre (`agent.dispatch_tool_call`,
+  avec `config` résolu après coup via `_resolve_config_for_tool` — partagé
+  avec `handle_slash_command`) — voir `docs/roadmap.md` pour le détail.
   **Reste non fait, tranche S5** : le transfert General → topic-projet, les
   handlers de `reject_checkpoint`/`stop_run` (décision de conception séparée
   requise).
