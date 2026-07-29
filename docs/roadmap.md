@@ -917,6 +917,14 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    éventuels dessus (archiver, voir le run en cours...). Complète Devaimazing
    (S1-S4), ne le remplace pas — les boutons couvrent un ensemble énuméré
    d'actions, pas une demande ouverte en langage libre.
+   **Précision ajoutée le 2026-07-29** : la fiche projet doit couvrir tout le
+   cycle de vie d'un projet — création, **édition**, et archivage — pas
+   seulement la consultation. `creer_projet` (`/new`) et `archive_projet`
+   (`/archive`) existent déjà (`tools/registry.py`), mais il n'y a
+   aujourd'hui **aucun outil d'édition** d'un projet déjà créé (modifier sa
+   config `config/projects/<nom>.yml` — description, contraintes, commande
+   de test, etc. — depuis Telegram) : à concevoir dans le cadre de ce
+   chantier.
 8. **Idée notée le 2026-07-29, pas encore cadrée** : mécanisme d'évolution
    des agents locaux (Devaimazing, et potentiellement Back/Front/Test) par
    boucle rétroactive + benchmark, sur le modèle de ce qui a été fait
