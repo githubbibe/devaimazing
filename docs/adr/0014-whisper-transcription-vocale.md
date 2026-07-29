@@ -1,9 +1,11 @@
 # ADR 0014 - Transcription vocale (Whisper) en amont de l'agent Devaimazing
 
 **Date** : 2026-07
-**Statut** : Accepté (décision de conception — implémentation non commencée, voir
-« Conséquences »). Complète l'ADR 0013 (interface Telegram, agent Devaimazing) d'une
-capacité qui n'y figurait pas : le support des messages vocaux.
+**Statut** : Accepté et implémenté (2026-07-29, voir « Conséquences » et
+`docs/roadmap.md`) — code écrit et testé unitairement, validation en conditions
+réelles sur le bot Telegram en cours. Complète l'ADR 0013 (interface Telegram,
+agent Devaimazing) d'une capacité qui n'y figurait pas : le support des messages
+vocaux.
 
 ## Contexte
 
@@ -99,18 +101,35 @@ créerait une configuration orpheline.
   rappelant que Devaimazing traite un texte transcrit exactement comme un texte tapé,
   sans branche de logique dédiée — pour qu'une implémentation future ne réintroduise
   pas cette distinction par erreur.
-- `ARCHITECTURE.md`, composant « Interface Telegram » (ADR 0013), gagne une mention
-  du support vocal comme capacité décidée mais non implémentée.
-- `docs/agents.md`, section Devaimazing, gagne la même précision.
-- `README.md`, structure du dépôt, gagne l'entrée de cet ADR (fichier réel sur
-  disque).
-- **Non fait par cet ADR, laissé à une implémentation future** : aucun code n'est
-  écrit. Ni `runtime/studio/tools/whisper.py` (wrapper de transcription, sur le
-  modèle de `ollama.py`/`claude_code.py` déjà existants), ni la détection
-  voice/audio côté bot Telegram, ni une clé de configuration `config/studio.yml`
-  pour la taille de modèle Whisper, ne sont créés par cet ADR — ils dépendent d'un
-  bot Telegram et d'une intégration Devaimazing qui n'existent pas encore
-  (voir ADR 0013, « Conséquences », même réserve).
+- **Implémenté le 2026-07-29** (voir `docs/roadmap.md` pour le détail par phase) :
+  - Gate empirique requis par cette ADR (« vérification requise à l'implémentation ») :
+    Ollama ne supporte pas Whisper (`ollama pull whisper` échoue, manifest
+    inexistant) — confirme le fallback `whisper.cpp` déjà prévu ici. Choix concret :
+    l'image officielle `ghcr.io/ggerganov/whisper.cpp` (mainteneur du projet),
+    conteneurisée (`infra/whisper/`, même logique que `infra/ollama/` — portable
+    d'une machine à l'autre), plutôt qu'un build depuis les sources.
+  - `runtime/studio/tools/whisper.py::transcribe_voice_message` — appel HTTP au
+    serveur `whisper-server` embarqué dans l'image, `ffmpeg` côté serveur convertit
+    l'OGG/Opus des messages vocaux Telegram sans étape côté client (vérifié).
+  - `runtime/studio/telegram/handlers.py::resolve_message_text` — détecte
+    voice/audio, télécharge le fichier, transcrit, renvoie le texte résultant
+    exactement comme `message.text` en amont de `handle_natural_language` (jamais
+    interprété comme commande slash, conforme à la décision ci-dessus).
+  - `config/studio.yml` gagne une section `whisper:` (`base_url`, `language` —
+    `fr` forcé, cohérent avec l'usage mono-utilisateur francophone), lue par
+    `config.py::load_global_whisper_config`.
+  - **Taille de modèle Whisper : `small` retenue, configurable côté infra**
+    (`infra/whisper/.env`, `WHISPER_MODEL`), pas côté `config/studio.yml` du
+    dépôt — le modèle est un paramètre de démarrage du serveur, pas du client
+    Python qui l'appelle.
+- `ARCHITECTURE.md`, composant « Interface Telegram » (ADR 0013), et
+  `docs/agents.md`, section Devaimazing, gagnent une mention du support vocal
+  comme capacité implémentée (pas seulement décidée).
+- `README.md`, structure du dépôt, gagne l'entrée de cet ADR et de `infra/whisper/`.
+- **Reste non fait** : validation en conditions réelles sur le bot Telegram avec
+  un vrai message vocal (le harness `runtime/tests/manual/` n'en couvre pas
+  encore, voir `docs/roadmap.md`), contention RAM réelle Whisper+Qwen simultanés
+  non mesurée (point resté ouvert, voir ci-dessous).
 
 ## Points laissés ouverts, à trancher à l'implémentation
 

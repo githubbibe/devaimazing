@@ -1,25 +1,76 @@
 # Feuille de route - devaimazing
 
-**Dernière mise à jour** : 2026-07-24
+**Dernière mise à jour** : 2026-07-29
 
 ## État actuel
 
 Le runtime devaimazing est **fonctionnellement complet et testé de bout en bout** :
 `state.py`, `config.py`, `tools/*.py` (filesystem, git, ollama, claude_code, tracer,
-registry, queries, project_config), `devaimazing/agent.py`, `telegram/*.py`
+registry, queries, project_config, whisper), `devaimazing/agent.py`, `telegram/*.py`
 (bot, handlers, topics — lecture seule, création/archivage de projet avec
-confirmation, ET compréhension du langage naturel via Devaimazing, ADR 0013
-tranches S2-S4), `graph.py`, les 7 `nodes/*.py` (pm, architect, backend, frontend,
-test, security, closer), `metrics.py` et `cli.py` (`run`, `resume`, `retry`,
-`run-agent`, `runs`, `metrics`, `new-project`, `projects`, `doctor`,
-`telegram-bot`) sont tous implémentés — voir `CLAUDE.md` pour la convention
-(stub-first reste appliquée par le pipeline aux projets *cibles*, pas à ce dépôt).
-**456/456 tests verts** sur `runtime/tests/` (2026-07-29) —
+confirmation, compréhension du langage naturel ET transcription vocale via
+Whisper, ADR 0013 tranches S2-S4 + ADR 0014), `graph.py`, les 7 `nodes/*.py`
+(pm, architect, backend, frontend, test, security, closer), `metrics.py` et
+`cli.py` (`run`, `resume`, `retry`, `run-agent`, `runs`, `metrics`,
+`new-project`, `projects`, `doctor`, `telegram-bot`) sont tous implémentés —
+voir `CLAUDE.md` pour la convention (stub-first reste appliquée par le
+pipeline aux projets *cibles*, pas à ce dépôt).
+**470/470 tests verts** sur `runtime/tests/` (2026-07-29) —
 `test_new_project_target_exists_not_git_repo_prints_error`, précédemment signalé
 en échec à cause du retour à la ligne Rich dépendant de la largeur du terminal,
 passe dans cet environnement ; sa sensibilité à la largeur du terminal n'est pas
 corrigée dans le code, donc un échec ponctuel sur une autre machine/largeur reste
 possible.
+
+**2026-07-29 — ADR 0014 (transcription vocale Whisper) implémentée en 3
+phases commitées séparément.** Suite directe du test réel S4 ci-dessous,
+même session (« il reste la commande vocale (whisper?) », implémentation
+phasée pour permettre des interruptions, budget de session limité au
+moment du démarrage).
+
+**Phase 1 — infra (`infra/whisper/`).** Gate empirique requis par l'ADR
+avant tout code : Ollama ne supporte pas Whisper (`ollama pull whisper`
+échoue, « pull model manifest: file does not exist ») — confirme le
+fallback whisper.cpp déjà prévu. Choix concret : l'image officielle
+`ghcr.io/ggerganov/whisper.cpp` (mainteneur du projet lui-même), pas un
+build depuis les sources — elle embarque `whisper-server` (serveur HTTP,
+`/inference`) et `ffmpeg` (conversion audio côté serveur via `--convert` :
+l'OGG/Opus des messages vocaux Telegram n'a besoin d'aucune conversion
+côté client, vérifié). Conteneurisée sur le même modèle que
+`infra/ollama/` (portable d'une machine à l'autre — voir
+[[project_ollama_containerized]] côté mémoire). Modèle `small` retenu par
+défaut (~465 Mo, ~40s à télécharger), port hôte 8090 (distinct des 11434
+d'Ollama). Vérifié manuellement : transcription correcte sur un fichier
+OGG mono 16kHz avec `--language fr` forcé.
+
+**Phase 2 — wrapper (`runtime/studio/tools/whisper.py`).**
+`transcribe_voice_message` : appel HTTP POST multipart vers
+`whisper-server`, même pattern retry/backoff que `tools/ollama.py`
+(3 tentatives, backoff exponentiel, `ExternalServiceError` partagée entre
+les deux modules — importée depuis `ollama.py` plutôt que dupliquée).
+Testé avec un client httpx factice (`runtime/tests/test_whisper.py`),
+aucun appel réseau réel dans les tests.
+
+**Phase 3 — câblage bot (`telegram/handlers.py`).**
+`resolve_message_text` : renvoie `message.text` tel quel s'il existe,
+sinon télécharge et transcrit un message vocal/audio si présent — au-delà
+de cette fonction, plus aucune branche de logique ne distingue texte tapé
+et texte transcrit (conforme à l'ADR 0014). `_on_message` route les
+messages vocaux/audio directement vers `handle_natural_language`, jamais
+vers le parsing de commande slash (une commande slash n'a pas vocation à
+être dictée à l'oral, décision de l'ADR). Message d'erreur explicite en
+français si la transcription échoue (téléchargement, serveur injoignable,
+aucune parole détectée) plutôt qu'un silence confus. Config globale
+`whisper:` (`base_url`, `language`) lue via
+`config.py::load_global_whisper_config`, même pattern que
+`load_global_devaimazing_config`.
+
+**Reste (Phase 4 en cours, cette entrée ; Phase 5 non faite)** : validation
+en conditions réelles sur le bot Telegram avec un vrai message vocal — le
+harness manuel existant (`runtime/tests/manual/`) ne couvre que le texte.
+Contention RAM réelle entre Whisper (small, ~487 Mo chargé) et Devaimazing
+(gemma3:4b) ou les agents Qwen si plusieurs tournent simultanément : pas
+mesurée, point resté ouvert dans l'ADR 0014.
 
 **2026-07-29 — ADR 0013, tranche S4 : test en conditions réelles sur un vrai
 bot Telegram, tout passe.** Suite directe du câblage (entrée suivante) : un
@@ -838,6 +889,18 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    d'un projet » (limitation notée dans l'entrée S2 du 2026-07-24 : `run_id`
    doit encore être tapé explicitement dans les commandes slash) à trancher
    aussi, indépendamment des tranches S4-S5.
+7. **ADR 0014 — transcription vocale (Whisper)** : code écrit et testé
+   unitairement le 2026-07-29 en 3 phases (voir entrée dédiée ci-dessus),
+   pas encore validé en conditions réelles. Reste :
+   1. Envoyer un vrai message vocal sur le bot Telegram (même groupe que le
+      test S4 du 2026-07-29), vérifier la transcription puis le dispatch
+      vers `handle_natural_language` de bout en bout.
+   2. Mesurer la contention RAM réelle si Whisper (small, ~487 Mo) et
+      Devaimazing (gemma3:4b) ou un agent Qwen tournent simultanément —
+      point resté ouvert dans l'ADR 0014, jamais mesuré.
+   3. Si la précision de `small` s'avère insuffisante en usage réel (accent,
+      vocabulaire technique) : passer à `large` via `WHISPER_MODEL` dans
+      `infra/whisper/.env` — déjà configurable, juste pas testé.
 
 Pas d'ordre de priorité déjà acté entre ces points au-delà de leur numérotation
 ci-dessus — à trancher avec l'utilisateur en début de prochaine session.

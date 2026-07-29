@@ -149,12 +149,14 @@ d'outils. Chaque outil déclare `destructif`, `requiert_confirmation`,
 confirmation est une propriété de l'outil, jamais du canal d'appel. Voir ADR 0013
 pour le détail complet et la classification des outils identifiés.
 
-**Messages vocaux (décidé, ADR 0014 — pas encore implémenté)** : un message vocal
+**Messages vocaux (ADR 0014, implémenté le 2026-07-29)** : un message vocal
 Telegram est transcrit par Whisper (ASR local, prétraitement pur, aucune
 compréhension) avant d'atteindre Devaimazing, qui reçoit alors un texte traité de
-façon strictement identique à un message tapé. Whisper tourne en local (Ollama si
-suffisamment mature à l'implémentation, sinon `whisper.cpp`), jamais via l'API
-OpenAI payante.
+façon strictement identique à un message tapé. Ollama ne supportant pas Whisper
+(vérifié empiriquement), la transcription tourne via `whisper.cpp`
+(`infra/whisper/`, conteneurisé, image officielle `ghcr.io/ggerganov/whisper.cpp`),
+jamais via l'API OpenAI payante — voir `runtime/studio/tools/whisper.py` et
+`docs/roadmap.md`.
 
 **Observabilité centralisée (Loki + Grafana Alloy)**
 

@@ -192,7 +192,7 @@ devaimazing/
 │   ├── frontend.md
 │   ├── test.md
 │   ├── security.md
-│   └── devaimazing.md           # Role transverse decide (ADR 0013), pas encore implemente
+│   └── devaimazing.md           # Role transverse (ADR 0013 + 0014), implemente
 ├── skills/                      # Skills partages (references par prompts)
 │   ├── error-handling.md
 │   ├── logging-conventions.md
