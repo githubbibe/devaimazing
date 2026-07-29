@@ -945,6 +945,20 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    - Reste à trancher avant implémentation : qui/quoi déclenche la phase de
      synthèse (fin de run ? périodique ? manuel ?), granularité des
      « leçons » (par agent ? par type d'erreur ?), format du fichier.
+9. **Idée notée le 2026-07-29, pas encore cadrée** : bilan d'activité **par
+   projet** (tous runs confondus) — combien d'étapes, d'itérations, de
+   tokens, de temps de calcul il a fallu au total. Écart avec l'existant :
+   `metrics.db` (`runtime/studio/metrics.py`) agrège déjà par tâche et par
+   run (`MetricsCollector.get_run_summary(run_id)`, exposé via
+   `devaimazing metrics <run_id> --project <projet>`), mais **jamais par
+   projet** — la table `tasks` n'a même pas de colonne `project_name`
+   (seulement `run_id`), et `metrics.db` est un fichier global partagé par
+   tous les projets (`~/.devaimazing/metrics.db` par défaut), pas un fichier
+   par projet. Reste à trancher avant implémentation : lier `run_id` à un
+   projet (colonne à ajouter, ou jointure via la liste des runs déjà connue
+   par `devaimazing runs <projet>`), et si le "bilan" inclut aussi des
+   éléments qualitatifs de `trace.jsonl`/`project-map.md` (pas seulement les
+   totaux chiffrés de `metrics.db`).
 
 Pas d'ordre de priorité déjà acté entre ces points au-delà de leur numérotation
 ci-dessus — à trancher avec l'utilisateur en début de prochaine session.
