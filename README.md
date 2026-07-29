@@ -276,13 +276,14 @@ devaimazing/
 
 ### Setup
 
-**Important — emplacement du venv** : ce depot vit sous iCloud Drive (`~/Library/Mobile
-Documents/com~apple~CloudDocs/...`). Un `.venv` cree *dans* le depot (comportement par
+**Important — emplacement du venv** : si ce depot vit sous iCloud Drive (`~/Library/Mobile
+Documents/com~apple~CloudDocs/...`), un `.venv` cree *dans* le depot (comportement par
 defaut de `uv sync`/`python -m venv .venv`) subit la synchronisation iCloud en tache de
 fond, ce qui provoque des echecs intermittents `ModuleNotFoundError: No module named
 'studio'` sur l'installation editable (des milliers de petits fichiers/symlinks dans un
 `.venv` sont un tres mauvais candidat pour la sync cloud — deja constate et corrige le
-2026-07-10, voir `docs/roadmap.md`). Creer le venv **hors** du depot :
+2026-07-10, voir `docs/roadmap.md`). Meme hors iCloud, creer le venv **hors** du depot
+reste la pratique recommandee :
 
 ```bash
 # Cloner le repo
