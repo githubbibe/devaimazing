@@ -109,6 +109,14 @@ telegram:
   allowed_chat_id: <PLACEHOLDER_CHAT_ID>  # mono-utilisateur, tout autre chat_id est ignoré
   general_topic_alias: "General"
 
+# Transcription vocale (ADR 0014) - whisper.cpp local, voir infra/whisper/.
+# base_url pointe sur whisper-server (port hôte 8090, distinct d'Ollama
+# 11434). language forcée : usage mono-utilisateur francophone (pas
+# d'auto-détection, voir ADR 0014).
+whisper:
+  base_url: http://localhost:8090
+  language: fr
+
 # Logging
 logging:
   level: INFO

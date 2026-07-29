@@ -97,6 +97,39 @@ def load_global_devaimazing_config(config_dir: Optional[Path] = None) -> dict:
     }
 
 
+def load_global_whisper_config(config_dir: Optional[Path] = None) -> dict:
+    """
+    Section whisper: de studio.yml, avec override local.yml appliqué (ADR
+    0014). Même raison de séparation d'avec StudioConfig que
+    load_global_telegram_config/load_global_devaimazing_config : la
+    transcription n'est scopée à aucun projet, c'est un prétraitement de la
+    couche Telegram avant même la résolution du projet concerné.
+
+    Args:
+        config_dir: Répertoire de config (défaut : répertoire du package devaimazing).
+
+    Returns:
+        {"base_url": str, "language": str}.
+
+    Raises:
+        FileNotFoundError: Si studio.yml est introuvable.
+        ValueError: Si studio.yml ou local.yml n'est pas un mapping YAML valide.
+    """
+    resolved_config_dir = Path(config_dir) if config_dir is not None else default_config_dir()
+    global_config = _read_yaml_mapping(
+        resolved_config_dir / "studio.yml", required=True, label="Configuration globale"
+    )
+    local_config = _read_yaml_mapping(
+        resolved_config_dir / "local.yml", required=False, label="Configuration locale"
+    )
+    merged = _deep_merge(global_config, local_config)
+    whisper_config = merged.get("whisper", {})
+    return {
+        "base_url": whisper_config.get("base_url", "http://localhost:8090"),
+        "language": whisper_config.get("language", "fr"),
+    }
+
+
 def _deep_merge(base: dict, override: dict) -> dict:
     """
     Fusionne récursivement `override` dans une copie de `base`.
