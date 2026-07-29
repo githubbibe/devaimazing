@@ -137,11 +137,17 @@ empiriquement (erreur 400 explicite) et via la documentation officielle
 Ollama. Seuls des modèles orientés code comme Qwen le supportent dans cet
 environnement. La Décision 4 ci-dessous repose donc sur un fallback
 structured-output (JSON schema via `format=`), pas sur du function-calling
-réel — ce fallback est lui-même en cours de validation (résultats mitigés à
-ce stade, voir `docs/roadmap.md`). Cela ne remet pas en cause le choix de
-Gemma pour le *ton* de la conversation, mais rend la fiabilité de la
-*sélection d'outil* une question ouverte distincte, pas déjà tranchée par ce
-choix de LLM.
+réel. Cela ne remet pas en cause le choix de Gemma pour le *ton* de la
+conversation ; la fiabilité de la *sélection d'outil* était une question
+ouverte distincte — **validée le 2026-07-29** (voir `docs/roadmap.md`) :
+9 à 12/14 selon les essais (11/14 sur la configuration retenue, gemma3:4b
+n'étant pas déterministe sans seed/température fixée) sur un test couvrant
+les 7 outils réels du registre, aucune sélection erronée d'outil destructif,
+un mode d'échec (dérive de génération corrompant le JSON sur certaines
+questions) identifié et corrigé par une consigne de prompt. Gemma reste donc
+le LLM retenu pour Devaimazing, y compris pour la
+sélection d'outil — la question Qwen-pour-la-sélection-d'outil envisagée
+comme option de repli n'a pas eu besoin d'être activée.
 
 **Mémoire** : pas de checkpointer dédié séparé (contrairement au PM). Tient en deux
 choses : (1) les fichiers de config existants `config/projects/*.yml`, qui porteront
@@ -248,12 +254,16 @@ métadonnées de confirmation.
   dépendance `aiogram`) — allowlist `chat_id`, résolution topic → projet,
   dispatch des commandes slash, rendu de la confirmation en clavier
   Oui/Non pour les outils `requiert_confirmation`.
-  **Reste non fait, tranches S4-S5** : l'agent Devaimazing lui-même
-  (compréhension du langage naturel — gate empirique fait le 2026-07-24,
-  function-calling natif Gemma exclu, fallback structured-output en cours de
-  validation, voir mise à jour empirique ci-dessus et `docs/roadmap.md`), le
-  transfert General → topic-projet, les handlers de
-  `reject_checkpoint`/`stop_run` (décision de conception séparée requise).
+  **Fait le 2026-07-29** : l'agent Devaimazing lui-même
+  (`runtime/studio/devaimazing/agent.py` — compréhension du langage naturel,
+  fallback structured-output validé, voir mise à jour empirique ci-dessus et
+  `docs/roadmap.md`), mais **pas encore câblé** dans
+  `runtime/studio/telegram/handlers.py` : un blocage de conception distinct
+  (ordre de résolution de `config` vs identification de l'outil visé) reste à
+  trancher avant le câblage, voir `docs/roadmap.md`.
+  **Reste non fait, tranche S5** : le transfert General → topic-projet, les
+  handlers de `reject_checkpoint`/`stop_run` (décision de conception séparée
+  requise).
   Ce découplage en tranches indépendantes, chacune testée avant la
   suivante, évite de refaire l'erreur corrigée le 2026-07-22 (documentation
   décrivant un système qui n'existe pas comme s'il tournait) tout en

@@ -25,7 +25,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from studio.config import StudioConfig, default_config_dir
 from studio.telegram.topics import load_topic_map, resolve_project
-from studio.tools.registry import ToolResult, execute_tool, parse_slash_command
+from studio.tools.registry import execute_tool, format_tool_result, parse_slash_command
 
 # Outils utilisables depuis le topic General, sans résolution de projet par
 # le topic — le nom du projet vient de l'argument de la commande elle-même
@@ -123,7 +123,7 @@ async def handle_slash_command(
         _pending_confirmations[confirmation_id] = (tool_name, args, config)
         return HandlerReply(result.summary, confirmation_id=confirmation_id)
 
-    return HandlerReply(_format_result(result))
+    return HandlerReply(format_tool_result(result))
 
 
 async def handle_confirmation_callback(
@@ -164,7 +164,7 @@ async def handle_confirmation_callback(
     result = await execute_tool(
         tool_name, args, config=config, confirmed=True, bot=bot, chat_id=allowed_chat_id,
     )
-    return _format_result(result)
+    return format_tool_result(result)
 
 
 def build_confirmation_keyboard(confirmation_id: str) -> InlineKeyboardMarkup:
@@ -177,14 +177,6 @@ def build_confirmation_keyboard(confirmation_id: str) -> InlineKeyboardMarkup:
             text="Non", callback_data=f"{_CALLBACK_PREFIX}:{confirmation_id}:no"
         ),
     ]])
-
-
-def _format_result(result: ToolResult) -> str:
-    if result.status == "error":
-        return result.summary
-    if not result.data:
-        return result.summary
-    return "\n".join(f"{key} : {value}" for key, value in result.data.items())
 
 
 def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:

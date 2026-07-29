@@ -57,6 +57,46 @@ FILE_OUTPUT_SCHEMA = {
 }
 
 
+# Schéma de sortie structurée pour l'agent Devaimazing (ADR 0013, tranche S4
+# — voir docs/roadmap.md, gate empirique du 2026-07-24 puis validation du
+# 2026-07-29). Gemma 3 ne supporte le function-calling natif Ollama
+# (`tools=...`) pour aucune de ses variantes (confirmé empiriquement et via
+# la doc officielle) : ce schéma est le fallback structured-output qui en
+# tient lieu — `tool_call` joue le rôle qu'aurait joué un vrai appel d'outil.
+# `reply` n'est fiable que lorsque `tool_call` est null (voir
+# devaimazing.agent.run_devaimazing_turn) : quand un outil est sélectionné,
+# `reply` a été observé contenant du texte halluciné (ex. noms de projets
+# inventés) même quand `tool_call.name` était correct — ne jamais l'exposer
+# à l'utilisateur dans ce cas.
+# Essai (2026-07-29) : placer `tool_call` avant `reply` dans le schéma
+# supprimait bien la dérive de génération sur `reply` (boucle de répétition
+# observée à deux reprises sur gemma3:4b, cf. docs/roadmap.md), mais cassait
+# la discrimination outil/pas-outil — le modèle se mettait à remplir
+# tool_call même sur du pur bavardage (dont un cas où un outil DESTRUCTIF,
+# reject_checkpoint, était sélectionné sur « Merci pour ton aide ! »).
+# Solution retenue : ordre `reply` puis `tool_call` inchangé (nécessaire à
+# la discrimination), mais consigne explicite dans le prompt système
+# (devaimazing.agent._build_tool_directive) demandant reply="" dès que
+# tool_call est rempli — reply n'est de toute façon jamais exposé à
+# l'utilisateur dans ce cas (voir run_devaimazing_turn), donc rien n'incite
+# plus le modèle à générer le texte libre qui dérapait.
+DEVAIMAZING_TURN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reply": {"type": "string"},
+        "tool_call": {
+            "type": ["object", "null"],
+            "properties": {
+                "name": {"type": "string"},
+                "arguments": {"type": "object"},
+            },
+            "required": ["name", "arguments"],
+        },
+    },
+    "required": ["reply", "tool_call"],
+}
+
+
 async def run_ollama(
     system_prompt: str,
     user_prompt: str,

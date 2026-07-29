@@ -6,6 +6,7 @@ models:
   pm_sonnet: claude-sonnet-4-6     # Phase 3 : raffinement (mode croisière)
   agent_auditor: claude-sonnet-4-6 # Architecte (phases 2, 5, 9) + Sécu (phase 8)
   agents_local: qwen2.5:7b-instruct # Back, Front, Test
+  devaimazing: gemma3:4b            # Agent Devaimazing (ADR 0013), validé 2026-07-29
 
 # Ollama
 ollama:

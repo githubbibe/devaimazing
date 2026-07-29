@@ -13,12 +13,102 @@ test, security, closer), `metrics.py` et `cli.py` (`run`, `resume`, `retry`,
 `run-agent`, `runs`, `metrics`, `new-project`, `projects`, `doctor`,
 `telegram-bot`) sont tous implémentés — voir `CLAUDE.md` pour la convention
 (stub-first reste appliquée par le pipeline aux projets *cibles*, pas à ce dépôt).
-**433/433 tests verts** sur `runtime/tests/` (2026-07-24) —
+**444/444 tests verts** sur `runtime/tests/` (2026-07-29) —
 `test_new_project_target_exists_not_git_repo_prints_error`, précédemment signalé
 en échec à cause du retour à la ligne Rich dépendant de la largeur du terminal,
 passe dans cet environnement ; sa sensibilité à la largeur du terminal n'est pas
 corrigée dans le code, donc un échec ponctuel sur une autre machine/largeur reste
 possible.
+
+**2026-07-29 — ADR 0013, tranche S4 : fallback structured-output validé sur
+`gemma3:4b`, module `devaimazing/agent.py` écrit (pas encore câblé dans le
+bot).** Suite directe du gate du 2026-07-24 ci-dessous. Session ouverte sur un
+imprévu d'infra : `/goinfre/sgraebli` avait été entièrement vidé depuis la
+session précédente (conteneur Ollama arrêté, `Ollama/`, `.cache`, `containers`
+tous recréés à l'heure du redémarrage du conteneur) — comportement probable
+des partitions goinfre 42 (scratch, pas persistant entre sessions), pas un
+problème disque. Modèles re-pull (`gemma3:4b`, 33s), voir
+`infra/ollama/README.md`.
+
+**Résultat 1 — `gemma3:4b`, prompt directif, registre-jouet à 2 outils :
+11/11.** Un prompt v1 (description en prose des outils) laissait le modèle
+répondre directement au lieu d'appeler `lister_projets` (0/4 sur les
+questions sans paramètre). Un prompt v2 corrige entièrement ce cas :
+interdiction explicite d'halluciner, énumération stricte des noms d'outils
+entre guillemets, règle de décision en 2 étapes. Confirme que le problème
+constaté le 2026-07-24 sur `gemma3:1b` (noms d'outils mal orthographiés) était
+au moins en partie un problème de prompt, pas seulement de taille de modèle.
+
+**Résultat 2 — même prompt, généré depuis les 7 vrais outils de
+`TOOL_REGISTRY` : 9 à 12/14 selon les essais, un mode d'échec reproductible
+identifié et corrigé.** Harness conservé dans le dépôt :
+`runtime/tests/manual/devaimazing_prompt_harness.py` (14 cas : les 7 outils +
+3 questions conversationnelles + 2 cas délibérément ambigus). Sans
+seed/température fixée, gemma3:4b n'est pas déterministe — plusieurs essais
+ont donné des scores différents (12/14, 9/14, 10/14, 11/14) sur des variantes
+de prompt très proches, une partie de cette variance est un pur artefact
+d'échantillonnage. Un mode d'échec précis a été isolé et est reproductible
+(2/2, puis re-confirmé) : sur la question « Où en est le run run-007 ? », le
+modèle partait en boucle de répétition dans le champ `"reply"` (dates
+absurdes générées en boucle jusqu'à troncature), corrompant tout le JSON —
+y compris un `tool_call` par ailleurs correct puisque `reply` est généré
+avant `tool_call` dans le schéma. Deux corrections testées :
+- Réordonner le schéma (`tool_call` avant `reply`) : corrige la dérive
+  (5/5 sur le cas reproductible) mais casse la discrimination outil/pas-outil
+  — le modèle se met à remplir `tool_call` sur du pur bavardage, y compris un
+  outil **destructif** (`reject_checkpoint`) sélectionné sur « Merci pour ton
+  aide ! ». Rejeté.
+- Ordre du schéma inchangé (`reply` avant `tool_call`), mais consigne
+  explicite dans le prompt : `reply` DOIT être une chaîne vide dès que
+  `tool_call` est rempli (cohérent avec le fait que `reply` est de toute
+  façon ignoré dans ce cas côté code, voir `run_devaimazing_turn`). Corrige
+  la dérive (5/5 sur le cas reproductible) sans casser la discrimination
+  (11/14 sur la suite complète, aucune sélection d'outil destructif erronée
+  sur les essais suivants). **Solution retenue.**
+
+Sur les cas encore en écart (généralement 2-3/14) : soit une ambiguïté
+volontaire du cas de test (`lire_statut` vs `lire_progression`, descriptions
+proches), soit un comportement discutable plutôt qu'un vrai échec (demander
+une clarification au lieu d'halluciner un `run_id` manquant). Aucun cas
+observé de nom d'outil halluciné hors du registre une fois la consigne
+`reply=""` en place, aucune sélection spurieuse d'outil destructif.
+
+**Conséquence — code de production S4 écrit, pas câblé.**
+`runtime/studio/devaimazing/agent.py` : `build_system_prompt` (persona
+`prompts/devaimazing.md` + énumération d'outils générée depuis
+`TOOL_REGISTRY`, jamais recopiée à la main), `parse_devaimazing_turn`,
+`run_devaimazing_turn` (dispatch vers `execute_tool`, validation du nom
+d'outil déléguée à `execute_tool` — un nom halluciné ou inconnu redescend en
+`ToolResult(status="error")` propre, jamais un appel de handler). `reply` est
+systématiquement ignoré côté code dès qu'un `tool_call` est présent (observé
+halluciné à plusieurs reprises, y compris avec un `tool_call.name` correct).
+`tools/ollama.py` gagne `DEVAIMAZING_TURN_SCHEMA`. `tools/registry.py` gagne
+`format_tool_result` (extrait de `telegram/handlers.py`, partagé entre le
+dispatch slash-command et le dispatch langage-naturel). `config/studio.yml`
+gagne `models.devaimazing: gemma3:4b` — **pas encore lu par du code** : le
+seul appelant possible est le câblage `telegram/handlers.py` décrit
+ci-dessous, non fait. Si ce câblage arrive sans relire explicitement cette
+clé, `run_ollama` retombe silencieusement sur son défaut Ollama de 2048
+tokens de contexte (voir `tools/ollama.py`) plutôt que sur le `num_ctx`
+testé empiriquement (4096) — à vérifier explicitement au moment du câblage,
+pas à supposer réglé par la présence de cette clé dans le fichier.
+
+La sélection spurieuse d'un outil destructif (`reject_checkpoint` sur
+« Merci pour ton aide ! », observée pendant l'essai schéma réordonné rejeté
+ci-dessus) n'aurait de toute façon rien exécuté : le court-circuit
+`requiert_confirmation` d'`execute_tool` (ADR 0013, Décision 4) bloque tout
+outil destructif tant que l'utilisateur n'a pas confirmé explicitement —
+c'est ce garde-fou structurel, indépendant de la fiabilité du prompt, qui
+rend ce genre d'erreur de sélection gênant en UX mais jamais dangereux.
+
+**Non fait — câblage dans `telegram/handlers.py`.** `_on_message` ignore
+toujours tout texte qui n'est pas une commande slash reconnue
+(`run_devaimazing_turn` n'est appelé nulle part dans le bot). Blocage de
+conception identifié, pas juste du câblage mécanique : le chemin slash
+résout `config` (quel projet, via le topic) *avant* de savoir quel outil est
+visé ; le chemin langage-naturel ne connaît l'outil qu'*après* l'appel LLM,
+alors que `run_devaimazing_turn` prend `config` en argument obligatoire en
+amont. À concevoir séparément avant de câbler (voir « Reste à faire »).
 
 **2026-07-24 — ADR 0013, tranche S4 : gate empirique fait, résultat négatif,
 aucun code de production écrit.** Avant d'écrire `runtime/studio/devaimazing/`
@@ -654,37 +744,39 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    supposant `claude` installé sur l'hôte), accès réseau à Ollama
    (`localhost:11434` en dur), montage du repo projet cible en volume,
    persistance de `state.db`/`metrics.db`.
-6. **ADR 0013, tranche S4 — agent Devaimazing (function-calling)** (S1, S2 et
-   S3 livrées le 2026-07-24 ; gate empirique S4 fait le 2026-07-24, résultat
-   négatif sur le function-calling natif, voir entrée ci-dessus). Function-
-   calling natif Gemma **exclu** (aucune variante Gemma 3 ne le supporte,
-   confirmé empiriquement et via la doc officielle) — pas la peine de
-   retester. Prochaines étapes concrètes, dans l'ordre :
-   1. Reproduire le test structured-output (`format=` JSON schema) sur
-      `gemma3:4b` proprement (RAM libre vérifiée avant lancement — le
-      premier essai a planté par manque de RAM, pas retesté depuis) ; élargir
-      le jeu de questions de test (au-delà des 3 déjà essayées) pour avoir un
-      taux d'échec plus significatif que 2/2.
-   2. Si `gemma3:4b` ne fiabilise pas la sélection d'outil : tester un prompt
-      système plus directif (lister les noms d'outils *exacts* de façon plus
-      visible, ex. une énumération stricte plutôt qu'une description en
-      prose) avant d'abandonner Gemma — ne pas conclure sur la seule base du
-      prompt déjà essayé.
-   3. Si ça ne suffit toujours pas : reposer explicitement à l'utilisateur la
-      question tranchée le 2026-07-24 (« non gemma comme llm en devaimazing »)
-      — la justification retenue (conversationnel > code) reste valable pour
-      le *ton*, mais la Décision 4 de l'ADR 0013 dépend d'une sélection
-      d'outil fiable, pas juste conversationnelle ; envisager Qwen (qui
-      supporte `tools` nativement) uniquement pour l'étape de sélection
-      d'outil, avec Gemma gardé pour la formulation de la réponse — à évaluer
-      comme option parmi d'autres, pas comme conclusion déjà actée.
-   4. Une fois une méthode fiable retenue : écrire
-      `runtime/studio/devaimazing/agent.py` (`run_devaimazing_turn`) et
-      généraliser `runtime/studio/tools/ollama.py` (`_select_tool_call`),
-      selon le plan initial. Valider systématiquement `tool_call.name` contre
-      `TOOL_REGISTRY` avant tout appel (nécessaire même avec une méthode
-      fiabilisée — voir résultat 2 de l'entrée ci-dessus : un JSON
-      syntaxiquement valide ne garantit pas un nom d'outil correct).
+6. **ADR 0013, tranche S4 — agent Devaimazing (function-calling)** (S1-S3
+   livrées le 2026-07-24 ; gate empirique fait le 2026-07-24, résultat
+   consolidé et code de production écrit le 2026-07-29, voir entrée
+   ci-dessus). Function-calling natif Gemma reste exclu (aucune variante
+   Gemma 3 ne le supporte). Le fallback structured-output est validé
+   empiriquement (11/14 sur le dernier essai avec les 7 vrais outils, aucune
+   sélection d'outil destructif erronée, un mode d'échec reproductible
+   identifié et corrigé — voir entrée du 2026-07-29) : **la question
+   Gemma-vs-Qwen pour la sélection d'outil est tranchée par les données, pas
+   à reposer à l'utilisateur.** `runtime/studio/devaimazing/agent.py`,
+   `tools/ollama.py::DEVAIMAZING_TURN_SCHEMA`,
+   `tools/registry.py::format_tool_result` sont écrits et testés
+   (`runtime/tests/test_devaimazing_agent.py`). Reste concrètement :
+   1. **Câbler `run_devaimazing_turn` dans `telegram/handlers.py`** — non
+      fait, blocage de conception à résoudre (pas juste du câblage
+      mécanique) : le chemin slash résout `config` (projet, via le topic)
+      *avant* de savoir quel outil est visé ; le chemin langage-naturel ne
+      connaît l'outil qu'*après* l'appel LLM, alors que `run_devaimazing_turn`
+      prend `config` en argument obligatoire en amont. Options à trancher :
+      résoudre `config` de la même façon que le chemin slash (topic → projet,
+      avec les mêmes limites en General) avant l'appel LLM, ou changer la
+      signature pour résoudre `config` après coup depuis le nom d'outil
+      retourné.
+   2. Une fois câblé : valider en conditions réelles sur le bot Telegram
+      (pas seulement le harness `runtime/tests/manual/devaimazing_prompt_harness.py`),
+      élargir le jeu de cas de test si de nouveaux modes d'échec apparaissent
+      en usage réel.
+   3. Envisager de fixer une graine/température basse pour `gemma3:4b` sur
+      cet usage précis (sélection d'outil, pas génération conversationnelle)
+      si la variance d'échantillonnage observée le 2026-07-29 (scores de
+      9/14 à 12/14 sur des prompts très proches) s'avère gênante en usage
+      réel — non fait, l'API Ollama le permet (`options.seed`,
+      `options.temperature`) mais pas testé.
    **S5** (transfert General → topic-projet + `IMPROVEMENTS.md`) : non
    commencée, dépend de S4. `stop_run`/`reject_checkpoint` (déjà déclarés
    dans `TOOL_REGISTRY` avec leurs métadonnées, handler `NotImplementedError`)

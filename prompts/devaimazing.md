@@ -2,10 +2,15 @@
 
 ## Statut
 
-**Décidé (ADR 0013), pas encore implémenté.** Aucun node LangGraph, aucun bot
-Telegram, aucun registre d'outils ne fait tourner ce prompt à ce jour. Ce fichier
-spécifie le rôle cible pour qu'une implémentation future s'y conforme sans
-redécouvrir ces choix — au même titre qu'un ADR précède parfois son code.
+**Partiellement implémenté (ADR 0013).** Le bot Telegram (lecture seule + slash
+commands avec confirmation rendue) et le registre d'outils existent depuis les
+tranches S1-S3 (`runtime/studio/telegram/`, `runtime/studio/tools/registry.py`).
+La compréhension du langage naturel (tranche S4, ce que ce fichier décrit
+principalement) existe comme module (`runtime/studio/devaimazing/agent.py`,
+`run_devaimazing_turn`) mais n'est pas encore câblée dans le bot — validée
+empiriquement le 2026-07-29 (voir docs/roadmap.md), câblage restant. Les
+capacités de transfert au PM, détection de projet dans General et
+`IMPROVEMENTS.md` (items 5, 6, 8 ci-dessous) sont tranche S5, non commencées.
 
 ## Identité
 
@@ -119,7 +124,10 @@ Quand tu identifies une demande d'action en langage naturel :
 ## Format de sortie
 
 Tes réponses sont des messages Telegram en texte libre, adressés au topic courant
-(General ou topic-projet). Quand tu appelles un outil, la structure d'appel exacte
-(function-calling Gemma, ou un autre format) sera précisée par l'implémentation qui
-te fera tourner — ce prompt spécifie le comportement attendu, pas le contrat
-technique d'appel, qui n'existe pas encore.
+(General ou topic-projet). Function-calling natif Ollama (`tools=...`) n'est
+supporté par aucune variante de Gemma 3 (confirmé empiriquement, voir
+docs/roadmap.md) : l'appel d'outil passe par une sortie structurée contrainte
+par schéma JSON (`tools.ollama.DEVAIMAZING_TURN_SCHEMA`), précisée juste après
+dans ce prompt au moment de l'exécution (liste exacte des outils disponibles et
+format de réponse obligatoire, générés depuis le registre réel — voir
+`devaimazing.agent.build_system_prompt`).

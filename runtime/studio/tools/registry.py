@@ -378,3 +378,18 @@ async def execute_tool(
         return ToolResult(status="error", summary=str(exc))
 
     return ToolResult(status="ok", summary=f"{spec.name} exécuté avec succès.", data=data)
+
+
+def format_tool_result(result: ToolResult) -> str:
+    """
+    Formate un ToolResult en texte affichable tel quel (Telegram ou autre) —
+    partagé entre le dispatch des commandes slash (telegram.handlers) et le
+    function-calling en langage naturel (devaimazing.agent), pour ne pas
+    dupliquer cette mise en forme entre les deux voies d'entrée du même
+    registre (voir docstring de ce module).
+    """
+    if result.status == "error":
+        return result.summary
+    if not result.data:
+        return result.summary
+    return "\n".join(f"{key} : {value}" for key, value in result.data.items())
