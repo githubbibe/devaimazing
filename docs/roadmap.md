@@ -65,12 +65,21 @@ aucune parole détectée) plutôt qu'un silence confus. Config globale
 `config.py::load_global_whisper_config`, même pattern que
 `load_global_devaimazing_config`.
 
-**Reste (Phase 4 en cours, cette entrée ; Phase 5 non faite)** : validation
-en conditions réelles sur le bot Telegram avec un vrai message vocal — le
-harness manuel existant (`runtime/tests/manual/`) ne couvre que le texte.
-Contention RAM réelle entre Whisper (small, ~487 Mo chargé) et Devaimazing
-(gemma3:4b) ou les agents Qwen si plusieurs tournent simultanément : pas
-mesurée, point resté ouvert dans l'ADR 0014.
+**Phase 5 — validation en conditions réelles, faite le 2026-07-29 (même
+session).** Message vocal envoyé sur le bot Telegram réel (indication orale « liste les
+projets ») : transcription correcte, `lister_projets`
+correctement sélectionné, données réelles renvoyées (`demo-todo-app`,
+`todo-list`, `todo-list2`, `webaimazing-v2`), aucune erreur en log. Le bot
+avait besoin d'être relancé pour charger le code des phases 2-3 (un process
+Python ne recharge pas son code à chaud) — à ne pas oublier lors d'un futur
+câblage similaire testé en conditions réelles dans la même session que son
+écriture.
+
+**ADR 0014 entièrement livrée.** Reste : contention RAM réelle entre
+Whisper (small, ~487 Mo chargé) et Devaimazing (gemma3:4b) ou les agents
+Qwen si plusieurs tournent simultanément — pas mesurée, point resté ouvert
+dans l'ADR 0014 ; harness automatisé (`runtime/tests/manual/`) ne couvre
+encore que le texte, pas l'audio.
 
 **2026-07-29 — ADR 0013, tranche S4 : test en conditions réelles sur un vrai
 bot Telegram, tout passe.** Suite directe du câblage (entrée suivante) : un
@@ -889,16 +898,14 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    d'un projet » (limitation notée dans l'entrée S2 du 2026-07-24 : `run_id`
    doit encore être tapé explicitement dans les commandes slash) à trancher
    aussi, indépendamment des tranches S4-S5.
-7. **ADR 0014 — transcription vocale (Whisper)** : code écrit et testé
-   unitairement le 2026-07-29 en 3 phases (voir entrée dédiée ci-dessus),
-   pas encore validé en conditions réelles. Reste :
-   1. Envoyer un vrai message vocal sur le bot Telegram (même groupe que le
-      test S4 du 2026-07-29), vérifier la transcription puis le dispatch
-      vers `handle_natural_language` de bout en bout.
-   2. Mesurer la contention RAM réelle si Whisper (small, ~487 Mo) et
+7. **ADR 0014 — transcription vocale (Whisper), livrée le 2026-07-29** :
+   code écrit, testé unitairement, câblé et validé en conditions réelles
+   (message vocal réel → transcription → `lister_projets` → données
+   correctes, voir entrée dédiée ci-dessus). Reste :
+   1. Mesurer la contention RAM réelle si Whisper (small, ~487 Mo) et
       Devaimazing (gemma3:4b) ou un agent Qwen tournent simultanément —
       point resté ouvert dans l'ADR 0014, jamais mesuré.
-   3. Si la précision de `small` s'avère insuffisante en usage réel (accent,
+   2. Si la précision de `small` s'avère insuffisante en usage réel (accent,
       vocabulaire technique) : passer à `large` via `WHISPER_MODEL` dans
       `infra/whisper/.env` — déjà configurable, juste pas testé.
 

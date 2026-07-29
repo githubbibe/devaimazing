@@ -1,11 +1,10 @@
 # ADR 0014 - Transcription vocale (Whisper) en amont de l'agent Devaimazing
 
 **Date** : 2026-07
-**Statut** : Accepté et implémenté (2026-07-29, voir « Conséquences » et
-`docs/roadmap.md`) — code écrit et testé unitairement, validation en conditions
-réelles sur le bot Telegram en cours. Complète l'ADR 0013 (interface Telegram,
-agent Devaimazing) d'une capacité qui n'y figurait pas : le support des messages
-vocaux.
+**Statut** : Accepté, implémenté et validé en conditions réelles (2026-07-29,
+voir « Conséquences » et `docs/roadmap.md`). Complète l'ADR 0013 (interface
+Telegram, agent Devaimazing) d'une capacité qui n'y figurait pas : le support
+des messages vocaux.
 
 ## Contexte
 
@@ -126,10 +125,13 @@ créerait une configuration orpheline.
   `docs/agents.md`, section Devaimazing, gagnent une mention du support vocal
   comme capacité implémentée (pas seulement décidée).
 - `README.md`, structure du dépôt, gagne l'entrée de cet ADR et de `infra/whisper/`.
-- **Reste non fait** : validation en conditions réelles sur le bot Telegram avec
-  un vrai message vocal (le harness `runtime/tests/manual/` n'en couvre pas
-  encore, voir `docs/roadmap.md`), contention RAM réelle Whisper+Qwen simultanés
-  non mesurée (point resté ouvert, voir ci-dessous).
+- **Validé en conditions réelles le 2026-07-29** : message vocal envoyé sur le
+  bot Telegram réel (« liste les projets »), transcription correcte, dispatch
+  vers `lister_projets` réussi, données réelles renvoyées, aucune erreur en
+  log — voir `docs/roadmap.md` pour le détail.
+- **Reste non fait** : contention RAM réelle Whisper+Qwen/Gemma simultanés non
+  mesurée (point resté ouvert, voir ci-dessous) ; harness automatisé
+  (`runtime/tests/manual/`) ne couvre encore que le texte, pas l'audio.
 
 ## Points laissés ouverts, à trancher à l'implémentation
 
