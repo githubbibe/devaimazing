@@ -905,6 +905,18 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    2. Si la précision de `small` s'avère insuffisante en usage réel (accent,
       vocabulaire technique) : passer à `large` via `WHISPER_MODEL` dans
       `infra/whisper/.env` — déjà configurable, juste pas testé.
+7. **Idée notée le 2026-07-29, pas encore cadrée** : interface à boutons native
+   Telegram (menu de commandes `setMyCommands`, et boutons inline généralisés
+   au-delà de la confirmation Oui/Non déjà en place — voir
+   `telegram/handlers.py::build_confirmation_keyboard`), remplaçant ce
+   qu'une PWA aurait offert (plan abandonné, voir ADR 0013). Cas d'usage
+   évoqué : depuis `/projects`, taper sur un projet ouvre une « fiche
+   projet » plutôt que de retaper une commande. Reste à trancher avant
+   implémentation : contenu de la fiche (`project-map.md` généré par le
+   pipeline ? résumé du dernier run ? les deux ?), boutons d'action
+   éventuels dessus (archiver, voir le run en cours...). Complète Devaimazing
+   (S1-S4), ne le remplace pas — les boutons couvrent un ensemble énuméré
+   d'actions, pas une demande ouverte en langage libre.
 
 Pas d'ordre de priorité déjà acté entre ces points au-delà de leur numérotation
 ci-dessus — à trancher avec l'utilisateur en début de prochaine session.
