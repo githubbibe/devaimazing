@@ -917,6 +917,34 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    éventuels dessus (archiver, voir le run en cours...). Complète Devaimazing
    (S1-S4), ne le remplace pas — les boutons couvrent un ensemble énuméré
    d'actions, pas une demande ouverte en langage libre.
+8. **Idée notée le 2026-07-29, pas encore cadrée** : mécanisme d'évolution
+   des agents locaux (Devaimazing, et potentiellement Back/Front/Test) par
+   boucle rétroactive + benchmark, sur le modèle de ce qui a été fait
+   empiriquement pour Devaimazing cette session (harness reproductible
+   `runtime/tests/manual/devaimazing_prompt_harness.py`, itérations du
+   prompt directif). RAG explicitement écarté (déjà rejeté à deux reprises
+   dans ce dépôt — ADR 0013, `prompts/devaimazing.md` — disproportionné vu
+   le volume réel de documentation).
+   - **Boucle intra-run** : existe déjà (PM/Architecte auditent, Back/Front
+     corrigent avec feedback, `inner_retry_limit`).
+   - **Manque : persistance inter-runs.** Piste retenue : étendre le
+     mécanisme `skills/*.md` déjà injecté dans les prompts système
+     (`inject_skills`) avec un fichier « leçons apprises » par agent — pas
+     un journal qui accumule sans limite (revoir le bug `num_ctx` du
+     2026-07-16, `tools/ollama.py` : un feedback cumulé qui grossit sans
+     limite finit tronqué silencieusement), mais des règles distillées,
+     avec une **étape de curation périodique** (fusion des doublons, retrait
+     de ce qui n'est plus pertinent) — pas purement automatique, une session
+     dédiée relit et élague.
+   - **Deux leviers identifiés à la phase de synthèse/curation**, pour
+     chaque sortie peu concluante observée : (1) **prompt/skill** — ajuster
+     la formulation, comme fait pour Devaimazing cette session ; (2)
+     **modèle** — changer de modèle/version (ex. `gemma3:4b` → `large`, ou
+     un autre modèle Ollama) si le levier prompt plafonne. La phase de
+     synthèse est le point de décision entre les deux, pas un choix a priori.
+   - Reste à trancher avant implémentation : qui/quoi déclenche la phase de
+     synthèse (fin de run ? périodique ? manuel ?), granularité des
+     « leçons » (par agent ? par type d'erreur ?), format du fichier.
 
 Pas d'ordre de priorité déjà acté entre ces points au-delà de leur numérotation
 ci-dessus — à trancher avec l'utilisateur en début de prochaine session.
