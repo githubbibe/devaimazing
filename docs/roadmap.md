@@ -21,6 +21,45 @@ passe dans cet environnement ; sa sensibilité à la largeur du terminal n'est p
 corrigée dans le code, donc un échec ponctuel sur une autre machine/largeur reste
 possible.
 
+**2026-07-29 — ADR 0013, tranche S4 : test en conditions réelles sur un vrai
+bot Telegram, tout passe.** Suite directe du câblage (entrée suivante) : un
+vrai bot (@devaimazing_bot) créé via BotFather, un vrai groupe supergroupe
+avec Sujets activés. Nouvelle machine école 42 pour ce test (`/goinfre` vidé
+à nouveau, voir `infra/ollama/README.md` — modèles re-pull sans incident).
+
+Piège d'infra Telegram, pas un bug devaimazing : un bot est en **mode
+privacy** par défaut (ne reçoit que les commandes slash, jamais le texte
+libre) — sans le désactiver via BotFather (Bot Settings → Group Privacy →
+Turn off, puis retirer/rajouter le bot au groupe), `handle_natural_language`
+n'est jamais invoqué, Telegram filtrant le message avant même qu'il
+n'atteigne le bot. Deuxième piège : `creer_projet` échoue silencieusement
+côté utilisateur (`TelegramBadRequest: not enough rights to create a topic`,
+visible seulement dans les logs du process) tant que le bot n'est pas
+promu **administrateur** du groupe avec le droit "Gérer les sujets" — un
+réglage de permission modifié sur un bot resté simple membre ne suffit pas,
+il faut une vraie promotion admin (vérifiable via `getChatMember`). Ces deux
+prérequis (privacy off + admin) ne sont écrits nulle part avant cette
+entrée — à ajouter dans un futur guide de setup si quelqu'un d'autre doit
+reproduire.
+
+Testé et confirmé fonctionnel de bout en bout : `/new todo-list2` (création
+du topic + écriture `thread_id` dans `config/projects/todo-list2.yml`),
+`/status <run_id>` en commande slash ET en langage naturel dans le topic du
+projet (extraction correcte de `run_id` par gemma3:4b, `found: true` avec
+les bonnes données), la même question en langage naturel depuis **General**
+correctement rejetée (« utilisez le topic d'un projet », `lire_statut`
+n'étant pas General-scope — comportement voulu, pas un bug), et `archive
+le projet todo-list2` en langage naturel avec confirmation Oui/Non rendue,
+commit réel sous l'identité `devaimazing-bot <bot@aimazing.fr>` puis push
+réel sur `github.com/githubbibe/todo-list2`, topic fermé (pas supprimé).
+
+Un seul essai sur `/status <run_id>` en langage naturel a renvoyé
+`found: false` avant de réussir au deuxième essai identique — reproduit
+isolément ensuite (5/5 corrects) sans pouvoir capturer l'argument exact
+généré lors de l'essai raté (debug logging ajouté après coup, retiré depuis)
+: cohérent avec la variance d'échantillonnage déjà documentée (2026-07-29
+ci-dessous), pas un nouveau bug de câblage.
+
 **2026-07-29 — ADR 0013, tranche S4 : fallback structured-output validé sur
 `gemma3:4b`, module `devaimazing/agent.py` écrit (pas encore câblé dans le
 bot).** Suite directe du gate du 2026-07-24 ci-dessous. Session ouverte sur un
@@ -773,11 +812,13 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    `tools/registry.py::format_tool_result`,
    `telegram/handlers.py::handle_natural_language` sont écrits et testés
    (`runtime/tests/test_devaimazing_agent.py`,
-   `runtime/tests/test_telegram_handlers.py`). Reste concrètement :
-   1. Valider en conditions réelles sur le bot Telegram (pas seulement le
-      harness `runtime/tests/manual/devaimazing_prompt_harness.py`), élargir
-      le jeu de cas de test si de nouveaux modes d'échec apparaissent en
-      usage réel.
+   `runtime/tests/test_telegram_handlers.py`) — **validé en conditions
+   réelles sur un vrai bot Telegram le 2026-07-29** (voir entrée dédiée
+   ci-dessus : `/new`, `/status` slash+langage naturel, `/archive` avec
+   confirmation, commit+push réels, tout fonctionne). Reste concrètement :
+   1. Élargir le jeu de cas de test si de nouveaux modes d'échec apparaissent
+      en usage réel prolongé (le harness manuel couvre 14 cas synthétiques,
+      pas un usage quotidien).
    2. Envisager de fixer une graine/température basse pour `gemma3:4b` sur
       cet usage précis (sélection d'outil, pas génération conversationnelle)
       si la variance d'échantillonnage observée le 2026-07-29 (scores de

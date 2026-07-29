@@ -74,3 +74,8 @@ checkpoints:
 #   framework_backend:
 #   framework_frontend:
 #   database:
+
+# Ajouté automatiquement lors de la création du topic Telegram
+# associé à ce projet (ADR 0013).
+telegram:
+  thread_id: 19
