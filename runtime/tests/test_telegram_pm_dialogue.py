@@ -102,6 +102,12 @@ async def test_start_feature_dialogue_posts_first_question(
     assert "nom de la feature" in bot.messages[0]["text"]
     assert bot.messages[0]["reply_markup"] is None
     assert _THREAD_ID in pm_dialogue._pending_dialogues
+    # "typing" envoyé avant l'appel PM (potentiellement long) — sans ça, le
+    # déclenchement initial d'un dialogue reste silencieux jusqu'à la
+    # première question (gap trouvé en usage réel, voir docs/roadmap.md).
+    assert bot.chat_actions == [
+        {"chat_id": _CHAT_ID, "action": "typing", "message_thread_id": _THREAD_ID},
+    ]
 
 
 async def test_handle_dialogue_reply_without_pending_dialogue_returns_false(
@@ -167,8 +173,10 @@ async def test_handle_dialogue_reply_advances_to_next_question(
     consumed = await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier")
 
     assert consumed is True
-    assert len(bot.chat_actions) == 1
-    assert bot.chat_actions[0]["action"] == "typing"
+    # 2 : un pour le tour initial (start_feature_dialogue), un pour la
+    # réponse traitée ici (handle_dialogue_reply).
+    assert len(bot.chat_actions) == 2
+    assert all(action["action"] == "typing" for action in bot.chat_actions)
     assert len(bot.messages) == 2
     assert "à quoi ça sert" in bot.messages[1]["text"]
     assert _THREAD_ID in pm_dialogue._pending_dialogues

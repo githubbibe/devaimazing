@@ -15,7 +15,7 @@ import studio.telegram.handlers as handlers_module
 import studio.tools.queries as queries_module
 import studio.tools.registry as registry_module
 import yaml
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from studio.telegram.handlers import (
     _pending_confirmations,
     handle_confirmation_callback,
@@ -815,3 +815,72 @@ async def test_confirmation_callback_attaches_root_menu_keyboard(
     assert "Nouveau projet" in [
         b.text for row in edits[0]["reply_markup"].inline_keyboard for b in row
     ]
+
+
+# --- réponse au callback avant travail long + robustesse "message not modified" ---
+
+async def test_menu_callback_answers_before_running_long_action(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path,
+):
+    order = []
+
+    async def fake_handle_menu_callback(callback_data, *, chat_id, message_thread_id, config_dir, bot):
+        order.append("handle_menu_callback")
+        return "texte", handlers_module.menu.build_root_keyboard(in_topic=True)
+
+    monkeypatch.setattr(handlers_module.menu, "handle_menu_callback", fake_handle_menu_callback)
+
+    router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
+    on_menu_callback = router.callback_query.handlers[1].callback
+
+    async def fake_answer():
+        order.append("answer")
+
+    async def fake_edit_text(text, reply_markup=None):
+        order.append("edit_text")
+
+    callback = SimpleNamespace(
+        data="menu:root",
+        message=SimpleNamespace(
+            chat=SimpleNamespace(id=_ALLOWED_CHAT_ID),
+            message_thread_id=111,
+            edit_text=fake_edit_text,
+        ),
+        bot=None,
+        answer=fake_answer,
+    )
+
+    await on_menu_callback(callback)
+
+    assert order == ["answer", "handle_menu_callback", "edit_text"]
+
+
+async def test_menu_callback_ignores_message_not_modified_error(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path,
+):
+    async def fake_handle_menu_callback(callback_data, *, chat_id, message_thread_id, config_dir, bot):
+        return "texte", handlers_module.menu.build_root_keyboard(in_topic=True)
+
+    monkeypatch.setattr(handlers_module.menu, "handle_menu_callback", fake_handle_menu_callback)
+
+    router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
+    on_menu_callback = router.callback_query.handlers[1].callback
+
+    async def fake_answer():
+        return None
+
+    async def fake_edit_text(text, reply_markup=None):
+        raise TelegramBadRequest(method=None, message="message is not modified: x")
+
+    callback = SimpleNamespace(
+        data="menu:root",
+        message=SimpleNamespace(
+            chat=SimpleNamespace(id=_ALLOWED_CHAT_ID),
+            message_thread_id=111,
+            edit_text=fake_edit_text,
+        ),
+        bot=None,
+        answer=fake_answer,
+    )
+
+    await on_menu_callback(callback)  # ne doit pas lever

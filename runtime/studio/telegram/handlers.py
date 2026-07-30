@@ -18,7 +18,7 @@ from types import SimpleNamespace
 from typing import Any, Optional, Union
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import CallbackQuery, Message
 
 from studio.config import (
@@ -349,6 +349,22 @@ async def handle_confirmation_callback(
     return format_tool_result(result)
 
 
+async def _safe_edit_text(message: Message, text: str, *, reply_markup: Any = None) -> None:
+    """
+    `message.edit_text`, en absorbant l'erreur Telegram "message is not
+    modified" (texte+clavier strictement identiques à l'existant — ex. un
+    double-tap sur un bouton renvoyant deux fois le même écran) : ne doit
+    pas remonter comme une exception non gérée (voir Cause exception while
+    process update... observé en conditions réelles, docs/roadmap.md).
+    Toute autre TelegramBadRequest continue de se propager normalement.
+    """
+    try:
+        await message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest as exc:
+        if "message is not modified" not in str(exc):
+            raise
+
+
 def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
     """
     Construit le Router aiogram, câblage mince autour de handle_slash_command
@@ -511,6 +527,12 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
         if chat_id is None or callback.data is None:
             await callback.answer()
             return
+        # Répond au callback tout de suite (avant le travail potentiellement
+        # long ci-dessous) : Telegram invalide une réponse trop tardive
+        # ("query is too old...", observé en conditions réelles quand
+        # l'outil confirmé prenait plus de temps que prévu) — l'édition du
+        # message, elle, reste possible après coup.
+        await callback.answer()
         reply_text = await handle_confirmation_callback(
             callback.data, chat_id=chat_id, allowed_chat_id=allowed_chat_id, bot=callback.bot,
         )
@@ -520,10 +542,10 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
             # (archive_projet, valider_fiche_feature, valider_fiche_projet),
             # pas de logique par-outil.
             in_topic = callback.message.message_thread_id is not None
-            await callback.message.edit_text(
-                reply_text, reply_markup=menu.build_root_keyboard(in_topic=in_topic),
+            await _safe_edit_text(
+                callback.message, reply_text,
+                reply_markup=menu.build_root_keyboard(in_topic=in_topic),
             )
-        await callback.answer()
 
     @router.callback_query(F.data.startswith(f"{menu.CALLBACK_PREFIX}:"))
     async def _on_menu_callback(callback: CallbackQuery) -> None:
@@ -532,12 +554,15 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
         if chat_id is None or callback.data is None or chat_id != allowed_chat_id:
             await callback.answer()
             return
+        # Voir le commentaire équivalent dans _on_callback : répondre tout
+        # de suite, avant le dialogue de cadrage PM potentiellement long
+        # déclenché par certaines actions (new_feature, cadrer_projet).
+        await callback.answer()
         text, keyboard = await menu.handle_menu_callback(
             callback.data, chat_id=chat_id, message_thread_id=thread_id,
             config_dir=resolved_config_dir, bot=callback.bot,
         )
         if callback.message is not None:
-            await callback.message.edit_text(text, reply_markup=keyboard)
-        await callback.answer()
+            await _safe_edit_text(callback.message, text, reply_markup=keyboard)
 
     return router

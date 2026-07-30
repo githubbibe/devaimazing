@@ -103,7 +103,16 @@ async def _start_dialogue(
 ) -> None:
     """Cœur partagé de start_feature_dialogue/start_project_dialogue — un
     seul appel PM, puis question postée + état enregistré, ou brouillon
-    présenté directement si le PM n'a besoin d'aucune question."""
+    présenté directement si le PM n'a besoin d'aucune question.
+
+    "typing" envoyé avant l'appel PM (potentiellement long, Claude Code CLI)
+    — sans ça, le déclenchement initial d'un dialogue (bouton menu ou
+    commande) reste silencieux jusqu'à la première question, contrairement
+    aux tours suivants (voir handle_dialogue_reply, qui l'envoie déjà) —
+    gap trouvé en usage réel (aucun retour visible après avoir cliqué
+    « Cadrer le projet », voir docs/roadmap.md)."""
+    await bot.send_chat_action(chat_id, "typing", message_thread_id=message_thread_id)
+
     system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
     transcript = [transcript_seed]
     tracer = RunTracer.for_run(config, trace_id).for_agent("pm", Phase.CADRAGE)
