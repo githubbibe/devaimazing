@@ -10,12 +10,23 @@ logique entre les deux canaux, ni entre les deux variantes (feature/projet)
 ci-dessous — seuls le seed de transcript et l'outil de validation finale
 diffèrent (voir _DialogueState.kind).
 
-État en mémoire process, jamais persisté (même choix assumé que
-_pending_confirmations, voir studio.telegram.confirmations et ADR 0013,
-Décision 3) : perdu si le bot redémarre en cours de dialogue, à reprendre
-depuis le début.
+État tenu en mémoire process (comme _pending_confirmations, voir
+studio.telegram.confirmations et ADR 0013, Décision 3), mais le transcript
+est en plus persisté sur disque (_DIALOGUES_STATE_DIR, un fichier JSON par
+message_thread_id) à chaque tour — contrairement au reste de l'état en
+attente de ce dépôt (confirmations, run_flow._active_runs), qui reste
+volontairement en mémoire pure : un dialogue de cadrage peut s'étendre sur
+plusieurs tours espacés dans le temps (l'utilisateur répond quand il veut),
+le perdre au moindre redémarrage du bot forçait à tout retaper depuis le
+début — gap trouvé en usage réel (webaimazing-v2, voir docs/roadmap.md).
+restore_pending_dialogues() recharge ces fichiers au démarrage du bot (voir
+studio.telegram.bot.run_bot). Le fichier est supprimé dès que le dialogue
+sort de sa phase "questions" (brouillon présenté ou /stop) — la
+confirmation Oui/Non qui suit un brouillon présenté, elle, reste en mémoire
+pure (pending_confirmations), non couverte ici.
 """
 
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -31,6 +42,8 @@ from studio.tools.tracer import RunTracer
 
 _PROMPT_PATH = Path(__file__).resolve().parents[3] / "prompts" / "pm.md"
 _MODEL_KEY = "pm_opus"
+_DIALOGUES_STATE_DIR = Path("~/.devaimazing/dialogues").expanduser()
+_CONFIG_RESOLUTION_ERRORS = (FileNotFoundError, ValueError)
 
 
 @dataclass
@@ -48,6 +61,67 @@ class _DialogueState:
 # Clé = message_thread_id (un topic = un dialogue en cours au plus, cohérent
 # avec un topic = un projet, ADR 0013 Décision 2).
 _pending_dialogues: dict[int, _DialogueState] = {}
+
+
+def _dialogue_state_path(message_thread_id: int) -> Path:
+    return _DIALOGUES_STATE_DIR / f"{message_thread_id}.json"
+
+
+def _persist_dialogue_state(message_thread_id: int, state: _DialogueState) -> None:
+    path = _dialogue_state_path(message_thread_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({
+            "kind": state.kind,
+            "trace_id": state.trace_id,
+            "project_name": state.config.project_name,
+            "transcript": state.transcript,
+        }),
+        encoding="utf-8",
+    )
+
+
+def _delete_persisted_dialogue_state(message_thread_id: int) -> None:
+    _dialogue_state_path(message_thread_id).unlink(missing_ok=True)
+
+
+def restore_pending_dialogues(config_dir: Optional[Path] = None) -> None:
+    """
+    Recharge en mémoire les dialogues de cadrage interrompus par un
+    redémarrage du bot (voir _persist_dialogue_state) — à appeler une fois
+    au démarrage (studio.telegram.bot.run_bot), avant de commencer à traiter
+    des messages.
+
+    Args:
+        config_dir: Répertoire de config (voir StudioConfig.config_dir),
+            None pour le défaut (config/ du dépôt).
+
+    Side effects:
+        Peuple _pending_dialogues à partir de _DIALOGUES_STATE_DIR. Un
+        fichier dont le projet n'existe plus (config supprimée/renommée) ou
+        au contenu invalide est ignoré silencieusement plutôt que de faire
+        planter le démarrage du bot.
+    """
+    if not _DIALOGUES_STATE_DIR.is_dir():
+        return
+
+    system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
+    for path in sorted(_DIALOGUES_STATE_DIR.glob("*.json")):
+        try:
+            message_thread_id = int(path.stem)
+        except ValueError:
+            continue
+
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            config = StudioConfig(project_name=data["project_name"], config_dir=config_dir)
+        except (*_CONFIG_RESOLUTION_ERRORS, KeyError, json.JSONDecodeError):
+            continue
+
+        _pending_dialogues[message_thread_id] = _DialogueState(
+            kind=data["kind"], trace_id=data["trace_id"], config=config,
+            system_prompt=system_prompt, transcript=data["transcript"],
+        )
 
 
 def _generate_run_id() -> str:
@@ -127,6 +201,7 @@ async def _start_dialogue(
     if turn.kind == "question":
         transcript.append(f"PM : {turn.text}")
         _pending_dialogues[message_thread_id] = state
+        _persist_dialogue_state(message_thread_id, state)
         await bot.send_message(chat_id, turn.text, message_thread_id=message_thread_id)
         return
 
@@ -197,7 +272,11 @@ def cancel_dialogue(message_thread_id: int) -> bool:
         True si un dialogue était en attente et a été interrompu, False
         sinon (l'appelant traite ça comme "rien à interrompre ici").
     """
-    return _pending_dialogues.pop(message_thread_id, None) is not None
+    state = _pending_dialogues.pop(message_thread_id, None)
+    if state is None:
+        return False
+    _delete_persisted_dialogue_state(message_thread_id)
+    return True
 
 
 async def handle_dialogue_reply(
@@ -241,9 +320,11 @@ async def handle_dialogue_reply(
 
     if turn.kind == "question":
         state.transcript.append(f"PM : {turn.text}")
+        _persist_dialogue_state(message_thread_id, state)
         await bot.send_message(chat_id, turn.text, message_thread_id=message_thread_id)
         return True
 
     del _pending_dialogues[message_thread_id]
+    _delete_persisted_dialogue_state(message_thread_id)
     await _present_draft(bot, chat_id, message_thread_id, state, turn.text)
     return True

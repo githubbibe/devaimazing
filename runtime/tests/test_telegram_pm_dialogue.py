@@ -5,6 +5,7 @@ objet simple qui enregistre les appels (comme test_telegram_handlers.py, pas
 de vrais objets aiogram).
 """
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -53,6 +54,15 @@ def _clear_pending_state():
     yield
     pm_dialogue._pending_dialogues.clear()
     confirmations_module.pending_confirmations.clear()
+
+
+@pytest.fixture(autouse=True)
+def _dialogues_state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Redirige la persistance du transcript vers un répertoire jetable —
+    sans ça, les tests écriraient dans le vrai ~/.devaimazing/dialogues."""
+    state_dir = tmp_path / "dialogues"
+    monkeypatch.setattr(pm_dialogue, "_DIALOGUES_STATE_DIR", state_dir)
+    return state_dir
 
 
 class _FakeBot:
@@ -132,7 +142,7 @@ async def test_handle_dialogue_reply_none_thread_id_returns_false():
 # --- cancel_dialogue (ADR 0015, Décision 6, /stop) ---
 
 async def test_cancel_dialogue_removes_pending_state(
-    monkeypatch: pytest.MonkeyPatch, config: StudioConfig,
+    monkeypatch: pytest.MonkeyPatch, config: StudioConfig, _dialogues_state_dir: Path,
 ):
     async def fake_run_claude_code(**kwargs):
         return {
@@ -144,15 +154,116 @@ async def test_cancel_dialogue_removes_pending_state(
     bot = _FakeBot()
     await pm_dialogue.start_feature_dialogue(bot, _CHAT_ID, _THREAD_ID, config)
     assert _THREAD_ID in pm_dialogue._pending_dialogues
+    assert (_dialogues_state_dir / f"{_THREAD_ID}.json").is_file()
 
     cancelled = pm_dialogue.cancel_dialogue(_THREAD_ID)
 
     assert cancelled is True
     assert _THREAD_ID not in pm_dialogue._pending_dialogues
+    assert not (_dialogues_state_dir / f"{_THREAD_ID}.json").exists()
 
 
 def test_cancel_dialogue_without_pending_returns_false():
     assert pm_dialogue.cancel_dialogue(_THREAD_ID) is False
+
+
+# --- persistance du transcript (reprise après redémarrage du bot) ---
+
+async def test_handle_dialogue_reply_updates_persisted_transcript(
+    monkeypatch: pytest.MonkeyPatch, config: StudioConfig, _dialogues_state_dir: Path,
+):
+    responses = [
+        _fake_claude_result("QUESTION: quel est le nom de la feature ?"),
+        _fake_claude_result("QUESTION: à quoi ça sert ?"),
+    ]
+
+    async def fake_run_claude_code(**kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    bot = _FakeBot()
+    await pm_dialogue.start_feature_dialogue(bot, _CHAT_ID, _THREAD_ID, config)
+
+    await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier")
+
+    data = json.loads((_dialogues_state_dir / f"{_THREAD_ID}.json").read_text(encoding="utf-8"))
+    assert data["kind"] == "feature"
+    assert data["project_name"] == "demo"
+    assert any("ajout-panier" in line for line in data["transcript"])
+    assert any("à quoi ça sert" in line for line in data["transcript"])
+
+
+async def test_handle_dialogue_reply_draft_deletes_persisted_transcript(
+    monkeypatch: pytest.MonkeyPatch, config: StudioConfig, _dialogues_state_dir: Path,
+):
+    responses = [
+        _fake_claude_result("QUESTION: quel est le nom de la feature ?"),
+        _fake_claude_result(f"FICHE_VALIDEE:\n{VALID_FICHE}"),
+    ]
+
+    async def fake_run_claude_code(**kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    bot = _FakeBot()
+    await pm_dialogue.start_feature_dialogue(bot, _CHAT_ID, _THREAD_ID, config)
+    assert (_dialogues_state_dir / f"{_THREAD_ID}.json").is_file()
+
+    await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier")
+
+    assert not (_dialogues_state_dir / f"{_THREAD_ID}.json").exists()
+
+
+async def test_restore_pending_dialogues_reloads_state_and_allows_continuing(
+    monkeypatch: pytest.MonkeyPatch, config: StudioConfig, _dialogues_state_dir: Path,
+):
+    _dialogues_state_dir.mkdir(parents=True, exist_ok=True)
+    (_dialogues_state_dir / f"{_THREAD_ID}.json").write_text(json.dumps({
+        "kind": "feature",
+        "trace_id": "run-20260730-000000",
+        "project_name": "demo",
+        "transcript": [
+            "Objectif initial de l'utilisateur : (non précisé).",
+            "PM : quel est le nom de la feature ?",
+            "Utilisateur : ajout-panier",
+        ],
+    }), encoding="utf-8")
+
+    pm_dialogue.restore_pending_dialogues(config.config_dir)
+
+    assert _THREAD_ID in pm_dialogue._pending_dialogues
+    state = pm_dialogue._pending_dialogues[_THREAD_ID]
+    assert state.trace_id == "run-20260730-000000"
+    assert state.config.project_name == "demo"
+
+    async def fake_run_claude_code(**kwargs):
+        return _fake_claude_result("QUESTION: à quoi ça sert ?")
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    bot = _FakeBot()
+    consumed = await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "peu importe")
+
+    assert consumed is True
+    assert "à quoi ça sert" in bot.messages[0]["text"]
+
+
+async def test_restore_pending_dialogues_skips_unknown_project(
+    config: StudioConfig, _dialogues_state_dir: Path,
+):
+    _dialogues_state_dir.mkdir(parents=True, exist_ok=True)
+    (_dialogues_state_dir / f"{_THREAD_ID}.json").write_text(json.dumps({
+        "kind": "feature", "trace_id": "run-x", "project_name": "inconnu", "transcript": [],
+    }), encoding="utf-8")
+
+    pm_dialogue.restore_pending_dialogues(config.config_dir)
+
+    assert _THREAD_ID not in pm_dialogue._pending_dialogues
+
+
+def test_restore_pending_dialogues_noop_if_dir_missing(config: StudioConfig):
+    pm_dialogue.restore_pending_dialogues(config.config_dir)  # ne doit pas lever
+
+    assert pm_dialogue._pending_dialogues == {}
 
 
 async def test_handle_dialogue_reply_advances_to_next_question(

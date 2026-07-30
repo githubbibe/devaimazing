@@ -16,6 +16,7 @@ from aiogram import Bot, Dispatcher
 from studio.config import default_config_dir, load_global_telegram_config
 from studio.telegram import menu
 from studio.telegram.handlers import build_router
+from studio.telegram.pm_dialogue import restore_pending_dialogues
 from studio.telegram.topics import load_topic_map
 
 _PLACEHOLDER_PREFIX = "<PLACEHOLDER"
@@ -96,14 +97,17 @@ async def run_bot(config_dir: Optional[Path] = None) -> None:
         config_dir: Répertoire de config (voir StudioConfig.config_dir).
 
     Side effects:
-        Poste un message avec le clavier persistant « Menu → » dans General
-        et chaque topic connu (voir _send_persistent_keyboards). Ouvre une
+        Recharge les dialogues de cadrage PM interrompus par un précédent
+        arrêt du bot (voir pm_dialogue.restore_pending_dialogues). Poste un
+        message avec le clavier persistant « Menu → » dans General et
+        chaque topic connu (voir _send_persistent_keyboards). Ouvre une
         connexion réseau persistante à l'API Telegram (long polling). Se
         termine proprement sur SIGINT/SIGTERM (géré nativement par aiogram)
         ou sur toute exception non catchée par un handler.
     """
     bot, dispatcher = build_bot_and_dispatcher(config_dir)
     try:
+        restore_pending_dialogues(config_dir)
         allowed_chat_id = load_global_telegram_config(config_dir)["allowed_chat_id"]
         await _send_persistent_keyboards(bot, int(allowed_chat_id), config_dir)
         await dispatcher.start_polling(bot)
