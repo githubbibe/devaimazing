@@ -905,39 +905,16 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    2. Si la précision de `small` s'avère insuffisante en usage réel (accent,
       vocabulaire technique) : passer à `large` via `WHISPER_MODEL` dans
       `infra/whisper/.env` — déjà configurable, juste pas testé.
-7. **Idée notée le 2026-07-29, pas encore cadrée** : interface à boutons native
-   Telegram (menu de commandes `setMyCommands`, et boutons inline généralisés
-   au-delà de la confirmation Oui/Non déjà en place — voir
-   `telegram/handlers.py::build_confirmation_keyboard`), remplaçant ce
-   qu'une PWA aurait offert (plan abandonné, voir ADR 0013). Cas d'usage
-   évoqué : depuis `/projects`, taper sur un projet ouvre une « fiche
-   projet » plutôt que de retaper une commande. Reste à trancher avant
-   implémentation : contenu de la fiche (`project-map.md` généré par le
-   pipeline ? résumé du dernier run ? les deux ?), boutons d'action
-   éventuels dessus (archiver, voir le run en cours...). Complète Devaimazing
-   (S1-S4), ne le remplace pas — les boutons couvrent un ensemble énuméré
-   d'actions, pas une demande ouverte en langage libre.
-   **Précision ajoutée le 2026-07-29** : la fiche projet doit couvrir tout le
-   cycle de vie d'un projet — création, **édition**, et archivage — pas
-   seulement la consultation. `creer_projet` (`/new`) et `archive_projet`
-   (`/archive`) existent déjà (`tools/registry.py`), mais il n'y a
-   aujourd'hui **aucun outil d'édition** d'un projet déjà créé (modifier sa
-   config `config/projects/<nom>.yml` — description, contraintes, commande
-   de test, etc. — depuis Telegram) : à concevoir dans le cadre de ce
-   chantier.
-   **Deuxième précision ajoutée le 2026-07-29** : la fiche projet doit aussi
-   donner accès, par boutons, au cycle de vie d'un **run** — lister les runs
-   du projet, reprendre (`resume`) un run en pause sur checkpoint, relancer
-   (`retry`) un run planté, consulter ses métriques (`metrics`), en plus de
-   `/status <run_id>` et `/progression <run_id>` déjà exposés. Écart constaté
-   en conditions réelles (premier run cadré sur `webaimazing-v2`) : `devaimazing
-   runs`/`resume`/`retry`/`metrics` (`cli.py`) n'ont **aucun équivalent dans
-   `tools/registry.py`** aujourd'hui — CLI uniquement, à la différence de
-   `/status`/`/progression` qui existent déjà mais souffrent de la même
-   limitation `run_id` tapé à la main (voir entrée S2 du 2026-07-24
-   ci-dessus). Les deux manques (outils registre absents + `run_id` non
-   résolu) sont à traiter ensemble dans ce chantier de boutons, pas
-   séparément.
+7. **Cadrée le 2026-07-30, voir ADR 0015** : interface à boutons native Telegram,
+   couvrant le cycle de vie complet d'un projet (`/new_project` : création
+   dossier+repo+topic puis cadrage PM dans le topic, produisant une fiche
+   projet ; archivage) et d'une feature (`/new_feature` : cadrage PM produisant
+   une fiche feature ; `/run` : exécution avec détection de changement par
+   hash de commit de la fiche). `/status`/`/progression`/`/projects` révoqués
+   (remplacés par la navigation boutons et la liste native des topics).
+   Nouveau fichier `planification.md` par projet (ordonnancement des
+   features, réévalué à chaque nouvelle fiche). Reste à faire : implémenter
+   (aucun code encore écrit pour cette ADR).
 8. **Idée notée le 2026-07-29, pas encore cadrée** : mécanisme d'évolution
    des agents locaux (Devaimazing, et potentiellement Back/Front/Test) par
    boucle rétroactive + benchmark, sur le modèle de ce qui a été fait
@@ -980,6 +957,25 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    par `devaimazing runs <projet>`), et si le "bilan" inclut aussi des
    éléments qualitatifs de `trace.jsonl`/`project-map.md` (pas seulement les
    totaux chiffrés de `metrics.db`).
+10. **Cadrée le 2026-07-30, voir ADR 0015** : jugée superflue plutôt qu'à
+    implémenter. La cruft décrite ci-dessous provenait spécifiquement du
+    process CLI interrompu au clavier (`Ctrl+C`, commits « sauvegarde »
+    automatiques de `checkout_branch`) ; avec le cadrage porté par le topic
+    Telegram (pas de process local à interrompre brutalement) et `/run` qui ne
+    produit de commits que s'il y a effectivement du nouveau (détection par
+    hash de commit de la fiche), cette cause disparaît largement — pas de
+    nouvel outil de suppression prévu sur cette base. Détail original du
+    problème conservé ici pour mémoire : aucune commande (CLI ou Telegram) ne
+    permettait de supprimer/purger un run raté — un cadrage (phase 1)
+    abandonné en cours de dialogue, ou un run planté. Constaté en conditions
+    réelles sur plusieurs tentatives de cadrage interrompues sur
+    `webaimazing-v2` le même jour : chaque relance de `devaimazing run`
+    détecte le worktree non propre du run précédent et **auto-commit** son
+    contenu en commits « sauvegarde » (`checkout_branch`, voir `cli.py`)
+    plutôt que de l'effacer — la cruft s'accumule (commits sauvegarde sur la
+    branche, dossiers `specs/run-NNN/` orphelins, checkpoints `state.db`
+    orphelins sous le `thread_id` du run abandonné) sans aucun moyen rapide de
+    la nettoyer.
 
 Pas d'ordre de priorité déjà acté entre ces points au-delà de leur numérotation
 ci-dessus — à trancher avec l'utilisateur en début de prochaine session.
