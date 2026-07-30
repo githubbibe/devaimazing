@@ -53,3 +53,8 @@ project_constraints:
   node_version: "20"
   target_users: "TPE et artisans français non-techniques"
   key_principle: "L'utilisateur garde le contrôle, l'IA guide sans imposer"
+
+# Ajouté automatiquement lors de la création du topic Telegram
+# associé à ce projet (ADR 0013).
+telegram:
+  thread_id: 42
