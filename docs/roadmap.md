@@ -1,26 +1,131 @@
 # Feuille de route - devaimazing
 
-**Dernière mise à jour** : 2026-07-29
+**Dernière mise à jour** : 2026-07-30
 
 ## État actuel
 
 Le runtime devaimazing est **fonctionnellement complet et testé de bout en bout** :
 `state.py`, `config.py`, `tools/*.py` (filesystem, git, ollama, claude_code, tracer,
-registry, queries, project_config, whisper), `devaimazing/agent.py`, `telegram/*.py`
-(bot, handlers, topics — lecture seule, création/archivage de projet avec
-confirmation, compréhension du langage naturel ET transcription vocale via
-Whisper, ADR 0013 tranches S2-S4 + ADR 0014), `graph.py`, les 7 `nodes/*.py`
+registry, queries, project_config, whisper, planification), `devaimazing/agent.py`,
+`telegram/*.py` (bot, handlers, topics, confirmations, pm_dialogue,
+new_project_flow, run_flow, menu — cycle de vie complet projet/feature porté
+sur Telegram avec navigation par boutons, compréhension du langage naturel ET
+transcription vocale via Whisper, ADR 0013 tranches S2-S4 + ADR 0014 + ADR
+0015), `graph.py`, les 7 `nodes/*.py`
 (pm, architect, backend, frontend, test, security, closer), `metrics.py` et
 `cli.py` (`run`, `resume`, `retry`, `run-agent`, `runs`, `metrics`,
 `new-project`, `projects`, `doctor`, `telegram-bot`) sont tous implémentés —
 voir `CLAUDE.md` pour la convention (stub-first reste appliquée par le
 pipeline aux projets *cibles*, pas à ce dépôt).
-**470/470 tests verts** sur `runtime/tests/` (2026-07-29) —
-`test_new_project_target_exists_not_git_repo_prints_error`, précédemment signalé
-en échec à cause du retour à la ligne Rich dépendant de la largeur du terminal,
-passe dans cet environnement ; sa sensibilité à la largeur du terminal n'est pas
-corrigée dans le code, donc un échec ponctuel sur une autre machine/largeur reste
-possible.
+**543/547 tests verts** sur `runtime/tests/` (2026-07-30) — les 4 échecs
+restants (`test_cli.py::test_run_waiting_human_prints_feedback_when_present`,
+`test_cli.py::test_run_external_service_error_prints_clean_message_and_closes`,
+`test_cli.py::test_metrics_json_format`,
+`test_pyenv.py::test_check_imports_circular_import_reports_related_files`)
+sont pré-existants et sans rapport avec les travaux du jour — confirmé par
+`git stash` avant de commencer (mêmes 4 échecs sur l'état d'avant-session).
+
+**2026-07-30 — ADR 0015 (cycle de vie projet/feature par boutons Telegram)
+entièrement implémentée, en 5 phases commitées séparément.** Session ouverte
+sur « on continue ? » après le `/clear` de la session précédente (ADR 0015
+tout juste acceptée) — reprise via memory (`feedback_announce_before_acting`)
+et `docs/adr/0015-*.md` plutôt que de redemander le contexte. Chantier
+suivant choisi explicitement par l'utilisateur à chaque phase plutôt
+qu'enchaîné automatiquement.
+
+**Phase 1 — `/run <nom_feature>` (Décision 4).** Exploration approfondie
+avant tout code (deux forks + un agent Plan) : la fiche feature validée par
+`/new_feature` n'est jamais commitée avant la fin de la Phase.FICHES du
+pipeline (`nodes/pm.py::_create_branch_and_advance`), donc le « hash de
+commit » prévu par l'ADR pour détecter un changement de fiche n'est
+simplement pas disponible au moment où `/run` doit décider — **écart
+pragmatique assumé** : hash de **contenu** (sha256 de `card-root.md`) à la
+place, même garantie objective, disponible tout de suite
+(`tools/planification.py::hash_content`). `specs/planification.md` livré en
+version réduite (table plate feature/statut/run_id/hash, upsert par
+feature) plutôt que la version complète de la Décision 9 (regroupement par
+sous-phases + raisonnement PM) — seul le sous-ensemble strictement
+nécessaire à `/run`. Découverte de code utile en cours de route :
+`nodes/pm.py` route toujours vers son propre node en premier
+(`START -> pm`), quelle que soit la phase — un nouveau garde
+`_run_already_cadre` y court-circuite le dialogue quand `card_root_path`
+est déjà renseigné (fiche déjà produite via Telegram), sans appel LLM,
+plutôt que de tenter d'invoquer le graphe directement en Phase.AUDIT_AMONT
+(impossible avec l'architecture actuelle). `telegram/run_flow.py` :
+`graph.astream(stream_mode="values")` pour l'avancement en direct (un seul
+message édité, rate-limité à 1/s, flush final garanti) — premier usage de
+`astream` dans ce dépôt (`ainvoke` seul jusqu'ici). Limite assumée et
+documentée plutôt que masquée : une fiche modifiée après un run déjà
+`COMPLETED` n'est pas gérée (message d'erreur clair, pas de nouveau run_id
+auto-généré).
+
+**Phase 2 — `/archive` supprime le topic au lieu de le fermer (Décision
+5).** `close_forum_topic` → `delete_forum_topic` — la liste native des
+topics du groupe reste ainsi toujours à jour (projets actifs seulement),
+rendant une commande `/projects` dédiée redondante. `/archive` sans
+argument depuis un topic-projet infère désormais le nom du projet via
+`topics.resolve_project` (le topic donne le contexte) ; depuis General, le
+nom reste requis explicitement.
+
+**Phase 3 — `/stop` (Décision 6).** Seule dérogation du registre à la règle
+« destructif ⇒ confirmation » (`requiert_confirmation=False` malgré
+`destructif=True` — le champ existait déjà pour ce cas de figure, pas de
+changement de schéma). Priorité absolue câblée dans `_on_message` :
+sans court-circuit explicite, `/stop` aurait été avalé comme une réponse
+ordinaire par les intercepteurs de dialogue/run en attente — exactement les
+situations qu'il doit interrompre. Arrête un run actif en priorité
+(`asyncio.Task.cancel()` + sauvegarde commit/push, même helper que
+`/archive`), sinon un dialogue de cadrage en attente (rien à sauvegarder,
+aucune fiche encore écrite), sinon no-op informatif.
+
+**Phase 4 — arborescence de boutons (Décision 7).** L'ADR ne précisait pas
+ce qui déclenche l'affichage du menu — tranché avec l'utilisateur en cours
+de session : le menu réapparaît automatiquement (message édité en place,
+pas un nouveau message) à chaque action terminée (fiche validée, run
+terminé, projet archivé), plus une commande explicite en filet de sécurité.
+`telegram/menu.py` (nouveau) : navigation **sans aucun état serveur** —
+chaque écran est reconstruit à partir du seul `callback_data` +
+`message_thread_id`, contrairement aux dialogues/confirmations déjà
+existants qui gardent un état en mémoire process. Un seul niveau de retour
+(« ◀ Retour » ramène toujours à la racine, pas de vrai back-stack — l'arbre
+ne fait que 2 niveaux). Délègue systématiquement à `execute_tool`
+(`new_project`/`new_feature`/`archive_projet`/`run_feature`) plutôt que de
+dupliquer leur logique.
+
+**Phase 5 — bouton persistant « Menu → » à la place de la commande tapée
+(suite d'un retour utilisateur direct).** Remplace le déclencheur textuel
+par un `ReplyKeyboardMarkup` (clavier de réponse Telegram, pas un clavier
+inline) — reste affiché en permanence dans la zone de saisie une fois
+envoyé. Posté au démarrage du bot dans General et chaque topic-projet
+connu (`telegram/bot.py::_send_persistent_keyboards`), pas seulement à la
+création d'un nouveau projet, pour couvrir aussi les topics créés avant
+cette fonctionnalité.
+
+**Vérification en conditions réelles, même session.** Le bot tournait
+depuis le 2026-07-29 (process orphelin, `PPID=1`, jamais géré par launchd)
+: redémarré deux fois pour charger le nouveau code (même piège que
+l'entrée Whisper du 2026-07-29 — un process Python ne recharge jamais son
+code à chaud), logs redirigés vers `~/.devaimazing/telegram-bot.log`.
+Dérive de config découverte au passage : seul `config/projects/todo-list2.yml`
+a un `telegram.thread_id` renseigné — `webaimazing-v2` en est dépourvu
+depuis que le diff de test manuel de la session précédente (`thread_id: 42`)
+a été annulé par précaution (`git restore`, règle de sécurité suppression de
+CLAUDE.md), alors que le topic Telegram correspondant existe probablement
+toujours côté serveur ; les outils topic-scopés (`/archive`, le menu,
+`_send_persistent_keyboards`) ne peuvent donc pas agir sur ce topic tant que
+son `thread_id` n'est pas retrouvé et réécrit manuellement. Bouton « Menu → »
+confirmé visible et fonctionnel en conditions réelles (tout en bas de la
+fenêtre Telegram, en lieu et place du clavier système — comportement normal
+et seul emplacement possible pour un `ReplyKeyboardMarkup`, pas un bug).
+
+**ADR 0015 entièrement livrée** (Décisions 3 à 7 implémentées et testées ;
+Décision 10 déjà tranchée « superflue » le même jour, voir plus bas). Reste
+ouvert, aucun non plus documenté comme candidat d'addendum ADR : écart hash
+de contenu vs hash de commit (Décision 4), version réduite de
+`planification.md` sans regroupement par sous-phases ni raisonnement PM
+(Décision 9), fiche modifiée après un run déjà terminé non gérée, et le
+`thread_id` manquant de `webaimazing-v2` à retrouver/réécrire avant de
+pouvoir tester dessus les commandes topic-scopées.
 
 **2026-07-29 — ADR 0014 (transcription vocale Whisper) implémentée en 3
 phases commitées séparément.** Suite directe du test réel S4 ci-dessous,
@@ -905,16 +1010,27 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
    2. Si la précision de `small` s'avère insuffisante en usage réel (accent,
       vocabulaire technique) : passer à `large` via `WHISPER_MODEL` dans
       `infra/whisper/.env` — déjà configurable, juste pas testé.
-7. **Cadrée le 2026-07-30, voir ADR 0015** : interface à boutons native Telegram,
-   couvrant le cycle de vie complet d'un projet (`/new_project` : création
-   dossier+repo+topic puis cadrage PM dans le topic, produisant une fiche
-   projet ; archivage) et d'une feature (`/new_feature` : cadrage PM produisant
-   une fiche feature ; `/run` : exécution avec détection de changement par
-   hash de commit de la fiche). `/status`/`/progression`/`/projects` révoqués
-   (remplacés par la navigation boutons et la liste native des topics).
-   Nouveau fichier `planification.md` par projet (ordonnancement des
-   features, réévalué à chaque nouvelle fiche). Reste à faire : implémenter
-   (aucun code encore écrit pour cette ADR).
+7. **ADR 0015 (interface à boutons Telegram, cycle de vie projet/feature) —
+   livrée le 2026-07-30**, voir entrée dédiée ci-dessus (5 phases :
+   `/new_feature`+`/new_project` le 2026-07-29, `/run`/`/archive`/`/stop`/
+   arborescence de boutons+bouton persistant le 2026-07-30). Reste,
+   documenté comme limites assumées plutôt que comme travail à engager :
+   1. Écart pragmatique hash de contenu (sha256 de `card-root.md`) au lieu
+      de hash de commit Git pour `/run` (Décision 4) — à documenter en
+      addendum ADR si validé en usage prolongé.
+   2. `specs/planification.md` en version réduite (table plate, upsert
+      d'une ligne) — le regroupement par sous-phases et la synthèse de
+      raisonnement du PM (Décision 9 complète) restent un chantier séparé,
+      plus gros (nécessite que le PM régénère tout le fichier).
+   3. Fiche modifiée après un run déjà `COMPLETED` non gérée par `/run`
+      (message d'erreur clair plutôt qu'un nouveau run_id auto-généré).
+   4. `config/projects/webaimazing-v2.yml` a perdu son `telegram.thread_id`
+      (annulé par un `git restore` de précaution en tout début de session,
+      voir entrée ci-dessus) — le topic Telegram existe probablement
+      toujours côté serveur, mais les commandes topic-scopées ne peuvent
+      pas encore agir dessus tant qu'il n'est pas retrouvé et réécrit.
+   5. `/reject` (rejet de checkpoint) reste `NotImplementedError`,
+      explicitement différé par l'ADR (aucun cas d'usage concret identifié).
 8. **Idée notée le 2026-07-29, pas encore cadrée** : mécanisme d'évolution
    des agents locaux (Devaimazing, et potentiellement Back/Front/Test) par
    boucle rétroactive + benchmark, sur le modèle de ce qui a été fait
