@@ -199,8 +199,10 @@ async def test_confirming_draft_writes_card_root(
 
     assert reply_text is not None
     # Le run_id n'est plus dans _pending_dialogues (nettoyé) — on le retrouve
-    # via le seul dossier créé sous specs/.
-    run_dirs = list((repo / "specs").iterdir())
+    # via le seul dossier créé sous specs/ (planification.md, écrit par
+    # valider_fiche_feature depuis l'ADR 0015/Décision 4, est un fichier,
+    # pas un dossier — exclu ici pour ne cibler que le dossier du run).
+    run_dirs = [p for p in (repo / "specs").iterdir() if p.is_dir()]
     assert len(run_dirs) == 1
     card_path = run_dirs[0] / "card-root.md"
     assert card_path.read_text(encoding="utf-8") == VALID_FICHE.strip()

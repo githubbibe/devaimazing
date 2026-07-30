@@ -148,6 +148,58 @@ async def test_reception_phase_also_runs_cadrage_dialogue(monkeypatch: pytest.Mo
     assert updates["current_phase"] == Phase.AUDIT_AMONT
 
 
+# --- Raccourci "déjà cadré" (ADR 0015, Décision 4, /run <nom_feature> Telegram) ---
+
+async def test_already_cadre_shortcut_skips_dialogue_and_advances_to_audit_amont(
+    monkeypatch: pytest.MonkeyPatch, repo: Path,
+):
+    async def fail_if_called(**kwargs):
+        raise AssertionError("run_claude_code ne doit pas être appelé (fiche déjà cadrée)")
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fail_if_called)
+
+    card_root_relative = "specs/run-042/card-root.md"
+    card_path = repo / card_root_relative
+    card_path.parent.mkdir(parents=True, exist_ok=True)
+    card_path.write_text(VALID_FICHE, encoding="utf-8")
+
+    state = StudioState(
+        run_id="run-042", objective_raw="", current_phase=Phase.CADRAGE,
+        card_root_path=card_root_relative,
+    )
+    updates = await pm_node.run(state)
+
+    assert updates["current_phase"] == Phase.AUDIT_AMONT
+    assert updates["card_root_path"] == card_root_relative
+    assert len(updates["agent_results"]) == 1
+    agent_result = updates["agent_results"][0]
+    assert agent_result.agent == "pm"
+    assert agent_result.status == "success"
+    assert agent_result.output_files == [card_root_relative]
+
+
+async def test_run_prefers_already_cadre_over_imported_brief_when_both_set(
+    monkeypatch: pytest.MonkeyPatch, repo: Path,
+):
+    async def fail_if_called(**kwargs):
+        raise AssertionError("run_claude_code ne doit pas être appelé (déjà cadré prioritaire)")
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fail_if_called)
+
+    card_root_relative = "specs/run-042/card-root.md"
+    card_path = repo / card_root_relative
+    card_path.parent.mkdir(parents=True, exist_ok=True)
+    card_path.write_text(VALID_FICHE, encoding="utf-8")
+
+    state = StudioState(
+        run_id="run-042", objective_raw="", current_phase=Phase.CADRAGE,
+        card_root_path=card_root_relative, imported_brief_content="un brief quelconque",
+    )
+    updates = await pm_node.run(state)
+
+    assert updates["current_phase"] == Phase.AUDIT_AMONT
+
+
 # --- Raccourci import de brief existant ---
 
 VALID_IMPORTED_BRIEF = (
@@ -829,9 +881,9 @@ async def test_unknown_phase_raises_key_error(repo: Path):
 # --- Helper pur ---
 
 def test_extract_feature_name():
-    assert pm_node._extract_feature_name(VALID_FICHE) == "ajout-panier"
+    assert pm_node.extract_feature_name(VALID_FICHE) == "ajout-panier"
 
 
 def test_extract_feature_name_missing_raises():
     with pytest.raises(RuntimeError):
-        pm_node._extract_feature_name("pas de champ ici")
+        pm_node.extract_feature_name("pas de champ ici")

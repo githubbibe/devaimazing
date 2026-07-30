@@ -100,7 +100,7 @@ def _will_be_created_by_earlier_agent(
     return False
 
 
-def _extract_feature_name(card_root_content: str) -> str:
+def extract_feature_name(card_root_content: str) -> str:
     match = _FEATURE_NAME_PATTERN.search(card_root_content)
     if not match:
         raise RuntimeError(
@@ -118,7 +118,7 @@ def _render_imported_card_root(
     existant" (voir _run_brief_import) — pas écrit par le LLM, templating
     Python déterministe (même mécanisme que tools.project_config.write_project_config),
     garantissant le champ **Nom de la feature** requis par
-    _extract_feature_name (contrat lu ensuite par _run_fiches).
+    extract_feature_name (contrat lu ensuite par _run_fiches).
     """
     content = _CARD_ROOT_IMPORT_TEMPLATE_PATH.read_text(encoding="utf-8")
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -282,6 +282,57 @@ async def _run_validation_dialogue(
         transcript.append(f"Utilisateur : {reply}")
 
 
+async def _run_already_cadre(state: StudioState, config: StudioConfig) -> dict:
+    """
+    Court-circuite le dialogue de cadrage quand la fiche a déjà été
+    produite et validée en amont (state.card_root_path déjà renseigné et le
+    fichier existe sur disque) — cas de /run <nom_feature> (ADR 0015,
+    Décision 4, Telegram) : la fiche vient d'un tour antérieur de
+    /new_feature (studio.telegram.pm_dialogue, via l'outil
+    valider_fiche_feature), pas du dialogue synchrone de ce node. Aucun
+    appel LLM ici — voir studio.telegram.run_flow._execute_run, seul
+    appelant construisant un StudioState avec card_root_path déjà
+    renseigné (le CLI, lui, ne le renseigne jamais dans son initial_state —
+    voir cli.py::_run_async — donc _run_cadrage/_run_brief_import restent
+    inchangés pour le CLI).
+
+    Args:
+        state: État courant. state.card_root_path doit être renseigné et
+            pointer vers un fichier existant du repo cible (précondition
+            garantie par run(), pas revérifiée ici).
+
+    Returns:
+        Même forme de retour que _run_cadrage en fin de dialogue :
+        state.current_phase=Phase.AUDIT_AMONT. Un AgentResult minimal
+        (status="success", aucun token, aucun appel Claude Code,
+        claude_code_calls=0) est ajouté à state.agent_results pour rester
+        cohérent avec le contrat déjà lu ailleurs (metrics.db, closer.py).
+
+    Notes:
+        agent_result.output_files référence state.card_root_path — déjà
+        écrit par valider_fiche_feature, pas produit par cet appel — pour
+        rester cohérent avec studio.nodes.closer, qui lit
+        AgentResult.output_files de tous les agents du run.
+    """
+    tracer = RunTracer.for_run(config, state.run_id).for_agent("pm", state.current_phase)
+    tracer.emit("node_enter", card=state.card_root_path, shortcut="already_cadre")
+
+    agent_result = AgentResult(
+        agent="pm",
+        phase=state.current_phase,
+        status="success",
+        output_files=[state.card_root_path],
+    )
+    await record_agent_result(config, state, agent_result, model="n/a", claude_code_calls=0)
+    tracer.emit("node_exit", status="success", output_files=[state.card_root_path])
+
+    return {
+        "agent_results": state.agent_results + [agent_result],
+        "card_root_path": state.card_root_path,
+        "current_phase": Phase.AUDIT_AMONT,
+    }
+
+
 async def _run_cadrage(state: StudioState, config: StudioConfig) -> dict:
     """
     Dialogue de cadrage jusqu'à validation explicite de la fiche racine par
@@ -365,7 +416,7 @@ async def _run_brief_import(state: StudioState, config: StudioConfig) -> dict:
         )
     )
 
-    feature_name = _extract_feature_name(draft)
+    feature_name = extract_feature_name(draft)
 
     brief_relative = str(Path(_specs_dir(config)) / state.run_id / "architect-brief.md")
     await write_card(config.repo_path / brief_relative, draft, tracer=tracer)
@@ -479,7 +530,7 @@ async def _run_fiches(state: StudioState, config: StudioConfig) -> dict:
     tracer.emit("node_enter", card=state.card_root_path)
 
     card_root_content = await read_card(config.repo_path / state.card_root_path, tracer=tracer)
-    feature_name = _extract_feature_name(card_root_content)
+    feature_name = extract_feature_name(card_root_content)
 
     if state.agent_cards:
         updates = await _create_branch_and_advance(
@@ -693,7 +744,17 @@ async def run(state: StudioState) -> StudioState:
           (synthétisé) ET state.architect_brief_path (le document importé,
           validé) sont renseignés, state.agent_cards remis à {}, et
           state.current_phase=Phase.FICHES directement (phases 1 et 2
-          sautées).
+          sautées). Si state.card_root_path est DÉJÀ renseigné (fichier
+          existant sur disque) — cas de /run <nom_feature> sur Telegram
+          (ADR 0015, Décision 4) où la fiche a été produite et validée en
+          amont par un tour antérieur de /new_feature
+          (studio.telegram.pm_dialogue) — aucun appel LLM n'est fait ici :
+          state.current_phase=Phase.AUDIT_AMONT directement (voir
+          _run_already_cadre). Ce cas est prioritaire sur
+          imported_brief_content (le CLI, seul appelant historique, ne
+          renseigne jamais card_root_path dans son initial_state — voir
+          cli.py::_run_async — donc ce nouveau garde n'affecte pas son
+          comportement).
         - En Phase.FICHES, première invocation (state.agent_cards vide) :
           state.agent_cards et state.agent_sequence renseignés. Si
           should_checkpoint(state) : state.status=RunStatus.WAITING_HUMAN,
@@ -765,6 +826,8 @@ async def run(state: StudioState) -> StudioState:
     config = StudioConfig.from_env()
 
     if state.current_phase in (Phase.RECEPTION, Phase.CADRAGE):
+        if state.card_root_path and (config.repo_path / state.card_root_path).is_file():
+            return await _run_already_cadre(state, config)
         if state.imported_brief_content:
             return await _run_brief_import(state, config)
         return await _run_cadrage(state, config)

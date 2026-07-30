@@ -16,7 +16,7 @@ from studio.config import StudioConfig
 from studio.graph import build_graph
 
 
-async def _fetch_run_state(config: StudioConfig, run_id: str) -> Optional[dict[str, Any]]:
+async def fetch_run_state(config: StudioConfig, run_id: str) -> Optional[dict[str, Any]]:
     """
     Récupère l'état brut d'un run depuis le checkpointer SQLite.
 
@@ -67,7 +67,7 @@ async def get_run_snapshot(config: StudioConfig, run_id: str) -> dict[str, Any]:
         {"found": False} si le run n'existe pas, sinon {"found": True,
         "current_phase", "status", "current_agent"}.
     """
-    state = await _fetch_run_state(config, run_id)
+    state = await fetch_run_state(config, run_id)
     if state is None:
         return {"found": False}
     return {"found": True, **_summarize_state(state)}
@@ -122,7 +122,7 @@ async def get_run_progression(config: StudioConfig, run_id: str) -> dict[str, An
         {"found": False} si le run n'existe pas, sinon {"found": True, ...}
         avec le contenu de build_progression_summary(state) fusionné.
     """
-    state = await _fetch_run_state(config, run_id)
+    state = await fetch_run_state(config, run_id)
     if state is None:
         return {"found": False}
     return {"found": True, **build_progression_summary(state)}

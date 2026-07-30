@@ -36,6 +36,7 @@ _ADR_TABLE = {
     "archive_projet": (True, True, True),
     "new_feature": (False, False, False),
     "valider_fiche_feature": (False, True, False),
+    "run_feature": (False, False, False),
     "new_project": (False, False, False),
     "valider_fiche_projet": (False, True, False),
     "reject_checkpoint": (True, True, True),
@@ -168,6 +169,12 @@ def test_to_ollama_tool_shape():
 
 def test_parse_slash_command_known():
     assert parse_slash_command("/status run-042") == ("lire_statut", {"run_id": "run-042"})
+
+
+def test_parse_slash_command_run_with_multi_word_feature_name():
+    assert parse_slash_command("/run mon super truc") == (
+        "run_feature", {"feature_name": "mon super truc"},
+    )
 
 
 def test_parse_slash_command_unknown_command():
@@ -421,16 +428,34 @@ async def test_valider_fiche_feature_requires_confirmation():
 
 async def test_valider_fiche_feature_writes_card(tmp_path: Path):
     config = SimpleNamespace(repo_path=tmp_path, get=lambda key, default=None: default)
+    content = "# Ma fiche\n\n**Nom de la feature** : ajout-panier\n"
 
     result = await execute_tool(
-        "valider_fiche_feature", {"run_id": "run-042", "content": "# Ma fiche"},
+        "valider_fiche_feature", {"run_id": "run-042", "content": content},
         config=config, confirmed=True,
     )
 
     assert result.status == "ok"
     card_path = tmp_path / "specs" / "run-042" / "card-root.md"
-    assert card_path.read_text(encoding="utf-8") == "# Ma fiche"
-    assert result.data == {"card_root_path": "specs/run-042/card-root.md"}
+    assert card_path.read_text(encoding="utf-8") == content
+    assert result.data == {
+        "card_root_path": "specs/run-042/card-root.md", "feature_name": "ajout-panier",
+    }
+
+
+async def test_valider_fiche_feature_upserts_planification(tmp_path: Path):
+    config = SimpleNamespace(repo_path=tmp_path, get=lambda key, default=None: default)
+    content = "# Ma fiche\n\n**Nom de la feature** : ajout-panier\n"
+
+    await execute_tool(
+        "valider_fiche_feature", {"run_id": "run-042", "content": content},
+        config=config, confirmed=True,
+    )
+
+    planification_content = (tmp_path / "specs" / "planification.md").read_text(encoding="utf-8")
+    assert "ajout-panier" in planification_content
+    assert "run-042" in planification_content
+    assert "à faire" in planification_content
 
 
 # --- new_project / valider_fiche_projet (ADR 0015, phase 2) ---
@@ -488,3 +513,52 @@ async def test_valider_fiche_projet_writes_card(tmp_path: Path):
     card_path = tmp_path / "specs" / "fiche-projet.md"
     assert card_path.read_text(encoding="utf-8") == "# Ma fiche projet"
     assert result.data == {"fiche_projet_path": "specs/fiche-projet.md"}
+
+
+# --- run_feature (ADR 0015, Décision 4) ---
+
+async def test_run_feature_without_telegram_context_returns_error():
+    result = await execute_tool(
+        "run_feature", {"feature_name": "ajout-panier"}, config=SimpleNamespace(),
+    )
+
+    assert result.status == "error"
+
+
+async def test_run_feature_delegates_to_start_run(monkeypatch: pytest.MonkeyPatch):
+    import studio.telegram.run_flow as run_flow_module
+
+    calls = {}
+
+    async def fake_start_run(bot, chat_id, message_thread_id, config, feature_name):
+        calls["args"] = (bot, chat_id, message_thread_id, config, feature_name)
+        return {}
+
+    monkeypatch.setattr(run_flow_module, "start_run", fake_start_run)
+
+    config = SimpleNamespace()
+    fake_bot = SimpleNamespace()
+    result = await execute_tool(
+        "run_feature", {"feature_name": "ajout-panier"}, config=config,
+        bot=fake_bot, chat_id=222, message_thread_id=333,
+    )
+
+    assert result.status == "ok"
+    assert calls["args"] == (fake_bot, 222, 333, config, "ajout-panier")
+
+
+async def test_run_feature_raises_on_error_result(monkeypatch: pytest.MonkeyPatch):
+    import studio.telegram.run_flow as run_flow_module
+
+    async def fake_start_run(bot, chat_id, message_thread_id, config, feature_name):
+        return {"error": "feature inconnue"}
+
+    monkeypatch.setattr(run_flow_module, "start_run", fake_start_run)
+
+    result = await execute_tool(
+        "run_feature", {"feature_name": "inconnue"}, config=SimpleNamespace(),
+        bot=SimpleNamespace(), chat_id=222, message_thread_id=333,
+    )
+
+    assert result.status == "error"
+    assert "feature inconnue" in result.summary

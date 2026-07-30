@@ -25,7 +25,8 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from studio.config import StudioConfig
-from studio.tools import queries
+from studio.nodes.pm import extract_feature_name
+from studio.tools import planification, queries
 from studio.tools.filesystem import write_card
 from studio.tools.git import commit_safety_snapshot, current_branch, push_branch
 from studio.tools.project_config import set_project_thread_id
@@ -192,11 +193,27 @@ async def _handle_valider_fiche_feature(
     PM porté sur Telegram (studio.telegram.pm_dialogue, ADR 0015), après
     confirmation Oui/Non de l'utilisateur. Pas de slash_command : déclenché
     uniquement par pm_dialogue, jamais tapé ni sélectionné directement.
+
+    Enregistre aussi une entrée dans specs/planification.md (statut initial
+    "à faire") — c'est le seul point d'écriture qui associe un nom de
+    feature (extrait de la fiche) à ce run_id, condition nécessaire pour
+    que /run <nom_feature> (ADR 0015, Décision 4) puisse le retrouver.
     """
     specs_dir = config.get("structure", {}).get("specs_dir", "specs/")
     card_root_relative = str(Path(specs_dir) / run_id / "card-root.md")
     await write_card(config.repo_path / card_root_relative, content)
-    return {"card_root_path": card_root_relative}
+
+    feature_name = extract_feature_name(content)
+    await planification.upsert_entry(
+        config,
+        planification.PlanificationEntry(
+            feature_name=feature_name,
+            statut="à faire",
+            run_id=run_id,
+            content_hash=planification.hash_content(content),
+        ),
+    )
+    return {"card_root_path": card_root_relative, "feature_name": feature_name}
 
 
 async def _handle_new_project(
@@ -236,6 +253,32 @@ async def _handle_valider_fiche_projet(
     fiche_projet_relative = str(Path(specs_dir) / "fiche-projet.md")
     await write_card(config.repo_path / fiche_projet_relative, content)
     return {"fiche_projet_path": fiche_projet_relative}
+
+
+async def _handle_run_feature(
+    config: StudioConfig, *, feature_name: str, bot: Optional[Any] = None,
+    chat_id: Optional[int] = None, message_thread_id: Optional[int] = None, **_: Any,
+) -> dict[str, Any]:
+    """
+    Lance (ou reprend) le run d'une feature déjà cadrée si sa fiche a changé
+    depuis son dernier run (ADR 0015, Décision 4) — délègue à
+    studio.telegram.run_flow.start_run, qui répond directement dans le
+    topic (rien à faire, échec déjà connu, run déjà en cours) ou lance
+    l'exécution en tâche de fond.
+
+    Import de run_flow différé (voir _handle_new_feature) : run_flow importe
+    des types de ce même écosystème telegram, pas de cycle réel mais garde
+    la cohérence stylistique avec les deux autres handlers Telegram.
+    """
+    if bot is None or chat_id is None or message_thread_id is None:
+        raise RuntimeError("run_feature nécessite un contexte Telegram complet (bot, chat_id, topic).")
+
+    from studio.telegram.run_flow import start_run
+
+    result = await start_run(bot, chat_id, message_thread_id, config, feature_name)
+    if "error" in result:
+        raise ValueError(result["error"])
+    return result
 
 
 async def _not_implemented(_config: StudioConfig, **_: Any) -> dict[str, Any]:
@@ -373,6 +416,22 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         handler=_handle_valider_fiche_projet,
         slash_command=None,
     ),
+    "run_feature": ToolSpec(
+        name="run_feature",
+        description="Lance (ou reprend) le run d'une feature déjà cadrée, si sa fiche a changé.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "feature_name": {"type": "string", "description": "Nom de la feature"},
+            },
+            "required": ["feature_name"],
+        },
+        destructif=False,
+        requiert_confirmation=False,
+        sauvegarde_avant=False,
+        handler=_handle_run_feature,
+        slash_command="/run",
+    ),
     "reject_checkpoint": ToolSpec(
         name="reject_checkpoint",
         description="Rejette le checkpoint de validation humaine en attente d'un run.",
@@ -441,9 +500,13 @@ def parse_slash_command(text: str) -> Optional[tuple[str, dict[str, Any]]]:
         None sinon (ni commande slash, ni commande reconnue).
 
     Notes:
-        Le premier mot après la commande est traité comme `run_id` si
-        l'outil correspondant en attend un — mapping minimal pour S1, à
-        étoffer en S2 avec la résolution de run/projet depuis le topic.
+        Tous les mots après la commande sont joints (espace simple) et
+        traités comme le premier paramètre requis de l'outil, s'il y en a
+        un (ex. "/run mon super truc" -> {"feature_name": "mon super truc"}
+        — un nom de feature peut contenir des espaces, à la différence d'un
+        run_id). Mapping minimal à un seul paramètre requis pour toutes les
+        commandes actuelles (S1/S2), à étoffer si un futur outil en attend
+        plusieurs.
     """
     text = text.strip()
     if not text.startswith("/"):
@@ -458,7 +521,7 @@ def parse_slash_command(text: str) -> Optional[tuple[str, dict[str, Any]]]:
     args: dict[str, Any] = {}
     required = spec.parameters.get("required", [])
     if required and rest:
-        args[required[0]] = rest[0]
+        args[required[0]] = " ".join(rest)
     return tool_name, args
 
 

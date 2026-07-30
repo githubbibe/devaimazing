@@ -33,6 +33,7 @@ from studio.telegram.confirmations import build_confirmation_keyboard
 from studio.telegram.confirmations import pending_confirmations as _pending_confirmations
 from studio.telegram.new_project_flow import handle_project_name_reply
 from studio.telegram.pm_dialogue import handle_dialogue_reply
+from studio.telegram.run_flow import handle_run_reply
 from studio.telegram.topics import load_topic_map, resolve_project
 from studio.tools.registry import (
     TOOL_REGISTRY,
@@ -377,6 +378,18 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
             # (studio.nodes.pm), tout ce qui est tapé est la réponse, y
             # compris si ça ressemble à une commande slash.
             if await handle_dialogue_reply(
+                message.bot, message.chat.id, message.message_thread_id, message.text,
+            ):
+                return
+
+            # Un run en attente de validation humaine dans ce topic (/run,
+            # ADR 0015, Décision 4) absorbe le message en priorité : n'importe
+            # quel texte reçu ici déclenche la reprise (voir
+            # studio.telegram.run_flow.handle_run_reply), le contenu n'est
+            # pas lu — placé après handle_dialogue_reply : un topic n'a
+            # jamais les deux états en attente simultanément (le dialogue de
+            # cadrage est déjà terminé avant qu'un /run ne soit possible).
+            if await handle_run_reply(
                 message.bot, message.chat.id, message.message_thread_id, message.text,
             ):
                 return
