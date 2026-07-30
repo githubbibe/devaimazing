@@ -134,10 +134,16 @@ async def _handle_archive_projet(
     chat_id: Optional[int] = None, **_: Any,
 ) -> dict[str, Any]:
     """
-    Archive (ferme, réversible) le topic Telegram d'un projet — sauvegarde
-    (commit + push) préalable des changements non commités du repo cible,
-    sous l'identité système devaimazing-bot (sauvegarde_avant, voir ADR
-    0013, Décision 4). Ne supprime jamais le topic ni son historique.
+    Archive le projet — sauvegarde (commit + push) préalable des
+    changements non commités du repo cible, sous l'identité système
+    devaimazing-bot (sauvegarde_avant, voir ADR 0013, Décision 4), puis
+    SUPPRIME le topic Telegram (pas seulement fermeture, voir ADR 0015,
+    Décision 5 — comportement changé par rapport à l'implémentation
+    d'origine de l'ADR 0013, `close_forum_topic`) : la liste native des
+    topics du groupe reste ainsi toujours à jour (uniquement les projets
+    actifs), ce qui rend une commande /projects dédiée redondante. Le
+    contenu du repo (fiches, commits, branches) n'est pas touché — seule
+    l'interface Telegram disparaît.
     """
     if bot is None or chat_id is None:
         raise RuntimeError("archive_projet nécessite un contexte Telegram (bot, chat_id).")
@@ -155,7 +161,7 @@ async def _handle_archive_projet(
         branch = await current_branch(repo_path)
         await push_branch(repo_path, branch)
 
-    await bot.close_forum_topic(chat_id=chat_id, message_thread_id=int(thread_id))
+    await bot.delete_forum_topic(chat_id=chat_id, message_thread_id=int(thread_id))
     return {"project": name, "commit": commit_hash, "thread_id": thread_id}
 
 
@@ -343,7 +349,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     ),
     "archive_projet": ToolSpec(
         name="archive_projet",
-        description="Archive (ferme, réversible) le topic-projet Telegram d'un projet.",
+        description="Archive un projet (sauvegarde puis supprime son topic-projet Telegram).",
         parameters={
             "type": "object",
             "properties": {"name": {"type": "string", "description": "Nom du projet"}},

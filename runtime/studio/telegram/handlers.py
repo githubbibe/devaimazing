@@ -149,6 +149,16 @@ async def handle_slash_command(
 
     tool_name, args = parsed
 
+    if tool_name == "archive_projet" and "name" not in args and message_thread_id is not None:
+        # /archive sans argument depuis un topic-projet (ADR 0015,
+        # Décision 5) : le topic donne le contexte, pas besoin de retaper
+        # le nom du projet (déjà requis, lui, depuis General — voir
+        # parse_slash_command, aucun mot après la commande ici).
+        project_name = resolve_project(message_thread_id, load_topic_map(config_dir))
+        if project_name is None:
+            return HandlerReply("Ce topic n'est associé à aucun projet connu.")
+        args = {**args, "name": project_name}
+
     config = _resolve_config_for_tool(tool_name, message_thread_id, config_dir)
     if isinstance(config, HandlerReply):
         return config

@@ -310,16 +310,16 @@ async def test_archive_projet_requires_confirmation(demo_config_dir: Path):
     assert result.status == "needs_confirmation"
 
 
-async def test_archive_projet_commits_pushes_and_closes_topic(
+async def test_archive_projet_commits_pushes_and_deletes_topic(
     monkeypatch: pytest.MonkeyPatch, demo_config_dir: Path
 ):
     calls = _patch_archive_git(monkeypatch, commit_hash="abc123")
 
-    async def fake_close_forum_topic(chat_id, message_thread_id):
-        calls["closed"] = (chat_id, message_thread_id)
+    async def fake_delete_forum_topic(chat_id, message_thread_id):
+        calls["deleted"] = (chat_id, message_thread_id)
         return True
 
-    fake_bot = SimpleNamespace(close_forum_topic=fake_close_forum_topic)
+    fake_bot = SimpleNamespace(delete_forum_topic=fake_delete_forum_topic)
 
     result = await execute_tool(
         "archive_projet", {"name": "demo"},
@@ -330,7 +330,7 @@ async def test_archive_projet_commits_pushes_and_closes_topic(
     assert result.status == "ok"
     assert result.data == {"project": "demo", "commit": "abc123", "thread_id": 777}
     assert calls["push"] == (calls["commit_repo_path"], "studio/demo-feature")
-    assert calls["closed"] == (222, 777)
+    assert calls["deleted"] == (222, 777)
 
 
 async def test_archive_projet_no_changes_skips_push(
@@ -338,11 +338,11 @@ async def test_archive_projet_no_changes_skips_push(
 ):
     calls = _patch_archive_git(monkeypatch, commit_hash=None)
 
-    async def fake_close_forum_topic(chat_id, message_thread_id):
-        calls["closed"] = (chat_id, message_thread_id)
+    async def fake_delete_forum_topic(chat_id, message_thread_id):
+        calls["deleted"] = (chat_id, message_thread_id)
         return True
 
-    fake_bot = SimpleNamespace(close_forum_topic=fake_close_forum_topic)
+    fake_bot = SimpleNamespace(delete_forum_topic=fake_delete_forum_topic)
 
     result = await execute_tool(
         "archive_projet", {"name": "demo"},
@@ -353,7 +353,7 @@ async def test_archive_projet_no_changes_skips_push(
     assert result.status == "ok"
     assert result.data["commit"] is None
     assert "push" not in calls
-    assert calls["closed"] == (222, 777)
+    assert calls["deleted"] == (222, 777)
 
 
 async def test_archive_projet_missing_thread_id_returns_error(

@@ -212,13 +212,64 @@ async def test_archive_command_returns_confirmation_id(
     assert reply.confirmation_id in _pending_confirmations
 
 
+async def test_archive_command_without_name_in_project_topic_infers_name(
+    config_dir: Path,
+):
+    # /archive sans argument depuis le topic-projet (ADR 0015, Décision 5) —
+    # config_dir associe thread_id=111 au projet "demo" (voir fixture).
+    reply = await handle_slash_command(
+        "/archive",
+        chat_id=_ALLOWED_CHAT_ID,
+        message_thread_id=111,
+        allowed_chat_id=_ALLOWED_CHAT_ID,
+        config_dir=config_dir,
+    )
+
+    assert reply.confirmation_id is not None
+    tool_name, args, _config = _pending_confirmations[reply.confirmation_id]
+    assert tool_name == "archive_projet"
+    assert args == {"name": "demo"}
+
+
+async def test_archive_command_without_name_in_unknown_topic_returns_clear_error(
+    config_dir: Path,
+):
+    reply = await handle_slash_command(
+        "/archive",
+        chat_id=_ALLOWED_CHAT_ID,
+        message_thread_id=999,  # aucun projet associé à ce thread_id
+        allowed_chat_id=_ALLOWED_CHAT_ID,
+        config_dir=config_dir,
+    )
+
+    assert reply.confirmation_id is None
+    assert "aucun projet" in reply.text
+
+
+async def test_archive_command_without_name_in_general_requires_explicit_name(
+    config_dir: Path,
+):
+    # Depuis General (pas de topic), le nom reste requis explicitement —
+    # execute_tool produit son message d'erreur habituel (argument manquant).
+    reply = await handle_slash_command(
+        "/archive",
+        chat_id=_ALLOWED_CHAT_ID,
+        message_thread_id=None,
+        allowed_chat_id=_ALLOWED_CHAT_ID,
+        config_dir=config_dir,
+    )
+
+    assert reply.confirmation_id is None
+    assert "name" in reply.text
+
+
 async def test_confirmation_callback_yes_executes_tool(
     monkeypatch: pytest.MonkeyPatch, config_dir: Path
 ):
     async def fake_commit_safety_snapshot(repo_path, message, tracer=None):
         return None
 
-    async def fake_close_forum_topic(chat_id, message_thread_id):
+    async def fake_delete_forum_topic(chat_id, message_thread_id):
         return True
 
     monkeypatch.setattr(registry_module, "commit_safety_snapshot", fake_commit_safety_snapshot)
@@ -230,7 +281,7 @@ async def test_confirmation_callback_yes_executes_tool(
         allowed_chat_id=_ALLOWED_CHAT_ID,
         config_dir=config_dir,
     )
-    fake_bot = SimpleNamespace(close_forum_topic=fake_close_forum_topic)
+    fake_bot = SimpleNamespace(delete_forum_topic=fake_delete_forum_topic)
 
     result_text = await handle_confirmation_callback(
         f"confirm:{reply.confirmation_id}:yes",
