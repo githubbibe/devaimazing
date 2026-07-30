@@ -22,7 +22,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
 
 from studio.config import StudioConfig
 from studio.telegram.confirmations import build_confirmation_keyboard, pending_confirmations
@@ -31,6 +36,19 @@ from studio.tools import planification
 from studio.tools.registry import execute_tool, format_tool_result
 
 CALLBACK_PREFIX = "menu"
+
+# Bouton persistant (clavier de réponse Telegram, PAS un clavier inline) —
+# remplace la commande tapée /menu : reste affiché en permanence dans la
+# zone de saisie une fois envoyé une première fois dans un chat/topic
+# (voir _send_persistent_keyboards, telegram.bot), plutôt que de compter sur
+# l'utilisateur pour retaper une commande.
+MENU_BUTTON_LABEL = "Menu →"
+
+
+def persistent_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=MENU_BUTTON_LABEL)]], resize_keyboard=True,
+    )
 
 _ROOT_ACTIONS_GENERAL = ["new_project", "new_feature", "run_feature", "archive"]
 _ROOT_ACTIONS_TOPIC = ["new_feature", "run_feature", "archive"]

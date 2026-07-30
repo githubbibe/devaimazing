@@ -737,9 +737,9 @@ async def test_stop_command_bypasses_pending_reply_handlers(
     assert "aucun traitement en cours" in replies[0]
 
 
-# --- /menu et menu à boutons (ADR 0015, Décision 7) ---
+# --- bouton persistant "Menu →" et menu à boutons (ADR 0015, Décision 7) ---
 
-async def test_menu_command_sends_root_menu(
+async def test_menu_button_sends_root_menu(
     monkeypatch: pytest.MonkeyPatch, config_dir: Path,
 ):
     calls = {}
@@ -753,7 +753,7 @@ async def test_menu_command_sends_root_menu(
     on_message = router.message.handlers[0].callback
 
     message = SimpleNamespace(
-        text="/menu",
+        text=handlers_module.menu.MENU_BUTTON_LABEL,
         from_user=SimpleNamespace(is_bot=False),
         chat=SimpleNamespace(id=_ALLOWED_CHAT_ID),
         message_thread_id=111,

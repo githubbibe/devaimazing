@@ -6,11 +6,12 @@ scope des tests automatisés — voir docs/roadmap.md).
 """
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 from aiogram import Bot, Dispatcher
-from studio.telegram.bot import build_bot_and_dispatcher
+from studio.telegram.bot import _send_persistent_keyboards, build_bot_and_dispatcher
 
 
 def _write_yaml(path: Path, data: dict) -> None:
@@ -48,3 +49,39 @@ def test_build_bot_and_dispatcher_valid_config(tmp_path: Path):
 
     assert isinstance(bot, Bot)
     assert isinstance(dispatcher, Dispatcher)
+
+
+class _FakeBot:
+    def __init__(self):
+        self.sent: list[dict] = []
+
+    async def send_message(self, chat_id, text, *, message_thread_id=None, reply_markup=None):
+        self.sent.append({
+            "chat_id": chat_id, "message_thread_id": message_thread_id,
+            "reply_markup": reply_markup,
+        })
+
+
+async def test_send_persistent_keyboards_posts_to_general_and_known_topics(tmp_path: Path):
+    config_dir = tmp_path / "config"
+    _write_yaml(config_dir / "projects" / "demo.yml", {
+        "repo_path": str(tmp_path / "demo-repo"), "telegram": {"thread_id": 111},
+    })
+
+    bot = _FakeBot()
+    await _send_persistent_keyboards(bot, 42, config_dir)
+
+    assert len(bot.sent) == 2
+    thread_ids = {entry["message_thread_id"] for entry in bot.sent}
+    assert thread_ids == {None, 111}
+    assert all(entry["reply_markup"] is not None for entry in bot.sent)
+
+
+async def test_send_persistent_keyboards_general_only_without_projects(tmp_path: Path):
+    config_dir = tmp_path / "config"
+
+    bot = _FakeBot()
+    await _send_persistent_keyboards(bot, 42, config_dir)
+
+    assert len(bot.sent) == 1
+    assert bot.sent[0]["message_thread_id"] is None

@@ -13,8 +13,10 @@ from typing import Optional
 
 from aiogram import Bot, Dispatcher
 
-from studio.config import load_global_telegram_config
+from studio.config import default_config_dir, load_global_telegram_config
+from studio.telegram import menu
 from studio.telegram.handlers import build_router
+from studio.telegram.topics import load_topic_map
 
 _PLACEHOLDER_PREFIX = "<PLACEHOLDER"
 
@@ -60,6 +62,32 @@ def build_bot_and_dispatcher(config_dir: Optional[Path] = None) -> tuple[Bot, Di
     return bot, dispatcher
 
 
+async def _send_persistent_keyboards(bot, chat_id: int, config_dir: Optional[Path]) -> None:
+    """
+    Poste un message portant le clavier persistant « Menu → »
+    (studio.telegram.menu.persistent_keyboard, remplace la commande tapée
+    /menu) dans General et dans chaque topic-projet déjà connu.
+
+    Appelé au démarrage du bot plutôt qu'une seule fois à la création du
+    projet (voir new_project_flow, qui l'attache aussi à ses propres
+    messages) : garantit la présence du bouton même pour un topic créé
+    avant l'introduction de cette fonctionnalité, ou si l'état du clavier
+    côté client a été perdu.
+
+    Side effects:
+        Envoie un message dans General et dans chaque topic connu (voir
+        studio.telegram.topics.load_topic_map).
+    """
+    resolved_config_dir = Path(config_dir) if config_dir is not None else default_config_dir()
+    keyboard = menu.persistent_keyboard()
+
+    await bot.send_message(chat_id, "Bot démarré.", reply_markup=keyboard)
+    for thread_id in load_topic_map(resolved_config_dir):
+        await bot.send_message(
+            chat_id, "Bot démarré.", message_thread_id=thread_id, reply_markup=keyboard,
+        )
+
+
 async def run_bot(config_dir: Optional[Path] = None) -> None:
     """
     Démarre le bot en polling — bloque jusqu'à interruption.
@@ -68,12 +96,16 @@ async def run_bot(config_dir: Optional[Path] = None) -> None:
         config_dir: Répertoire de config (voir StudioConfig.config_dir).
 
     Side effects:
-        Ouvre une connexion réseau persistante à l'API Telegram (long
-        polling). Se termine proprement sur SIGINT/SIGTERM (géré nativement
-        par aiogram) ou sur toute exception non catchée par un handler.
+        Poste un message avec le clavier persistant « Menu → » dans General
+        et chaque topic connu (voir _send_persistent_keyboards). Ouvre une
+        connexion réseau persistante à l'API Telegram (long polling). Se
+        termine proprement sur SIGINT/SIGTERM (géré nativement par aiogram)
+        ou sur toute exception non catchée par un handler.
     """
     bot, dispatcher = build_bot_and_dispatcher(config_dir)
     try:
+        allowed_chat_id = load_global_telegram_config(config_dir)["allowed_chat_id"]
+        await _send_persistent_keyboards(bot, int(allowed_chat_id), config_dir)
         await dispatcher.start_polling(bot)
     finally:
         await bot.session.close()

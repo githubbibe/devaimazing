@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any, Optional
 
 from studio.config import StudioConfig
+from studio.telegram import menu
 from studio.telegram.pm_dialogue import start_project_dialogue
 from studio.tools.git import create_github_remote, create_initial_commit, init_repo, push_branch
 from studio.tools.project_config import write_project_config
@@ -47,7 +48,10 @@ async def start_new_project_flow(bot: Any, chat_id: int, config_dir: Path) -> No
         process (voir _pending_project_name).
     """
     _pending_project_name[chat_id] = Path(config_dir)
-    await bot.send_message(chat_id, "Donne un nom pour le nouveau projet.")
+    await bot.send_message(
+        chat_id, "Donne un nom pour le nouveau projet.",
+        reply_markup=menu.persistent_keyboard(),
+    )
 
 
 async def handle_project_name_reply(
@@ -95,8 +99,10 @@ async def handle_project_name_reply(
         return True
     thread_id = topic_result.data["thread_id"]
 
-    await bot.send_message(chat_id, f"Le projet {name} est en cours de création.",
-                            message_thread_id=thread_id)
+    await bot.send_message(
+        chat_id, f"Le projet {name} est en cours de création.",
+        message_thread_id=thread_id, reply_markup=menu.persistent_keyboard(),
+    )
 
     target.mkdir(parents=True)
     await init_repo(target, initial_branch="develop")
