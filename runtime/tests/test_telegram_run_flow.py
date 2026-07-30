@@ -85,8 +85,11 @@ class _FakeBot:
         self._next_message_id += 1
         return _SentMessage(message_id)
 
-    async def edit_message_text(self, text, *, chat_id=None, message_id=None):
-        self.edits.append({"chat_id": chat_id, "message_id": message_id, "text": text})
+    async def edit_message_text(self, text, *, chat_id=None, message_id=None, reply_markup=None):
+        self.edits.append({
+            "chat_id": chat_id, "message_id": message_id, "text": text,
+            "reply_markup": reply_markup,
+        })
 
 
 def _fake_checkpointer(closed: list) -> SimpleNamespace:
@@ -194,6 +197,8 @@ async def test_start_run_fresh_launch_completes_and_updates_planification(
     assert closed == [True]
     assert len(bot.edits) >= 1
     assert "COMPLETED" in bot.edits[-1]["text"] or "CLOTURE" in bot.edits[-1]["text"]
+    # Menu à boutons (ADR 0015, Décision 7) rattaché sur un statut terminal.
+    assert bot.edits[-1]["reply_markup"] is not None
 
     entry = await planification.find_entry(config, _FEATURE_NAME)
     assert entry.statut == "fait"
@@ -227,6 +232,9 @@ async def test_waiting_human_then_reply_resumes(
     await _active_runs[_THREAD_ID].task
 
     assert _active_runs[_THREAD_ID].awaiting_human is True
+    # Pas de menu à boutons sur WAITING_HUMAN (ADR 0015, Décision 7) : le
+    # topic attend une réponse pour reprendre, pas un nouveau choix de menu.
+    assert bot.edits[-1]["reply_markup"] is None
 
     # Reprise : nouveau graphe factice, states menant à COMPLETED.
     second_states = [

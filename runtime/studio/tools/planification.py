@@ -145,6 +145,30 @@ async def find_entry(config: StudioConfig, feature_name: str) -> Optional[Planif
     return None
 
 
+async def list_entries(config: StudioConfig) -> list[PlanificationEntry]:
+    """
+    Toutes les entrées de specs/planification.md, dans l'ordre du fichier —
+    utilisé par l'écran « Lancer une feature » du menu à boutons (ADR 0015,
+    Décision 7, studio.telegram.menu).
+
+    Returns:
+        Liste vide si specs/planification.md n'existe pas encore.
+    """
+    path = _planification_path(config)
+    if not path.is_file():
+        return []
+
+    entries = []
+    for cells in _parse_rows(path.read_text(encoding="utf-8")):
+        if len(cells) != 4:
+            continue
+        feature_name, statut, run_id, content_hash = cells
+        entries.append(PlanificationEntry(
+            feature_name=feature_name, statut=statut, run_id=run_id, content_hash=content_hash,
+        ))
+    return entries
+
+
 async def upsert_entry(config: StudioConfig, entry: PlanificationEntry) -> None:
     """
     Remplace la ligne existante pour entry.feature_name (matching casse/

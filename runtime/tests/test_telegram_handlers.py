@@ -735,3 +735,83 @@ async def test_stop_command_bypasses_pending_reply_handlers(
 
     assert len(replies) == 1
     assert "aucun traitement en cours" in replies[0]
+
+
+# --- /menu et menu à boutons (ADR 0015, Décision 7) ---
+
+async def test_menu_command_sends_root_menu(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path,
+):
+    calls = {}
+
+    async def fake_send_root_menu(bot, chat_id, message_thread_id, config_dir_arg):
+        calls["args"] = (chat_id, message_thread_id, config_dir_arg)
+
+    monkeypatch.setattr(handlers_module.menu, "send_root_menu", fake_send_root_menu)
+
+    router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
+    on_message = router.message.handlers[0].callback
+
+    message = SimpleNamespace(
+        text="/menu",
+        from_user=SimpleNamespace(is_bot=False),
+        chat=SimpleNamespace(id=_ALLOWED_CHAT_ID),
+        message_thread_id=111,
+        bot=object(),
+        reply=None,
+    )
+
+    await on_message(message)
+
+    assert calls["args"] == (_ALLOWED_CHAT_ID, 111, config_dir)
+
+
+async def test_confirmation_callback_attaches_root_menu_keyboard(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path,
+):
+    async def fake_commit_safety_snapshot(repo_path, message, tracer=None):
+        return None
+
+    async def fake_delete_forum_topic(chat_id, message_thread_id):
+        return True
+
+    monkeypatch.setattr(registry_module, "commit_safety_snapshot", fake_commit_safety_snapshot)
+
+    reply = await handle_slash_command(
+        "/archive demo",
+        chat_id=_ALLOWED_CHAT_ID,
+        message_thread_id=None,
+        allowed_chat_id=_ALLOWED_CHAT_ID,
+        config_dir=config_dir,
+    )
+
+    router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
+    on_callback = router.callback_query.handlers[0].callback
+
+    edits = []
+
+    async def fake_edit_text(text, reply_markup=None):
+        edits.append({"text": text, "reply_markup": reply_markup})
+
+    async def fake_answer():
+        return None
+
+    fake_bot = SimpleNamespace(delete_forum_topic=fake_delete_forum_topic)
+    callback = SimpleNamespace(
+        data=f"confirm:{reply.confirmation_id}:yes",
+        message=SimpleNamespace(
+            chat=SimpleNamespace(id=_ALLOWED_CHAT_ID),
+            message_thread_id=None,
+            edit_text=fake_edit_text,
+        ),
+        bot=fake_bot,
+        answer=fake_answer,
+    )
+
+    await on_callback(callback)
+
+    assert len(edits) == 1
+    assert edits[0]["reply_markup"] is not None
+    assert "Nouveau projet" in [
+        b.text for row in edits[0]["reply_markup"].inline_keyboard for b in row
+    ]

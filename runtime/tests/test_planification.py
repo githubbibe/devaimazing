@@ -86,3 +86,29 @@ async def test_find_entry_matches_despite_case_and_whitespace(tmp_path: Path):
     assert await planification.find_entry(config, "ajout panier") is not None
     assert await planification.find_entry(config, "  AJOUT   PANIER  ") is not None
     assert await planification.find_entry(config, "autre feature") is None
+
+
+async def test_list_entries_empty_if_file_missing(tmp_path: Path):
+    config = _config(tmp_path)
+    assert await planification.list_entries(config) == []
+
+
+async def test_list_entries_returns_all_entries_in_order(tmp_path: Path):
+    config = _config(tmp_path)
+    await planification.upsert_entry(
+        config,
+        PlanificationEntry(
+            feature_name="ajout-panier", statut="à faire", run_id="run-1", content_hash="h1",
+        ),
+    )
+    await planification.upsert_entry(
+        config,
+        PlanificationEntry(
+            feature_name="ajout-recherche", statut="fait", run_id="run-2", content_hash="h2",
+        ),
+    )
+
+    entries = await planification.list_entries(config)
+
+    assert [e.feature_name for e in entries] == ["ajout-panier", "ajout-recherche"]
+    assert entries[1].statut == "fait"

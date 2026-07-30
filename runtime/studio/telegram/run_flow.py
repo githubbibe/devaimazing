@@ -35,6 +35,7 @@ from typing import Any, Optional
 from studio.config import StudioConfig
 from studio.graph import build_graph
 from studio.state import Phase, RunStatus, StudioState
+from studio.telegram import menu
 from studio.tools import planification, queries
 from studio.tools.git import commit_safety_snapshot, current_branch, push_branch
 from studio.tools.ollama import ExternalServiceError
@@ -105,9 +106,11 @@ def _progress_text(feature_name: str, state: dict[str, Any]) -> str:
 
 async def _edit_progress(
     bot: Any, chat_id: int, message_id: int, feature_name: str, state: dict[str, Any],
+    *, reply_markup: Any = None,
 ) -> None:
     await bot.edit_message_text(
         _progress_text(feature_name, state), chat_id=chat_id, message_id=message_id,
+        reply_markup=reply_markup,
     )
 
 
@@ -276,7 +279,18 @@ async def _execute_run(
         # Flush final obligatoire : le dernier état doit toujours être
         # affiché, même si moins d'1s s'est écoulée depuis la dernière
         # édition (voir ADR 0015, Décision 4 — regroupement des éditions).
-        await _edit_progress(bot, chat_id, message_id, feature_name, final_state)
+        # Clavier racine du menu (ADR 0015, Décision 7) rattaché seulement
+        # sur un statut terminal (COMPLETED/FAILED) — pas WAITING_HUMAN,
+        # encore « en cours » (le topic attend une réponse pour reprendre,
+        # pas un nouveau choix de menu).
+        final_status = final_state.get("status")
+        menu_keyboard = (
+            menu.build_root_keyboard(in_topic=True)
+            if final_status in (RunStatus.COMPLETED, RunStatus.FAILED) else None
+        )
+        await _edit_progress(
+            bot, chat_id, message_id, feature_name, final_state, reply_markup=menu_keyboard,
+        )
     except _EXTERNAL_SERVICE_ERRORS as exc:
         await bot.edit_message_text(
             f"Run de {feature_name!r} interrompu : {exc}", chat_id=chat_id, message_id=message_id,

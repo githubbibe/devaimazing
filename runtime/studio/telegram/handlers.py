@@ -31,6 +31,7 @@ from studio.devaimazing.agent import dispatch_tool_call, interpret_message
 from studio.telegram.confirmations import CALLBACK_PREFIX as _CALLBACK_PREFIX
 from studio.telegram.confirmations import build_confirmation_keyboard
 from studio.telegram.confirmations import pending_confirmations as _pending_confirmations
+from studio.telegram import menu
 from studio.telegram.new_project_flow import handle_project_name_reply
 from studio.telegram.pm_dialogue import handle_dialogue_reply
 from studio.telegram.run_flow import handle_run_reply
@@ -435,6 +436,16 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
             ):
                 return
 
+            if message.text == "/menu":
+                # Pas de priorité absolue comme /stop : reste soumis à
+                # l'interception normale ci-dessus par un dialogue/run en
+                # attente (ADR 0015, Décision 7 — pure navigation UI, pas
+                # d'urgence à faire valoir).
+                await menu.send_root_menu(
+                    message.bot, message.chat.id, message.message_thread_id, resolved_config_dir,
+                )
+                return
+
             reply = await handle_slash_command(
                 message.text,
                 chat_id=message.chat.id,
@@ -502,7 +513,29 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
             callback.data, chat_id=chat_id, allowed_chat_id=allowed_chat_id, bot=callback.bot,
         )
         if reply_text is not None and callback.message is not None:
-            await callback.message.edit_text(reply_text)
+            # Retour à l'affichage du menu une fois la confirmation résolue
+            # (ADR 0015, Décision 7) — générique à tout outil confirmable
+            # (archive_projet, valider_fiche_feature, valider_fiche_projet),
+            # pas de logique par-outil.
+            in_topic = callback.message.message_thread_id is not None
+            await callback.message.edit_text(
+                reply_text, reply_markup=menu.build_root_keyboard(in_topic=in_topic),
+            )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith(f"{menu.CALLBACK_PREFIX}:"))
+    async def _on_menu_callback(callback: CallbackQuery) -> None:
+        chat_id = callback.message.chat.id if callback.message else None
+        thread_id = callback.message.message_thread_id if callback.message else None
+        if chat_id is None or callback.data is None or chat_id != allowed_chat_id:
+            await callback.answer()
+            return
+        text, keyboard = await menu.handle_menu_callback(
+            callback.data, chat_id=chat_id, message_thread_id=thread_id,
+            config_dir=resolved_config_dir, bot=callback.bot,
+        )
+        if callback.message is not None:
+            await callback.message.edit_text(text, reply_markup=keyboard)
         await callback.answer()
 
     return router
