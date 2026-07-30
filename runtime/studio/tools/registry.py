@@ -199,6 +199,45 @@ async def _handle_valider_fiche_feature(
     return {"card_root_path": card_root_relative}
 
 
+async def _handle_new_project(
+    config: StudioConfig, *, bot: Optional[Any] = None, chat_id: Optional[int] = None, **_: Any,
+) -> dict[str, Any]:
+    """
+    Amorce la création d'un nouveau projet (ADR 0015, phase 2 d'implémentation)
+    — délègue à studio.telegram.new_project_flow.start_new_project_flow, qui
+    demande le nom puis orchestre dossier/repo/topic/dialogue PM. N'écrit rien
+    ici : General-scope, pas de résolution de projet (voir
+    tools._GENERAL_SCOPE_TOOLS dans telegram.handlers).
+
+    Import différé (voir _handle_new_feature) : new_project_flow importe
+    execute_tool de ce module.
+    """
+    if bot is None or chat_id is None:
+        raise RuntimeError("new_project nécessite un contexte Telegram (bot, chat_id).")
+
+    from studio.telegram.new_project_flow import start_new_project_flow
+
+    await start_new_project_flow(bot, chat_id, config.config_dir)
+    return {}
+
+
+async def _handle_valider_fiche_projet(
+    config: StudioConfig, *, content: str, **_: Any,
+) -> dict[str, Any]:
+    """
+    Écrit specs/fiche-projet.md à la racine du repo cible — pendant final du
+    dialogue de cadrage projet (studio.telegram.pm_dialogue.start_project_dialogue,
+    ADR 0015), après confirmation Oui/Non. Pas de run_id : une fiche projet
+    n'appartient à aucun run précis, à la différence d'une fiche feature (voir
+    valider_fiche_feature). Pas de slash_command : déclenché uniquement par
+    pm_dialogue, jamais tapé ni sélectionné directement.
+    """
+    specs_dir = config.get("structure", {}).get("specs_dir", "specs/")
+    fiche_projet_relative = str(Path(specs_dir) / "fiche-projet.md")
+    await write_card(config.repo_path / fiche_projet_relative, content)
+    return {"fiche_projet_path": fiche_projet_relative}
+
+
 async def _not_implemented(_config: StudioConfig, **_: Any) -> dict[str, Any]:
     raise NotImplementedError("Cet outil n'est pas encore câblé (voir docs/roadmap.md).")
 
@@ -302,6 +341,36 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         requiert_confirmation=True,
         sauvegarde_avant=False,
         handler=_handle_valider_fiche_feature,
+        slash_command=None,
+    ),
+    "new_project": ToolSpec(
+        name="new_project",
+        description=(
+            "Amorce la création d'un nouveau projet (demande le nom, puis orchestre la suite)."
+        ),
+        parameters=_no_args_schema(),
+        destructif=False,
+        requiert_confirmation=False,
+        sauvegarde_avant=False,
+        handler=_handle_new_project,
+        slash_command="/new_project",
+    ),
+    "valider_fiche_projet": ToolSpec(
+        name="valider_fiche_projet",
+        description="Écrit la fiche projet validée par l'utilisateur (dialogue de cadrage PM).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string", "description": "Contenu markdown complet de la fiche",
+                },
+            },
+            "required": ["content"],
+        },
+        destructif=False,
+        requiert_confirmation=True,
+        sauvegarde_avant=False,
+        handler=_handle_valider_fiche_projet,
         slash_command=None,
     ),
     "reject_checkpoint": ToolSpec(

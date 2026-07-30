@@ -1440,21 +1440,14 @@ def test_run_agent_without_reference_dir_skips_comparison(
 @pytest.fixture
 def fake_studio_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """
-    Racine devaimazing factice sous tmp_path (jamais la vraie racine du repo) :
-    new-project ne doit jamais créer de dossier à côté du vrai checkout
-    pendant les tests. Le vrai template est copié tel quel pour vérifier le
+    Racine des projets cibles factice sous tmp_path (jamais le vrai
+    ~/code/aimazing/) : new-project ne doit jamais écrire hors de tmp_path
+    pendant les tests. write_project_config lit le vrai template du repo
+    (chemin dérivé de son propre __file__, non mocké ici) pour vérifier le
     comportement réel de substitution.
     """
-    root = tmp_path / "devaimazing"
-    templates_dir = root / "templates"
-    templates_dir.mkdir(parents=True)
-    real_template = (
-        Path(__file__).resolve().parents[2] / "templates" / "project-config.yml.template"
-    )
-    (templates_dir / "project-config.yml.template").write_text(
-        real_template.read_text(encoding="utf-8"), encoding="utf-8"
-    )
-    monkeypatch.setattr(cli_module, "_devaimazing_root", lambda: root)
+    root = tmp_path / "aimazing-projects"
+    monkeypatch.setattr(cli_module, "_projects_root", lambda: root)
     return root
 
 
@@ -1472,7 +1465,7 @@ def test_new_project_creates_repo_and_config(
     result = CliRunner().invoke(main, ["new-project", "mon-projet", "--skip-github"])
 
     assert result.exit_code == 0
-    target = fake_studio_root.parent / "mon-projet"
+    target = fake_studio_root / "mon-projet"
     assert (target / ".git").is_dir()
     assert (target / "README.md").read_text(encoding="utf-8") == "# mon-projet\n"
 
@@ -1499,13 +1492,13 @@ def test_new_project_config_already_exists_is_noop(
 
     assert result.exit_code == 0
     assert "existe déjà" in result.output
-    assert not (fake_studio_root.parent / "mon-projet").exists()
+    assert not (fake_studio_root / "mon-projet").exists()
 
 
 def test_new_project_reuses_existing_git_repo(
     monkeypatch: pytest.MonkeyPatch, fake_studio_root: Path, tmp_path: Path
 ):
-    target = fake_studio_root.parent / "mon-projet"
+    target = fake_studio_root / "mon-projet"
     (target / ".git").mkdir(parents=True)
     monkeypatch.setattr(cli_module, "init_repo", _fail_if_called)
     monkeypatch.setattr(cli_module, "create_initial_commit", _fail_if_called)
@@ -1520,7 +1513,7 @@ def test_new_project_reuses_existing_git_repo(
 def test_new_project_target_exists_not_git_repo_prints_error(
     fake_studio_root: Path, tmp_path: Path
 ):
-    target = fake_studio_root.parent / "mon-projet"
+    target = fake_studio_root / "mon-projet"
     target.mkdir(parents=True)
     (target / "fichier.txt").write_text("contenu", encoding="utf-8")
 
@@ -1574,7 +1567,7 @@ def test_new_project_confirmation_accepted_creates_remote_and_pushes(
     result = CliRunner().invoke(main, ["new-project", "mon-projet"], input="y\n")
 
     assert result.exit_code == 0
-    target = fake_studio_root.parent / "mon-projet"
+    target = fake_studio_root / "mon-projet"
     assert calls[0] == ("create", target, "mon-projet", True)
     assert calls[1] == ("push", target, "develop", "origin")
     assert "Création du repo GitHub et push en cours" in result.output

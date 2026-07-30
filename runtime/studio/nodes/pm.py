@@ -116,7 +116,7 @@ def _render_imported_card_root(
     """
     Synthétise un card-root.md minimal pour le raccourci "import de brief
     existant" (voir _run_brief_import) — pas écrit par le LLM, templating
-    Python déterministe (même mécanisme que cli.py::_write_project_config),
+    Python déterministe (même mécanisme que tools.project_config.write_project_config),
     garantissant le champ **Nom de la feature** requis par
     _extract_feature_name (contrat lu ensuite par _run_fiches).
     """

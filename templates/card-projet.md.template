@@ -1,0 +1,26 @@
+# Fiche projet - {{PROJECT_NAME}}
+
+**Date** : {{DATE}}
+**Projet** : {{PROJECT_NAME}}
+
+---
+
+## Objectif
+
+<!-- Ce que le projet fait, dans son ensemble -->
+
+## Utilisateurs cibles
+
+<!-- Pour qui ce projet est construit -->
+
+## Contraintes
+
+<!-- Contraintes connues à ce stade (techniques, légales, organisationnelles) -->
+
+## Périmètre
+
+**Inclus :**
+-
+
+**Exclus explicitement :**
+-

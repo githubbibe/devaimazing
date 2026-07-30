@@ -1,25 +1,26 @@
 """
-Dialogue de cadrage PM porté sur Telegram (ADR 0015, phase 1 d'implémentation
-— /new_feature uniquement, voir l'ADR pour /new_project et la fiche projet,
-laissés à une phase ultérieure).
+Dialogue de cadrage PM porté sur Telegram (ADR 0015) — deux variantes,
+`/new_feature` (phase 1 d'implémentation) et `/new_project` (phase 2) :
 
 Équivalent asynchrone, message par message dans un topic Telegram, du
 mécanisme terminal input()/print() de studio.nodes.pm._run_validation_dialogue
 — réutilise studio.nodes.pm.run_pm_turn (appel Claude Code CLI + parsing
 QUESTION:/FICHE_VALIDEE:, canal-agnostique) pour ne pas dupliquer cette
-logique entre les deux canaux.
+logique entre les deux canaux, ni entre les deux variantes (feature/projet)
+ci-dessous — seuls le seed de transcript et l'outil de validation finale
+diffèrent (voir _DialogueState.kind).
 
 État en mémoire process, jamais persisté (même choix assumé que
 _pending_confirmations, voir studio.telegram.confirmations et ADR 0013,
 Décision 3) : perdu si le bot redémarre en cours de dialogue, à reprendre
-avec /new_feature depuis le début.
+depuis le début.
 """
 
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from studio.config import StudioConfig
 from studio.nodes.pm import run_pm_turn
@@ -34,7 +35,11 @@ _MODEL_KEY = "pm_opus"
 
 @dataclass
 class _DialogueState:
-    run_id: str
+    kind: Literal["feature", "project"]
+    # feature : run_id (specs/<run_id>/card-root.md, voir valider_fiche_feature).
+    # project : identifiant de trace seulement (specs/<trace_id>/trace.jsonl) —
+    # une fiche projet n'est pas run-scopée, ce n'est pas un vrai run_id.
+    trace_id: str
     config: StudioConfig
     system_prompt: str
     transcript: list[str]
@@ -52,6 +57,14 @@ def _generate_run_id() -> str:
     return f"run-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
 
 
+def _validation_tool_call(state: _DialogueState, draft: str) -> tuple[str, dict[str, Any]]:
+    """Outil du registre + arguments à appeler pour valider le brouillon,
+    selon le type de dialogue — voir _present_draft."""
+    if state.kind == "feature":
+        return "valider_fiche_feature", {"run_id": state.trace_id, "content": draft}
+    return "valider_fiche_projet", {"content": draft}
+
+
 async def _present_draft(
     bot: Any, chat_id: int, message_thread_id: int, state: _DialogueState, draft: str,
 ) -> None:
@@ -61,12 +74,12 @@ async def _present_draft(
     destructifs du registre (execute_tool + pending_confirmations +
     build_confirmation_keyboard), au lieu d'une réponse tapée comme en CLI.
     """
-    args = {"run_id": state.run_id, "content": draft}
-    result = await execute_tool("valider_fiche_feature", args, config=state.config)
+    tool_name, args = _validation_tool_call(state, draft)
+    result = await execute_tool(tool_name, args, config=state.config)
 
     if result.status == "needs_confirmation":
         confirmation_id = uuid.uuid4().hex[:12]
-        pending_confirmations[confirmation_id] = ("valider_fiche_feature", args, state.config)
+        pending_confirmations[confirmation_id] = (tool_name, args, state.config)
         await bot.send_message(
             chat_id,
             f"{draft}\n\n{result.summary}",
@@ -75,12 +88,40 @@ async def _present_draft(
         )
         return
 
-    # Ne devrait pas arriver avec la classification actuelle de
-    # valider_fiche_feature (requiert_confirmation=True) — couvert pour
-    # rester correct si elle change un jour.
+    # Ne devrait pas arriver avec la classification actuelle des outils de
+    # validation (requiert_confirmation=True) — couvert pour rester correct
+    # si elle change un jour.
     await bot.send_message(
         chat_id, format_tool_result(result), message_thread_id=message_thread_id,
     )
+
+
+async def _start_dialogue(
+    bot: Any, chat_id: int, message_thread_id: int,
+    config: StudioConfig, kind: Literal["feature", "project"],
+    trace_id: str, transcript_seed: str,
+) -> None:
+    """Cœur partagé de start_feature_dialogue/start_project_dialogue — un
+    seul appel PM, puis question postée + état enregistré, ou brouillon
+    présenté directement si le PM n'a besoin d'aucune question."""
+    system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
+    transcript = [transcript_seed]
+    tracer = RunTracer.for_run(config, trace_id).for_agent("pm", Phase.CADRAGE)
+
+    turn, *_ = await run_pm_turn(config, tracer, system_prompt, transcript, _MODEL_KEY)
+
+    state = _DialogueState(
+        kind=kind, trace_id=trace_id, config=config,
+        system_prompt=system_prompt, transcript=transcript,
+    )
+
+    if turn.kind == "question":
+        transcript.append(f"PM : {turn.text}")
+        _pending_dialogues[message_thread_id] = state
+        await bot.send_message(chat_id, turn.text, message_thread_id=message_thread_id)
+        return
+
+    await _present_draft(bot, chat_id, message_thread_id, state, turn.text)
 
 
 async def start_feature_dialogue(
@@ -107,27 +148,33 @@ async def start_feature_dialogue(
         process (voir _pending_dialogues).
     """
     run_id = _generate_run_id()
-    system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
-    transcript = [
+    await _start_dialogue(
+        bot, chat_id, message_thread_id, config, "feature", run_id,
         "Objectif initial de l'utilisateur : (non précisé — nouvelle feature "
-        "démarrée depuis Telegram, /new_feature)."
-    ]
-    tracer = RunTracer.for_run(config, run_id).for_agent("pm", Phase.CADRAGE)
-
-    turn, *_ = await run_pm_turn(config, tracer, system_prompt, transcript, _MODEL_KEY)
-
-    if turn.kind == "question":
-        transcript.append(f"PM : {turn.text}")
-        _pending_dialogues[message_thread_id] = _DialogueState(
-            run_id=run_id, config=config, system_prompt=system_prompt, transcript=transcript,
-        )
-        await bot.send_message(chat_id, turn.text, message_thread_id=message_thread_id)
-        return
-
-    state = _DialogueState(
-        run_id=run_id, config=config, system_prompt=system_prompt, transcript=transcript,
+        "démarrée depuis Telegram, /new_feature).",
     )
-    await _present_draft(bot, chat_id, message_thread_id, state, turn.text)
+
+
+async def start_project_dialogue(
+    bot: Any, chat_id: int, message_thread_id: int, config: StudioConfig, project_name: str,
+) -> None:
+    """
+    Démarre le dialogue de cadrage PM pour un nouveau projet (/new_project,
+    ADR 0015) — même mécanisme que start_feature_dialogue, mais produit une
+    fiche **projet** (`templates/card-projet.md.template`, via l'outil
+    valider_fiche_projet) plutôt qu'une fiche feature. Pas de run_id : une
+    fiche projet n'appartient à aucun run (voir _DialogueState.trace_id).
+
+    Args:
+        Voir start_feature_dialogue — project_name en plus, déjà connu
+        (dossier/repo/topic créés avant cet appel, voir
+        studio.telegram.new_project_flow).
+    """
+    trace_id = f"cadrage-projet-{project_name}"
+    await _start_dialogue(
+        bot, chat_id, message_thread_id, config, "project", trace_id,
+        f"Cadrage d'un nouveau PROJET (pas une feature) : {project_name}.",
+    )
 
 
 async def handle_dialogue_reply(
@@ -135,17 +182,18 @@ async def handle_dialogue_reply(
 ) -> bool:
     """
     Traite un message tapé dans un topic où un dialogue de cadrage PM est en
-    attente (voir start_feature_dialogue) — à appeler par
-    telegram.handlers._on_message AVANT le dispatch slash/langage naturel
+    attente (voir start_feature_dialogue/start_project_dialogue) — à appeler
+    par telegram.handlers._on_message AVANT le dispatch slash/langage naturel
     habituel : un message dans ce contexte est la réponse de l'utilisateur
     au PM, pas une nouvelle commande (même sémantique que le input() du
     dialogue terminal — tout ce qui est tapé est la réponse).
 
     Args:
         message_thread_id: None si le message vient de General (aucun
-            dialogue n'y est jamais enregistré, /new_feature est
-            topic-projet uniquement dans cette phase) — retourne False
-            immédiatement dans ce cas.
+            dialogue n'y est jamais enregistré — /new_feature et
+            /new_project engagent tous deux leur dialogue dans un
+            topic-projet, jamais en General) — retourne False immédiatement
+            dans ce cas.
 
     Returns:
         True si un dialogue était en attente pour ce topic et que ce message
@@ -163,7 +211,7 @@ async def handle_dialogue_reply(
     state.transcript.append(f"Utilisateur : {text}")
     await bot.send_chat_action(chat_id, "typing", message_thread_id=message_thread_id)
 
-    tracer = RunTracer.for_run(state.config, state.run_id).for_agent("pm", Phase.CADRAGE)
+    tracer = RunTracer.for_run(state.config, state.trace_id).for_agent("pm", Phase.CADRAGE)
     turn, *_ = await run_pm_turn(
         state.config, tracer, state.system_prompt, state.transcript, _MODEL_KEY,
     )

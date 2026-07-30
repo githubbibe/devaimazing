@@ -24,7 +24,8 @@ def _write_yaml(path: Path, data: dict) -> None:
 
 
 # Table de l'ADR 0013, Décision 4, complétée par les outils ajoutés pour
-# l'ADR 0015 (new_feature, valider_fiche_feature) — un des points les plus
+# l'ADR 0015 (new_feature/valider_fiche_feature phase 1,
+# new_project/valider_fiche_projet phase 2) — un des points les plus
 # structurants des deux ADR, vérifié explicitement outil par outil pour ne
 # pas dériver en silence d'une future édition de registry.py.
 _ADR_TABLE = {
@@ -35,6 +36,8 @@ _ADR_TABLE = {
     "archive_projet": (True, True, True),
     "new_feature": (False, False, False),
     "valider_fiche_feature": (False, True, False),
+    "new_project": (False, False, False),
+    "valider_fiche_projet": (False, True, False),
     "reject_checkpoint": (True, True, True),
     "stop_run": (True, True, True),
 }
@@ -428,3 +431,60 @@ async def test_valider_fiche_feature_writes_card(tmp_path: Path):
     card_path = tmp_path / "specs" / "run-042" / "card-root.md"
     assert card_path.read_text(encoding="utf-8") == "# Ma fiche"
     assert result.data == {"card_root_path": "specs/run-042/card-root.md"}
+
+
+# --- new_project / valider_fiche_projet (ADR 0015, phase 2) ---
+
+async def test_new_project_without_telegram_context_returns_error():
+    result = await execute_tool(
+        "new_project", {}, config=SimpleNamespace(),
+    )
+
+    assert result.status == "error"
+
+
+async def test_new_project_delegates_to_start_new_project_flow(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import studio.telegram.new_project_flow as new_project_flow_module
+
+    calls = {}
+
+    async def fake_start_new_project_flow(bot, chat_id, config_dir):
+        calls["args"] = (bot, chat_id, config_dir)
+
+    monkeypatch.setattr(
+        new_project_flow_module, "start_new_project_flow", fake_start_new_project_flow,
+    )
+
+    fake_bot = SimpleNamespace()
+    result = await execute_tool(
+        "new_project", {}, config=SimpleNamespace(config_dir="/config"),
+        bot=fake_bot, chat_id=222,
+    )
+
+    assert result.status == "ok"
+    assert calls["args"] == (fake_bot, 222, "/config")
+
+
+async def test_valider_fiche_projet_requires_confirmation():
+    result = await execute_tool(
+        "valider_fiche_projet", {"content": "# Fiche projet"},
+        config=SimpleNamespace(),
+    )
+
+    assert result.status == "needs_confirmation"
+
+
+async def test_valider_fiche_projet_writes_card(tmp_path: Path):
+    config = SimpleNamespace(repo_path=tmp_path, get=lambda key, default=None: default)
+
+    result = await execute_tool(
+        "valider_fiche_projet", {"content": "# Ma fiche projet"},
+        config=config, confirmed=True,
+    )
+
+    assert result.status == "ok"
+    card_path = tmp_path / "specs" / "fiche-projet.md"
+    assert card_path.read_text(encoding="utf-8") == "# Ma fiche projet"
+    assert result.data == {"fiche_projet_path": "specs/fiche-projet.md"}

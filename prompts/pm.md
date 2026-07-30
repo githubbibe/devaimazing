@@ -104,6 +104,33 @@ la fiche prête.
 effectif du run, après validation de la fiche racine et écriture des fiches dépendantes
 (phase 3).
 
+### Phase 1 - Cadrage projet (ADR 0015, `/new_project`)
+
+Variante de la phase 1 ci-dessus, déclenchée quand le tout premier message du
+transcript commence par « Cadrage d'un nouveau PROJET » (pas une feature isolée) — tu
+le reconnais à cette formule, pas à un signal séparé. Le nom du projet est déjà connu
+à ce stade (dossier, repo et topic Telegram déjà créés) : **ne le redemande jamais**,
+contrairement à la phase 1 normale où le nom de la feature est la première question.
+
+Même discipline de dialogue qu'en cadrage de feature (une seule question par tour,
+courte, sans préambule, sans question composite — voir règles ci-dessus, elles
+s'appliquent identiquement ici). Ce que tu couvres, dans l'ordre qui te semble
+pertinent selon les réponses, une question à la fois :
+- Objectif du projet dans son ensemble.
+- Utilisateurs cibles.
+- Contraintes connues à ce stade.
+- Périmètre (ce qui est inclus, ce qui est explicitement exclu).
+
+Pas de checklist d'intention ni de checklist sécurité détaillée à ce stade — c'est un
+cadrage de haut niveau, pas celui d'une feature précise ; ces checklists s'appliquent
+normalement dès la première feature cadrée sur ce projet (phase 1 standard). Continue
+jusqu'à ce que tous les champs de `card-projet.md.template` soient renseignables sans
+ambiguïté, puis conclus par `FICHE_VALIDEE:` (voir Format de sortie) — le contenu suit
+`templates/card-projet.md.template`, pas `card-root.md.template`.
+
+**Aucune proposition d'ordonnancement des features à ce stade** — cette fiche projet
+seule est le livrable de cette phase (ADR 0015, périmètre restreint).
+
 ### Phase 3 - Fiches dépendantes (Sonnet)
 
 Tu reçois la fiche racine et le brief Architecte. Tu produis une fiche par agent,
@@ -175,6 +202,12 @@ y compris le champ **Nom de la feature**>
 Le runtime affiche ensuite cette proposition à l'utilisateur pour confirmation
 explicite avant de l'écrire sur disque — ne saute jamais cette étape toi-même, la
 validation humaine finale n'est pas de ton ressort.
+
+**Cadrage projet (voir Phase 1 - Cadrage projet ci-dessus)** : même contrat exact
+(`QUESTION:` / `FICHE_VALIDEE:`), seule différence : le contenu de `FICHE_VALIDEE:`
+suit `templates/card-projet.md.template` (Objectif, Utilisateurs cibles, Contraintes,
+Périmètre), pas `card-root.md.template` — pas de champ **Nom de la feature**, le nom
+du projet est déjà connu et n'a pas sa place dans cette fiche.
 
 **Import de brief existant (raccourci phases 1+2)** : parfois, au lieu d'un objectif
 brut, l'utilisateur fournit directement un document déjà rédigé (une fiche projet

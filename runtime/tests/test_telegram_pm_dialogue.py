@@ -204,3 +204,60 @@ async def test_confirming_draft_writes_card_root(
     assert len(run_dirs) == 1
     card_path = run_dirs[0] / "card-root.md"
     assert card_path.read_text(encoding="utf-8") == VALID_FICHE.strip()
+
+
+# --- start_project_dialogue (ADR 0015, phase 2) ---
+
+VALID_FICHE_PROJET = (
+    "**Objectif** : plateforme de gestion de paniers\n"
+    "**Utilisateurs cibles** : commerçants\n"
+)
+
+
+async def test_start_project_dialogue_posts_first_question(
+    monkeypatch: pytest.MonkeyPatch, config: StudioConfig,
+):
+    async def fake_run_claude_code(**kwargs):
+        return _fake_claude_result("QUESTION: quel est l'objectif du projet ?")
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    bot = _FakeBot()
+
+    await pm_dialogue.start_project_dialogue(bot, _CHAT_ID, _THREAD_ID, config, "mon-projet")
+
+    assert len(bot.messages) == 1
+    assert bot.messages[0]["message_thread_id"] == _THREAD_ID
+    assert "objectif du projet" in bot.messages[0]["text"]
+    assert _THREAD_ID in pm_dialogue._pending_dialogues
+    assert pm_dialogue._pending_dialogues[_THREAD_ID].kind == "project"
+
+
+async def test_project_dialogue_validated_draft_calls_valider_fiche_projet(
+    monkeypatch: pytest.MonkeyPatch, config: StudioConfig, repo: Path,
+):
+    responses = [
+        _fake_claude_result("QUESTION: quel est l'objectif du projet ?"),
+        _fake_claude_result(f"FICHE_VALIDEE:\n{VALID_FICHE_PROJET}"),
+    ]
+
+    async def fake_run_claude_code(**kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    bot = _FakeBot()
+    await pm_dialogue.start_project_dialogue(bot, _CHAT_ID, _THREAD_ID, config, "mon-projet")
+    await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "une plateforme de paniers")
+
+    assert _THREAD_ID not in pm_dialogue._pending_dialogues
+    confirmation_id = next(iter(confirmations_module.pending_confirmations))
+    tool_name, args, _ = confirmations_module.pending_confirmations[confirmation_id]
+    assert tool_name == "valider_fiche_projet"
+    assert "run_id" not in args
+
+    reply_text = await handle_confirmation_callback(
+        f"confirm:{confirmation_id}:yes", chat_id=_CHAT_ID, allowed_chat_id=_CHAT_ID, bot=bot,
+    )
+
+    assert reply_text is not None
+    card_path = repo / "specs" / "fiche-projet.md"
+    assert card_path.read_text(encoding="utf-8") == VALID_FICHE_PROJET.strip()

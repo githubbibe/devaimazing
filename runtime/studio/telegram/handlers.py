@@ -31,6 +31,7 @@ from studio.devaimazing.agent import dispatch_tool_call, interpret_message
 from studio.telegram.confirmations import CALLBACK_PREFIX as _CALLBACK_PREFIX
 from studio.telegram.confirmations import build_confirmation_keyboard
 from studio.telegram.confirmations import pending_confirmations as _pending_confirmations
+from studio.telegram.new_project_flow import handle_project_name_reply
 from studio.telegram.pm_dialogue import handle_dialogue_reply
 from studio.telegram.topics import load_topic_map, resolve_project
 from studio.tools.registry import (
@@ -44,7 +45,7 @@ from studio.tools.whisper import ExternalServiceError, transcribe_voice_message
 # Outils utilisables depuis le topic General, sans résolution de projet par
 # le topic — le nom du projet vient de l'argument de la commande elle-même
 # (voir ADR 0013, Décision 4 : /new et /archive sont des commandes General).
-_GENERAL_SCOPE_TOOLS = {"lister_projets", "creer_projet", "archive_projet"}
+_GENERAL_SCOPE_TOOLS = {"lister_projets", "creer_projet", "archive_projet", "new_project"}
 
 
 @dataclass
@@ -360,12 +361,21 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
             return
 
         if message.text:
+            # Un nom de projet attendu dans General (/new_project, ADR 0015)
+            # absorbe le message en priorité, avant même un dialogue de
+            # cadrage PM (les deux ne peuvent pas être simultanément en
+            # attente pour le même chat_id/topic — General vs topic-projet).
+            if await handle_project_name_reply(
+                message.bot, message.chat.id, message.message_thread_id, message.text,
+            ):
+                return
+
             # Un dialogue de cadrage PM en attente dans ce topic (/new_feature,
-            # ADR 0015) absorbe le message en priorité : c'est la réponse de
-            # l'utilisateur au PM, pas une nouvelle commande — même sémantique
-            # que le input() du dialogue terminal (studio.nodes.pm), tout ce
-            # qui est tapé est la réponse, y compris si ça ressemble à une
-            # commande slash.
+            # /new_project, ADR 0015) absorbe le message en priorité : c'est
+            # la réponse de l'utilisateur au PM, pas une nouvelle commande —
+            # même sémantique que le input() du dialogue terminal
+            # (studio.nodes.pm), tout ce qui est tapé est la réponse, y
+            # compris si ça ressemble à une commande slash.
             if await handle_dialogue_reply(
                 message.bot, message.chat.id, message.message_thread_id, message.text,
             ):

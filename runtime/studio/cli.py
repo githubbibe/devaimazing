@@ -46,6 +46,7 @@ from studio.tools.git import (
     push_branch,
 )
 from studio.tools.ollama import ExternalServiceError
+from studio.tools.project_config import write_project_config
 from studio.tools.queries import build_progression_summary, list_projects, parse_run_history_table
 from studio.tools.tracer import RunTracer
 
@@ -716,12 +717,14 @@ def new_project(name: str, private: bool, skip_github: bool):
     asyncio.run(_new_project_async(name, private, skip_github))
 
 
-def _write_project_config(config_path: Path, name: str, repo_path: Path) -> None:
-    template_path = _devaimazing_root() / "templates" / "project-config.yml.template"
-    content = template_path.read_text(encoding="utf-8")
-    content = content.replace("{{PROJECT_NAME}}", name).replace("{{REPO_PATH}}", str(repo_path))
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(content, encoding="utf-8")
+def _projects_root() -> Path:
+    """
+    Racine des projets cibles clonés localement — convention réellement
+    utilisée par les projets existants (demo-todo-app, webaimazing-v2, voir
+    docs/roadmap.md), distincte de _devaimazing_root() (racine du studio
+    lui-même). Un projet cible n'est pas un frère de devaimazing.
+    """
+    return Path("~/code/aimazing").expanduser()
 
 
 async def _new_project_async(name: str, private: bool, skip_github: bool) -> None:
@@ -733,7 +736,7 @@ async def _new_project_async(name: str, private: bool, skip_github: bool) -> Non
         )
         return
 
-    target = _devaimazing_root().parent / name
+    target = _projects_root() / name
 
     if target.exists():
         if not target.is_dir():
@@ -776,7 +779,7 @@ async def _new_project_async(name: str, private: bool, skip_github: bool) -> Non
                     "[yellow]Repo GitHub non créé — à faire manuellement si besoin.[/yellow]"
                 )
 
-    _write_project_config(config_path, name, target)
+    write_project_config(config_path, name, target)
     console.print(f"[green]Config créée : {config_path}[/green]")
     console.print(f"Prochaine étape : devaimazing run {name}")
 

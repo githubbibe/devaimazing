@@ -1,12 +1,10 @@
 """
-Écriture ciblée de config/projects/<nom>.yml.
-
-Avant cette tranche, la seule fonction d'écriture existante
-(studio.cli._write_project_config) génère un fichier neuf depuis un
-template — aucune fonction ne modifiait un fichier projet déjà existant.
-set_project_thread_id ajoute ou met à jour uniquement la clé
-telegram.thread_id, par édition de texte ciblée plutôt que par un
-round-trip YAML complet (yaml.safe_dump perdrait tous les commentaires
+Écriture de config/projects/<nom>.yml — création (write_project_config,
+depuis un template, réutilisée par `devaimazing new-project` et par
+studio.telegram.new_project_flow, ADR 0015) et édition ciblée d'un fichier
+déjà existant (set_project_thread_id : ajoute ou met à jour uniquement la
+clé telegram.thread_id, par édition de texte ciblée plutôt que par un
+round-trip YAML complet — yaml.safe_dump perdrait tous les commentaires
 existants, abondants dans ces fichiers, voir ADR 0013).
 """
 
@@ -15,12 +13,39 @@ from pathlib import Path
 
 import yaml
 
+_DEVAIMAZING_ROOT = Path(__file__).resolve().parents[3]
+_PROJECT_CONFIG_TEMPLATE_PATH = (
+    _DEVAIMAZING_ROOT / "templates" / "project-config.yml.template"
+)
+
 # Ne cible que le bloc généré par cette fonction elle-même (telegram: suivi
 # immédiatement de sa seule clé thread_id) — c'est le seul writer de ce bloc,
 # pas la peine de gérer une structure telegram: arbitraire écrite à la main.
 _TELEGRAM_BLOCK_PATTERN = re.compile(
     r"(?m)^telegram:\n[ \t]+thread_id:[ \t]*(?P<value>\S+)[ \t]*$"
 )
+
+
+def write_project_config(config_path: Path, name: str, repo_path: Path) -> None:
+    """
+    Crée config/projects/<nom>.yml depuis templates/project-config.yml.template.
+
+    Args:
+        config_path: Chemin de destination (config/projects/<nom>.yml).
+        name: Nom du projet (substitué dans le template).
+        repo_path: Chemin du repo cible (substitué dans le template).
+
+    Side effects:
+        Crée config_path (et son répertoire parent si nécessaire), écrase un
+        fichier existant au même chemin sans avertissement — à l'appelant de
+        vérifier au préalable si un écrasement doit être évité (voir
+        cli.py::_new_project_async, qui court-circuite avant d'appeler cette
+        fonction si le fichier existe déjà).
+    """
+    content = _PROJECT_CONFIG_TEMPLATE_PATH.read_text(encoding="utf-8")
+    content = content.replace("{{PROJECT_NAME}}", name).replace("{{REPO_PATH}}", str(repo_path))
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(content, encoding="utf-8")
 
 
 async def set_project_thread_id(config_path: Path, thread_id: int) -> None:
