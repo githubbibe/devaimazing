@@ -36,6 +36,7 @@ from studio.config import StudioConfig
 from studio.graph import build_graph
 from studio.state import Phase, RunStatus, StudioState
 from studio.tools import planification, queries
+from studio.tools.git import commit_safety_snapshot, current_branch, push_branch
 from studio.tools.ollama import ExternalServiceError
 
 # Mêmes types que cli.py::_EXTERNAL_SERVICE_ERRORS — déjà porteurs d'un
@@ -311,6 +312,43 @@ async def _execute_run(
     # Telegram déjà édité ci-dessus, pas de reprise automatique v1).
 
     _active_runs.pop(message_thread_id, None)
+
+
+async def stop_active_run(message_thread_id: int) -> Optional[dict[str, Any]]:
+    """
+    Arrête immédiatement le run actif dans ce topic (ADR 0015, Décision 6,
+    /stop, voir tools.registry._handle_stop_run) — annule la tâche de fond
+    en cours (asyncio.Task.cancel(), la connexion checkpointer se ferme
+    quand même dans le `finally` de _execute_run) puis sauvegarde (commit +
+    push) le repo cible sous l'identité système devaimazing-bot, même
+    helper que archive_projet (tools.git.commit_safety_snapshot).
+
+    Le prochain /run sur cette feature reprendra depuis le dernier
+    checkpoint LangGraph, comme après un crash (voir start_run — aucun
+    statut "arrêté" n'existe dans RunStatus, planification.md n'est pas
+    touché ici).
+
+    Returns:
+        None si aucun run n'est actif dans ce topic. Sinon
+        {"feature_name", "run_id", "commit"} — commit est None si le repo
+        n'avait rien à sauvegarder.
+    """
+    active = _active_runs.pop(message_thread_id, None)
+    if active is None:
+        return None
+
+    if active.task is not None and not active.task.done():
+        active.task.cancel()
+
+    commit_hash = await commit_safety_snapshot(
+        active.config.repo_path,
+        message="chore: sauvegarde avant arrêt du run (Devaimazing, /stop)",
+    )
+    if commit_hash is not None:
+        branch = await current_branch(active.config.repo_path)
+        await push_branch(active.config.repo_path, branch)
+
+    return {"feature_name": active.feature_name, "run_id": active.run_id, "commit": commit_hash}
 
 
 async def handle_run_reply(

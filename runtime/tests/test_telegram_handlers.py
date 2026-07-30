@@ -688,3 +688,50 @@ async def test_on_message_voice_with_failed_transcription_sends_error_reply():
 
     assert len(calls) == 1
     assert "transcrire" in calls[0]
+
+
+# --- /stop, priorité absolue (ADR 0015, Décision 6) ---
+
+async def test_stop_command_bypasses_pending_reply_handlers(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path,
+):
+    import studio.telegram.pm_dialogue as pm_dialogue_module
+    import studio.telegram.run_flow as run_flow_module
+
+    async def fail_if_called_async(*args, **kwargs):
+        raise AssertionError("ne doit pas être appelé : /stop a priorité absolue")
+
+    monkeypatch.setattr(handlers_module, "handle_project_name_reply", fail_if_called_async)
+    monkeypatch.setattr(handlers_module, "handle_dialogue_reply", fail_if_called_async)
+    monkeypatch.setattr(handlers_module, "handle_run_reply", fail_if_called_async)
+
+    async def fake_stop_active_run(message_thread_id):
+        return None
+
+    def fake_cancel_dialogue(message_thread_id):
+        return False
+
+    monkeypatch.setattr(run_flow_module, "stop_active_run", fake_stop_active_run)
+    monkeypatch.setattr(pm_dialogue_module, "cancel_dialogue", fake_cancel_dialogue)
+
+    router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
+    on_message = router.message.handlers[0].callback
+
+    replies = []
+
+    async def fake_reply(text, reply_markup=None):
+        replies.append(text)
+
+    message = SimpleNamespace(
+        text="/stop",
+        from_user=SimpleNamespace(is_bot=False),
+        chat=SimpleNamespace(id=_ALLOWED_CHAT_ID),
+        message_thread_id=111,  # thread_id du projet "demo" (fixture config_dir)
+        bot=None,
+        reply=fake_reply,
+    )
+
+    await on_message(message)
+
+    assert len(replies) == 1
+    assert "aucun traitement en cours" in replies[0]

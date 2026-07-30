@@ -123,6 +123,32 @@ async def test_handle_dialogue_reply_none_thread_id_returns_false():
     assert consumed is False
 
 
+# --- cancel_dialogue (ADR 0015, Décision 6, /stop) ---
+
+async def test_cancel_dialogue_removes_pending_state(
+    monkeypatch: pytest.MonkeyPatch, config: StudioConfig,
+):
+    async def fake_run_claude_code(**kwargs):
+        return {
+            "content": "QUESTION: quel est le nom de la feature ?",
+            "usage": {"input_tokens": 1, "output_tokens": 1}, "duration_ms": 0,
+        }
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    bot = _FakeBot()
+    await pm_dialogue.start_feature_dialogue(bot, _CHAT_ID, _THREAD_ID, config)
+    assert _THREAD_ID in pm_dialogue._pending_dialogues
+
+    cancelled = pm_dialogue.cancel_dialogue(_THREAD_ID)
+
+    assert cancelled is True
+    assert _THREAD_ID not in pm_dialogue._pending_dialogues
+
+
+def test_cancel_dialogue_without_pending_returns_false():
+    assert pm_dialogue.cancel_dialogue(_THREAD_ID) is False
+
+
 async def test_handle_dialogue_reply_advances_to_next_question(
     monkeypatch: pytest.MonkeyPatch, config: StudioConfig,
 ):

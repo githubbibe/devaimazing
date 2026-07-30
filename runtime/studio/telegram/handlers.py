@@ -49,6 +49,13 @@ from studio.tools.whisper import ExternalServiceError, transcribe_voice_message
 _GENERAL_SCOPE_TOOLS = {"lister_projets", "creer_projet", "archive_projet", "new_project"}
 
 
+def _is_stop_command(text: str) -> bool:
+    """/stop a priorité absolue sur tout état en attente (ADR 0015,
+    Décision 6) — voir son usage dans _on_message."""
+    parsed = parse_slash_command(text)
+    return parsed is not None and parsed[0] == "stop_run"
+
+
 @dataclass
 class HandlerReply:
     """
@@ -372,6 +379,30 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
             return
 
         if message.text:
+            if _is_stop_command(message.text):
+                # /stop a priorité absolue (ADR 0015, Décision 6) : ne doit
+                # JAMAIS être intercepté comme réponse à un nom de projet
+                # attendu, un dialogue de cadrage, ou un run en attente de
+                # validation humaine — sinon il ne pourrait jamais
+                # interrompre exactement les situations qu'il sert à
+                # interrompre. Court-circuite donc la chaîne de priorité
+                # normale ci-dessous plutôt que de s'y insérer.
+                reply = await handle_slash_command(
+                    message.text,
+                    chat_id=message.chat.id,
+                    message_thread_id=message.message_thread_id,
+                    allowed_chat_id=allowed_chat_id,
+                    config_dir=resolved_config_dir,
+                    bot=message.bot,
+                )
+                if reply is not None:
+                    keyboard = (
+                        build_confirmation_keyboard(reply.confirmation_id)
+                        if reply.confirmation_id is not None else None
+                    )
+                    await message.reply(reply.text, reply_markup=keyboard)
+                return
+
             # Un nom de projet attendu dans General (/new_project, ADR 0015)
             # absorbe le message en priorité, avant même un dialogue de
             # cadrage PM (les deux ne peuvent pas être simultanément en

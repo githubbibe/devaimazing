@@ -177,6 +177,20 @@ async def start_project_dialogue(
     )
 
 
+def cancel_dialogue(message_thread_id: int) -> bool:
+    """
+    Interrompt un dialogue de cadrage en attente dans ce topic (ADR 0015,
+    Décision 6, /stop, voir tools.registry._handle_stop_run) — rien à
+    sauvegarder sur disque : aucune fiche n'est écrite avant la validation
+    explicite de l'utilisateur (voir _present_draft).
+
+    Returns:
+        True si un dialogue était en attente et a été interrompu, False
+        sinon (l'appelant traite ça comme "rien à interrompre ici").
+    """
+    return _pending_dialogues.pop(message_thread_id, None) is not None
+
+
 async def handle_dialogue_reply(
     bot: Any, chat_id: int, message_thread_id: Optional[int], text: str,
 ) -> bool:

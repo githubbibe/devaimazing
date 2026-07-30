@@ -40,7 +40,7 @@ _ADR_TABLE = {
     "new_project": (False, False, False),
     "valider_fiche_projet": (False, True, False),
     "reject_checkpoint": (True, True, True),
-    "stop_run": (True, True, True),
+    "stop_run": (True, False, True),
 }
 
 
@@ -133,7 +133,7 @@ async def test_execute_tool_no_confirmation_required_calls_handler_directly(
 
 async def test_execute_tool_not_implemented_returns_error():
     result = await execute_tool(
-        "stop_run", {"run_id": "run-1"}, config=SimpleNamespace(), confirmed=True
+        "reject_checkpoint", {"run_id": "run-1"}, config=SimpleNamespace(), confirmed=True
     )
 
     assert result.status == "error"
@@ -562,3 +562,83 @@ async def test_run_feature_raises_on_error_result(monkeypatch: pytest.MonkeyPatc
 
     assert result.status == "error"
     assert "feature inconnue" in result.summary
+
+
+# --- stop_run (ADR 0015, Décision 6) ---
+
+async def test_stop_run_requires_no_confirmation():
+    # Dérogation explicite de l'ADR 0015 (Décision 6) : contrairement aux
+    # autres outils destructifs, stop_run s'exécute directement.
+    spec = TOOL_REGISTRY["stop_run"]
+    assert spec.destructif is True
+    assert spec.requiert_confirmation is False
+
+
+async def test_stop_run_without_thread_id_returns_error():
+    result = await execute_tool("stop_run", {}, config=SimpleNamespace())
+
+    assert result.status == "error"
+
+
+async def test_stop_run_stops_active_run_in_priority(monkeypatch: pytest.MonkeyPatch):
+    import studio.telegram.pm_dialogue as pm_dialogue_module
+    import studio.telegram.run_flow as run_flow_module
+
+    async def fake_stop_active_run(message_thread_id):
+        assert message_thread_id == 333
+        return {"feature_name": "ajout-panier", "run_id": "run-1", "commit": "abc123"}
+
+    def fail_cancel_dialogue(message_thread_id):
+        raise AssertionError("cancel_dialogue ne doit pas être appelé si un run était actif")
+
+    monkeypatch.setattr(run_flow_module, "stop_active_run", fake_stop_active_run)
+    monkeypatch.setattr(pm_dialogue_module, "cancel_dialogue", fail_cancel_dialogue)
+
+    result = await execute_tool(
+        "stop_run", {}, config=SimpleNamespace(), message_thread_id=333,
+    )
+
+    assert result.status == "ok"
+    assert result.data == {"action": "run interrompu", "feature": "ajout-panier", "commit": "abc123"}
+
+
+async def test_stop_run_falls_back_to_cancelling_dialogue(monkeypatch: pytest.MonkeyPatch):
+    import studio.telegram.pm_dialogue as pm_dialogue_module
+    import studio.telegram.run_flow as run_flow_module
+
+    async def fake_stop_active_run(message_thread_id):
+        return None
+
+    def fake_cancel_dialogue(message_thread_id):
+        return True
+
+    monkeypatch.setattr(run_flow_module, "stop_active_run", fake_stop_active_run)
+    monkeypatch.setattr(pm_dialogue_module, "cancel_dialogue", fake_cancel_dialogue)
+
+    result = await execute_tool(
+        "stop_run", {}, config=SimpleNamespace(), message_thread_id=333,
+    )
+
+    assert result.status == "ok"
+    assert result.data == {"action": "dialogue de cadrage interrompu"}
+
+
+async def test_stop_run_noop_when_nothing_in_progress(monkeypatch: pytest.MonkeyPatch):
+    import studio.telegram.pm_dialogue as pm_dialogue_module
+    import studio.telegram.run_flow as run_flow_module
+
+    async def fake_stop_active_run(message_thread_id):
+        return None
+
+    def fake_cancel_dialogue(message_thread_id):
+        return False
+
+    monkeypatch.setattr(run_flow_module, "stop_active_run", fake_stop_active_run)
+    monkeypatch.setattr(pm_dialogue_module, "cancel_dialogue", fake_cancel_dialogue)
+
+    result = await execute_tool(
+        "stop_run", {}, config=SimpleNamespace(), message_thread_id=333,
+    )
+
+    assert result.status == "ok"
+    assert result.data == {"action": "aucun traitement en cours dans ce topic"}

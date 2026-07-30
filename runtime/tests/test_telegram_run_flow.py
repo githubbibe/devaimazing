@@ -5,6 +5,7 @@ test_telegram_new_project_flow.py), build_graph/queries.fetch_run_state
 mockés (comme test_cli.py, pas de vraie base SQLite/LangGraph).
 """
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,6 +18,7 @@ from studio.telegram.run_flow import (
     _active_runs,
     handle_run_reply,
     start_run,
+    stop_active_run,
 )
 from studio.tools import planification
 from studio.tools.planification import PlanificationEntry
@@ -358,3 +360,61 @@ async def test_progress_edits_are_rate_limited_and_flush_final_state(
     # 0.0) + le flush final obligatoire.
     assert len(bot.edits) == 2
     assert "CLOTURE" in bot.edits[-1]["text"]
+
+
+# --- stop_active_run (ADR 0015, Décision 6, /stop) ---
+
+async def test_stop_active_run_returns_none_when_nothing_active():
+    assert await stop_active_run(_THREAD_ID) is None
+
+
+async def test_stop_active_run_cancels_task_and_commits(
+    monkeypatch: pytest.MonkeyPatch, config: SimpleNamespace,
+):
+    calls: dict = {}
+
+    async def fake_commit_safety_snapshot(repo_path, message):
+        calls["commit_repo_path"] = repo_path
+        return "abc123"
+
+    async def fake_current_branch(repo_path):
+        return "studio/ajout-panier"
+
+    async def fake_push_branch(repo_path, branch, remote="origin"):
+        calls["push"] = (repo_path, branch)
+
+    monkeypatch.setattr(run_flow_module, "commit_safety_snapshot", fake_commit_safety_snapshot)
+    monkeypatch.setattr(run_flow_module, "current_branch", fake_current_branch)
+    monkeypatch.setattr(run_flow_module, "push_branch", fake_push_branch)
+
+    task = asyncio.create_task(asyncio.sleep(100))
+    _active_runs[_THREAD_ID] = run_flow_module._RunState(
+        config=config, run_id=_RUN_ID, feature_name=_FEATURE_NAME,
+        chat_id=_CHAT_ID, message_id=1, task=task,
+    )
+
+    result = await stop_active_run(_THREAD_ID)
+    await asyncio.sleep(0)  # laisse la cancellation se propager
+
+    assert result == {"feature_name": _FEATURE_NAME, "run_id": _RUN_ID, "commit": "abc123"}
+    assert task.cancelled()
+    assert calls["push"] == (calls["commit_repo_path"], "studio/ajout-panier")
+    assert _THREAD_ID not in _active_runs
+
+
+async def test_stop_active_run_skips_push_when_nothing_to_commit(
+    monkeypatch: pytest.MonkeyPatch, config: SimpleNamespace,
+):
+    async def fake_commit_safety_snapshot(repo_path, message):
+        return None
+
+    monkeypatch.setattr(run_flow_module, "commit_safety_snapshot", fake_commit_safety_snapshot)
+
+    _active_runs[_THREAD_ID] = run_flow_module._RunState(
+        config=config, run_id=_RUN_ID, feature_name=_FEATURE_NAME,
+        chat_id=_CHAT_ID, message_id=1, task=None,
+    )
+
+    result = await stop_active_run(_THREAD_ID)
+
+    assert result == {"feature_name": _FEATURE_NAME, "run_id": _RUN_ID, "commit": None}

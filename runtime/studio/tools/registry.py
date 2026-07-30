@@ -287,6 +287,44 @@ async def _handle_run_feature(
     return result
 
 
+async def _handle_stop_run(
+    config: StudioConfig, *, message_thread_id: Optional[int] = None, **_: Any,
+) -> dict[str, Any]:
+    """
+    Arrête immédiatement, sans confirmation, ce qui est en cours dans ce
+    topic — un run lancé par /run (studio.telegram.run_flow) en priorité,
+    sinon un dialogue de cadrage PM en attente (studio.telegram.pm_dialogue)
+    — ADR 0015, Décision 6 : dérogation explicite à la confirmation
+    systématique des outils destructifs, justifiée par l'urgence que sert
+    cette commande. No-op (aucune erreur) si rien n'est en cours ici.
+
+    Sauvegarde (commit + push) automatique du repo cible si un run était
+    actif (contenu potentiellement modifié sur disque, voir
+    run_flow.stop_active_run) — rien à sauvegarder pour un dialogue de
+    cadrage (aucune fiche écrite avant validation explicite).
+
+    Import différé de pm_dialogue/run_flow (voir _handle_new_feature) : pas
+    de cycle réel, cohérence stylistique avec les autres handlers Telegram.
+    """
+    if message_thread_id is None:
+        raise RuntimeError("stop_run nécessite un contexte de topic (message_thread_id).")
+
+    from studio.telegram import pm_dialogue, run_flow
+
+    stopped_run = await run_flow.stop_active_run(message_thread_id)
+    if stopped_run is not None:
+        return {
+            "action": "run interrompu",
+            "feature": stopped_run["feature_name"],
+            "commit": stopped_run["commit"],
+        }
+
+    if pm_dialogue.cancel_dialogue(message_thread_id):
+        return {"action": "dialogue de cadrage interrompu"}
+
+    return {"action": "aucun traitement en cours dans ce topic"}
+
+
 async def _not_implemented(_config: StudioConfig, **_: Any) -> dict[str, Any]:
     raise NotImplementedError("Cet outil n'est pas encore câblé (voir docs/roadmap.md).")
 
@@ -454,16 +492,12 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     ),
     "stop_run": ToolSpec(
         name="stop_run",
-        description="Arrête un run en cours.",
-        parameters={
-            "type": "object",
-            "properties": {"run_id": {"type": "string", "description": "Identifiant du run"}},
-            "required": ["run_id"],
-        },
+        description="Arrête immédiatement (sans confirmation) le dialogue ou run en cours ici.",
+        parameters=_no_args_schema(),
         destructif=True,
-        requiert_confirmation=True,
+        requiert_confirmation=False,
         sauvegarde_avant=True,
-        handler=_not_implemented,
+        handler=_handle_stop_run,
         slash_command="/stop",
     ),
 }
