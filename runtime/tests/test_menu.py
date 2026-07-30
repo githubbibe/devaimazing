@@ -69,13 +69,13 @@ def _callback_data(keyboard) -> list[str]:
 def test_build_root_keyboard_general_has_new_project():
     keyboard = menu_module.build_root_keyboard(in_topic=False)
     assert "Nouveau projet" in _button_labels(keyboard)
-    assert len(keyboard.inline_keyboard) == 4
+    assert len(keyboard.inline_keyboard) == 5
 
 
 def test_build_root_keyboard_topic_has_no_new_project():
     keyboard = menu_module.build_root_keyboard(in_topic=True)
     assert "Nouveau projet" not in _button_labels(keyboard)
-    assert len(keyboard.inline_keyboard) == 3
+    assert len(keyboard.inline_keyboard) == 4
 
 
 # --- menu:root ---
@@ -168,6 +168,59 @@ async def test_new_feature_project_selection_leaf_delegates(
 
     await menu_module.handle_menu_callback(
         "menu:project:new_feature:demo", chat_id=_CHAT_ID, message_thread_id=None,
+        config_dir=config_dir, bot=_FakeBot(),
+    )
+
+    assert calls["args"] == (_CHAT_ID, 111, "demo")
+
+
+# --- menu:cadrer_projet ---
+
+async def test_cadrer_projet_from_topic_delegates_directly(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path,
+):
+    calls = {}
+
+    async def fake_start_project_dialogue(bot, chat_id, message_thread_id, config, project_name):
+        calls["args"] = (bot, chat_id, message_thread_id, project_name)
+
+    monkeypatch.setattr(
+        pm_dialogue_module, "start_project_dialogue", fake_start_project_dialogue,
+    )
+
+    bot = _FakeBot()
+    await menu_module.handle_menu_callback(
+        "menu:cadrer_projet", chat_id=_CHAT_ID, message_thread_id=111,
+        config_dir=config_dir, bot=bot,
+    )
+
+    assert calls["args"] == (bot, _CHAT_ID, 111, "demo")
+
+
+async def test_cadrer_projet_from_general_shows_project_selection(config_dir: Path):
+    text, keyboard = await menu_module.handle_menu_callback(
+        "menu:cadrer_projet", chat_id=_CHAT_ID, message_thread_id=None,
+        config_dir=config_dir, bot=_FakeBot(),
+    )
+
+    assert "quel projet" in text.lower()
+    assert f"{menu_module.CALLBACK_PREFIX}:project:cadrer_projet:demo" in _callback_data(keyboard)
+
+
+async def test_cadrer_projet_project_selection_leaf_delegates(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path,
+):
+    calls = {}
+
+    async def fake_start_project_dialogue(bot, chat_id, message_thread_id, config, project_name):
+        calls["args"] = (chat_id, message_thread_id, project_name)
+
+    monkeypatch.setattr(
+        pm_dialogue_module, "start_project_dialogue", fake_start_project_dialogue,
+    )
+
+    await menu_module.handle_menu_callback(
+        "menu:project:cadrer_projet:demo", chat_id=_CHAT_ID, message_thread_id=None,
         config_dir=config_dir, bot=_FakeBot(),
     )
 

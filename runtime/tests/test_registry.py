@@ -35,6 +35,7 @@ _ADR_TABLE = {
     "creer_projet": (False, False, False),
     "archive_projet": (True, True, True),
     "new_feature": (False, False, False),
+    "cadrer_projet": (False, False, False),
     "valider_fiche_feature": (False, True, False),
     "run_feature": (False, False, False),
     "new_project": (False, False, False),
@@ -415,6 +416,39 @@ async def test_new_feature_delegates_to_start_feature_dialogue(monkeypatch: pyte
 
     assert result.status == "ok"
     assert calls["args"] == (fake_bot, 222, 333, config)
+
+
+# --- cadrer_projet ---
+
+async def test_cadrer_projet_without_telegram_context_returns_error():
+    result = await execute_tool(
+        "cadrer_projet", {}, config=SimpleNamespace(project_name="demo"),
+    )
+
+    assert result.status == "error"
+
+
+async def test_cadrer_projet_delegates_to_start_project_dialogue(monkeypatch: pytest.MonkeyPatch):
+    import studio.telegram.pm_dialogue as pm_dialogue_module
+
+    calls = {}
+
+    async def fake_start_project_dialogue(bot, chat_id, message_thread_id, config, project_name):
+        calls["args"] = (bot, chat_id, message_thread_id, config, project_name)
+
+    monkeypatch.setattr(
+        pm_dialogue_module, "start_project_dialogue", fake_start_project_dialogue,
+    )
+
+    config = SimpleNamespace(project_name="demo")
+    fake_bot = SimpleNamespace()
+    result = await execute_tool(
+        "cadrer_projet", {}, config=config,
+        bot=fake_bot, chat_id=222, message_thread_id=333,
+    )
+
+    assert result.status == "ok"
+    assert calls["args"] == (fake_bot, 222, 333, config, "demo")
 
 
 async def test_valider_fiche_feature_requires_confirmation():

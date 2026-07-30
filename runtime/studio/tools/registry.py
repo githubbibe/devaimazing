@@ -191,6 +191,39 @@ async def _handle_new_feature(
     return {}
 
 
+async def _handle_cadrer_projet(
+    config: StudioConfig, *, bot: Optional[Any] = None, chat_id: Optional[int] = None,
+    message_thread_id: Optional[int] = None, **_: Any,
+) -> dict[str, Any]:
+    """
+    (Re)démarre le dialogue de cadrage PM pour la fiche projet du topic
+    courant — comble un vide de l'ADR 0015 : /new_project enchaîne création
+    (dossier+repo+topic) ET cadrage en un seul flux, sans point de reprise
+    si le dialogue a été interrompu (state.telegram.pm_dialogue._pending_dialogues
+    jamais persisté — perdu si le bot redémarre en plein dialogue) ou si le
+    projet existe déjà sans être jamais passé par ce dialogue (ex.
+    `devaimazing new-project` en CLI, ou config restaurée manuellement).
+
+    Redémarre TOUJOURS le dialogue depuis le début (aucune reprise de
+    transcript à mi-parcours possible, comme pour new_feature) — si
+    specs/fiche-projet.md existe déjà, elle sera simplement réécrite à la
+    validation finale (pas de garde ni de confirmation supplémentaire, même
+    comportement que new_feature vis-à-vis d'une fiche déjà présente).
+
+    Import de pm_dialogue différé (voir _handle_new_feature) : pas de cycle
+    réel, cohérence stylistique.
+    """
+    if bot is None or chat_id is None or message_thread_id is None:
+        raise RuntimeError(
+            "cadrer_projet nécessite un contexte Telegram complet (bot, chat_id, topic)."
+        )
+
+    from studio.telegram.pm_dialogue import start_project_dialogue
+
+    await start_project_dialogue(bot, chat_id, message_thread_id, config, config.project_name)
+    return {}
+
+
 async def _handle_valider_fiche_feature(
     config: StudioConfig, *, run_id: str, content: str, **_: Any,
 ) -> dict[str, Any]:
@@ -408,6 +441,16 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         sauvegarde_avant=False,
         handler=_handle_new_feature,
         slash_command="/new_feature",
+    ),
+    "cadrer_projet": ToolSpec(
+        name="cadrer_projet",
+        description="(Re)démarre le dialogue de cadrage PM pour la fiche projet de ce topic.",
+        parameters=_no_args_schema(),
+        destructif=False,
+        requiert_confirmation=False,
+        sauvegarde_avant=False,
+        handler=_handle_cadrer_projet,
+        slash_command="/cadrer_projet",
     ),
     "valider_fiche_feature": ToolSpec(
         name="valider_fiche_feature",
