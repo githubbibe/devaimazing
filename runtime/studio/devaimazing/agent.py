@@ -201,6 +201,7 @@ async def dispatch_tool_call(
     confirmed: bool = False,
     bot: Optional[Any] = None,
     chat_id: Optional[int] = None,
+    message_thread_id: Optional[int] = None,
 ) -> tuple[str, Optional[tuple[str, dict[str, Any]]]]:
     """
     Exécute un tool_call issu d'interpret_message via le registre d'outils
@@ -231,6 +232,7 @@ async def dispatch_tool_call(
     """
     tool_result = await execute_tool(
         tool_name, args, config=config, confirmed=confirmed, bot=bot, chat_id=chat_id,
+        message_thread_id=message_thread_id,
     )
 
     if tool_result.status == "needs_confirmation":
@@ -249,6 +251,7 @@ async def run_devaimazing_turn(
     confirmed: bool = False,
     bot: Optional[Any] = None,
     chat_id: Optional[int] = None,
+    message_thread_id: Optional[int] = None,
 ) -> tuple[str, Optional[tuple[str, dict[str, Any]]]]:
     """
     Exécute un tour de conversation Devaimazing complet : interpret_message
@@ -275,4 +278,5 @@ async def run_devaimazing_turn(
     return await dispatch_tool_call(
         tool_call["name"], tool_call["arguments"],
         config=config, confirmed=confirmed, bot=bot, chat_id=chat_id,
+        message_thread_id=message_thread_id,
     )

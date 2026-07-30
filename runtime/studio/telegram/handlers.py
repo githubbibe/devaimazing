@@ -19,7 +19,7 @@ from typing import Any, Optional, Union
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, Message
 
 from studio.config import (
     StudioConfig,
@@ -28,6 +28,10 @@ from studio.config import (
     load_global_whisper_config,
 )
 from studio.devaimazing.agent import dispatch_tool_call, interpret_message
+from studio.telegram.confirmations import CALLBACK_PREFIX as _CALLBACK_PREFIX
+from studio.telegram.confirmations import build_confirmation_keyboard
+from studio.telegram.confirmations import pending_confirmations as _pending_confirmations
+from studio.telegram.pm_dialogue import handle_dialogue_reply
 from studio.telegram.topics import load_topic_map, resolve_project
 from studio.tools.registry import (
     TOOL_REGISTRY,
@@ -41,15 +45,6 @@ from studio.tools.whisper import ExternalServiceError, transcribe_voice_message
 # le topic — le nom du projet vient de l'argument de la commande elle-même
 # (voir ADR 0013, Décision 4 : /new et /archive sont des commandes General).
 _GENERAL_SCOPE_TOOLS = {"lister_projets", "creer_projet", "archive_projet"}
-
-_CALLBACK_PREFIX = "confirm"
-
-# Confirmations en attente : mémoire du process, jamais persistées (cohérent
-# avec l'absence de checkpointer dédié pour Devaimazing, voir ADR 0013,
-# Décision 3) — perdues si le bot redémarre entre la question et la
-# réponse ; un Oui tapé après un redémarrage retombe sur "confirmation
-# expirée", à retaper depuis la commande.
-_pending_confirmations: dict[str, tuple[str, dict[str, Any], Any]] = {}
 
 
 @dataclass
@@ -156,7 +151,10 @@ async def handle_slash_command(
     if isinstance(config, HandlerReply):
         return config
 
-    result = await execute_tool(tool_name, args, config=config, bot=bot, chat_id=chat_id)
+    result = await execute_tool(
+        tool_name, args, config=config, bot=bot, chat_id=chat_id,
+        message_thread_id=message_thread_id,
+    )
 
     if result.status == "needs_confirmation":
         confirmation_id = uuid.uuid4().hex[:12]
@@ -279,6 +277,7 @@ async def handle_natural_language(
 
     text_out, pending = await dispatch_tool_call(
         tool_name, args, config=config, bot=bot, chat_id=chat_id,
+        message_thread_id=message_thread_id,
     )
 
     if pending is not None:
@@ -330,18 +329,6 @@ async def handle_confirmation_callback(
     return format_tool_result(result)
 
 
-def build_confirmation_keyboard(confirmation_id: str) -> InlineKeyboardMarkup:
-    """Clavier Oui/Non attaché au message de confirmation."""
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(
-            text="Oui", callback_data=f"{_CALLBACK_PREFIX}:{confirmation_id}:yes"
-        ),
-        InlineKeyboardButton(
-            text="Non", callback_data=f"{_CALLBACK_PREFIX}:{confirmation_id}:no"
-        ),
-    ]])
-
-
 def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
     """
     Construit le Router aiogram, câblage mince autour de handle_slash_command
@@ -373,6 +360,17 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
             return
 
         if message.text:
+            # Un dialogue de cadrage PM en attente dans ce topic (/new_feature,
+            # ADR 0015) absorbe le message en priorité : c'est la réponse de
+            # l'utilisateur au PM, pas une nouvelle commande — même sémantique
+            # que le input() du dialogue terminal (studio.nodes.pm), tout ce
+            # qui est tapé est la réponse, y compris si ça ressemble à une
+            # commande slash.
+            if await handle_dialogue_reply(
+                message.bot, message.chat.id, message.message_thread_id, message.text,
+            ):
+                return
+
             reply = await handle_slash_command(
                 message.text,
                 chat_id=message.chat.id,

@@ -23,15 +23,18 @@ def _write_yaml(path: Path, data: dict) -> None:
     path.write_text(yaml.safe_dump(data), encoding="utf-8")
 
 
-# Table de l'ADR 0013, Décision 4 — un des points les plus structurants de
-# l'ADR, vérifié explicitement outil par outil pour ne pas dériver en
-# silence d'une future édition de registry.py.
+# Table de l'ADR 0013, Décision 4, complétée par les outils ajoutés pour
+# l'ADR 0015 (new_feature, valider_fiche_feature) — un des points les plus
+# structurants des deux ADR, vérifié explicitement outil par outil pour ne
+# pas dériver en silence d'une future édition de registry.py.
 _ADR_TABLE = {
     "lire_statut": (False, False, False),
     "lire_progression": (False, False, False),
     "lister_projets": (False, False, False),
     "creer_projet": (False, False, False),
     "archive_projet": (True, True, True),
+    "new_feature": (False, False, False),
+    "valider_fiche_feature": (False, True, False),
     "reject_checkpoint": (True, True, True),
     "stop_run": (True, True, True),
 }
@@ -82,7 +85,9 @@ async def test_execute_tool_confirmed_calls_handler(monkeypatch: pytest.MonkeyPa
     )
 
     assert result.status == "ok"
-    assert result.data == {"echo": {"run_id": "run-1", "bot": None, "chat_id": None}}
+    assert result.data == {
+        "echo": {"run_id": "run-1", "bot": None, "chat_id": None, "message_thread_id": None}
+    }
 
 
 async def test_execute_tool_forwards_bot_and_chat_id_to_handler(monkeypatch: pytest.MonkeyPatch):
@@ -100,7 +105,9 @@ async def test_execute_tool_forwards_bot_and_chat_id_to_handler(monkeypatch: pyt
         "test_tool", {}, config=SimpleNamespace(), bot=fake_bot, chat_id=42
     )
 
-    assert result.data == {"echo": {"bot": fake_bot, "chat_id": 42}}
+    assert result.data == {
+        "echo": {"bot": fake_bot, "chat_id": 42, "message_thread_id": None}
+    }
 
 
 async def test_execute_tool_no_confirmation_required_calls_handler_directly(
@@ -365,3 +372,59 @@ async def test_archive_projet_without_bot_context_returns_error(demo_config_dir:
     )
 
     assert result.status == "error"
+
+
+# --- new_feature / valider_fiche_feature (ADR 0015) ---
+
+async def test_new_feature_without_telegram_context_returns_error():
+    result = await execute_tool(
+        "new_feature", {}, config=SimpleNamespace(),
+    )
+
+    assert result.status == "error"
+
+
+async def test_new_feature_delegates_to_start_feature_dialogue(monkeypatch: pytest.MonkeyPatch):
+    import studio.telegram.pm_dialogue as pm_dialogue_module
+
+    calls = {}
+
+    async def fake_start_feature_dialogue(bot, chat_id, message_thread_id, config):
+        calls["args"] = (bot, chat_id, message_thread_id, config)
+
+    monkeypatch.setattr(
+        pm_dialogue_module, "start_feature_dialogue", fake_start_feature_dialogue,
+    )
+
+    config = SimpleNamespace()
+    fake_bot = SimpleNamespace()
+    result = await execute_tool(
+        "new_feature", {}, config=config,
+        bot=fake_bot, chat_id=222, message_thread_id=333,
+    )
+
+    assert result.status == "ok"
+    assert calls["args"] == (fake_bot, 222, 333, config)
+
+
+async def test_valider_fiche_feature_requires_confirmation():
+    result = await execute_tool(
+        "valider_fiche_feature", {"run_id": "run-1", "content": "# Fiche"},
+        config=SimpleNamespace(),
+    )
+
+    assert result.status == "needs_confirmation"
+
+
+async def test_valider_fiche_feature_writes_card(tmp_path: Path):
+    config = SimpleNamespace(repo_path=tmp_path, get=lambda key, default=None: default)
+
+    result = await execute_tool(
+        "valider_fiche_feature", {"run_id": "run-042", "content": "# Ma fiche"},
+        config=config, confirmed=True,
+    )
+
+    assert result.status == "ok"
+    card_path = tmp_path / "specs" / "run-042" / "card-root.md"
+    assert card_path.read_text(encoding="utf-8") == "# Ma fiche"
+    assert result.data == {"card_root_path": "specs/run-042/card-root.md"}

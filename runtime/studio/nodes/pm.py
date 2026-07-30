@@ -24,9 +24,10 @@ studio.nodes.closer, Python pur sans appel LLM.
 
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from rich.console import Console
 
@@ -130,6 +131,76 @@ def _render_imported_card_root(
     )
 
 
+@dataclass(frozen=True)
+class DialogueTurn:
+    """
+    Résultat d'un seul appel PM dans le dialogue de cadrage — soit une
+    question à poser, soit un brouillon de fiche prêt à valider. Ne contient
+    aucune I/O : à l'appelant (terminal CLI ou topic Telegram) de l'afficher
+    et de recueillir la réponse (voir run_pm_turn).
+    """
+
+    kind: Literal["question", "draft"]
+    text: str
+
+
+async def run_pm_turn(
+    config: StudioConfig,
+    tracer: AgentTracer,
+    system_prompt: str,
+    transcript: list[str],
+    model_key: str,
+) -> tuple[DialogueTurn, int, int, int]:
+    """
+    Un seul appel Claude Code CLI dans le dialogue de cadrage PM, et parsing
+    de sa réponse (QUESTION:/FICHE_VALIDEE:, voir prompts/pm.md section
+    Format de sortie) — canal-agnostique, sans I/O terminal ni Telegram.
+    Réutilisé par _run_validation_dialogue (boucle CLI, input()/print()) et
+    par studio.telegram.pm_dialogue (boucle Telegram, messages postés/attendus
+    dans un topic) pour ne pas dupliquer l'appel LLM et le parsing entre les
+    deux canaux.
+
+    Args:
+        transcript: historique du dialogue jusqu'ici (tours "PM : ..." /
+            "Utilisateur : ..." en alternance) — lu seul, pas modifié ici,
+            à l'appelant de l'étendre entre deux appels.
+        model_key: clé dans config.models (les deux appelants utilisent
+            "pm_opus" aujourd'hui).
+
+    Returns:
+        (DialogueTurn, tokens_prompt, tokens_completion, duration_ms) — à
+        l'appelant d'accumuler les totaux sur l'ensemble du dialogue et de
+        décider de la suite (nouvelle question à poser, ou brouillon à faire
+        valider).
+    """
+    claude_code_config = config.get("claude_code", {})
+    result = await run_claude_code(
+        prompt=f"{system_prompt}\n\n---\n\n" + "\n\n".join(transcript),
+        model=config.models[model_key],
+        cwd=config.repo_path,
+        timeout_seconds=claude_code_config.get("timeout_seconds", 300),
+        output_format=claude_code_config.get("output_format", "json"),
+        tracer=tracer,
+    )
+    usage = result.get("usage", {})
+    content = result["content"]
+
+    fiche_match = _FICHE_VALIDEE_PATTERN.search(content)
+    if fiche_match:
+        turn = DialogueTurn(kind="draft", text=fiche_match.group(1).strip())
+    else:
+        question_match = _QUESTION_PATTERN.search(content)
+        question = question_match.group(1).strip() if question_match else content.strip()
+        turn = DialogueTurn(kind="question", text=question)
+
+    return (
+        turn,
+        usage.get("input_tokens", 0),
+        usage.get("output_tokens", 0),
+        result.get("duration_ms", 0),
+    )
+
+
 async def _run_validation_dialogue(
     config: StudioConfig,
     tracer: AgentTracer,
@@ -140,13 +211,17 @@ async def _run_validation_dialogue(
     model_key: str,
 ) -> tuple[str, int, int, int, int]:
     """
-    Boucle de dialogue QUESTION:/FICHE_VALIDEE: partagée entre _run_cadrage
-    (phase 1, depuis un objectif brut) et _run_brief_import (raccourci
-    import de brief existant, depuis state.imported_brief_content) — voir
-    prompts/pm.md, section Format de sortie. Synchrone (terminal
-    input()/print()) : pas d'aller-retour via le mécanisme de checkpoint
-    LangGraph/resume, l'utilisateur est déjà présent au terminal à chaque
-    tour, donc le "checkpoint" de cette phase est le dialogue lui-même.
+    Boucle CLI (terminal input()/print()) du dialogue QUESTION:/FICHE_VALIDEE:
+    partagée entre _run_cadrage (phase 1, depuis un objectif brut) et
+    _run_brief_import (raccourci import de brief existant, depuis
+    state.imported_brief_content) — voir prompts/pm.md, section Format de
+    sortie. Pas d'aller-retour via le mécanisme de checkpoint LangGraph/resume,
+    l'utilisateur est déjà présent au terminal à chaque tour, donc le
+    "checkpoint" de cette phase est le dialogue lui-même.
+
+    Chaque tour délègue l'appel LLM et le parsing à run_pm_turn (canal-
+    agnostique) — voir studio.telegram.pm_dialogue pour l'équivalent Telegram
+    du même mécanisme de dialogue.
 
     Args:
         transcript_seed: message(s) initial(aux) du transcript (objectif
@@ -165,7 +240,6 @@ async def _run_validation_dialogue(
         fichiers, committer, construire l'AgentResult et avancer la phase.
     """
     transcript = list(transcript_seed)
-    claude_code_config = config.get("claude_code", {})
     tokens_prompt_total = 0
     tokens_completion_total = 0
     duration_total_ms = 0
@@ -173,23 +247,15 @@ async def _run_validation_dialogue(
 
     while True:
         claude_code_calls += 1
-        result = await run_claude_code(
-            prompt=f"{system_prompt}\n\n---\n\n" + "\n\n".join(transcript),
-            model=config.models[model_key],
-            cwd=config.repo_path,
-            timeout_seconds=claude_code_config.get("timeout_seconds", 300),
-            output_format=claude_code_config.get("output_format", "json"),
-            tracer=tracer,
+        turn, tokens_prompt, tokens_completion, duration_ms = await run_pm_turn(
+            config, tracer, system_prompt, transcript, model_key,
         )
-        usage = result.get("usage", {})
-        tokens_prompt_total += usage.get("input_tokens", 0)
-        tokens_completion_total += usage.get("output_tokens", 0)
-        duration_total_ms += result.get("duration_ms", 0)
-        content = result["content"]
+        tokens_prompt_total += tokens_prompt
+        tokens_completion_total += tokens_completion
+        duration_total_ms += duration_ms
 
-        fiche_match = _FICHE_VALIDEE_PATTERN.search(content)
-        if fiche_match:
-            draft = fiche_match.group(1).strip()
+        if turn.kind == "draft":
+            draft = turn.text
             _cadrage_console.print(_TURN_SEPARATOR, style="dim")
             _cadrage_console.print(f"[bold cyan]{draft_label}[/bold cyan] :")
             _cadrage_console.print(draft)
@@ -207,8 +273,7 @@ async def _run_validation_dialogue(
             )
             continue
 
-        question_match = _QUESTION_PATTERN.search(content)
-        question = question_match.group(1).strip() if question_match else content.strip()
+        question = turn.text
         _cadrage_console.print(_TURN_SEPARATOR, style="dim")
         _cadrage_console.print(f"[bold cyan]PM :[/bold cyan] {question}")
         reply = input("> ").strip()

@@ -21,10 +21,12 @@ module, transport-agnostic en intention, à une lib de bot précise.
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from studio.config import StudioConfig
 from studio.tools import queries
+from studio.tools.filesystem import write_card
 from studio.tools.git import commit_safety_snapshot, current_branch, push_branch
 from studio.tools.project_config import set_project_thread_id
 
@@ -156,6 +158,47 @@ async def _handle_archive_projet(
     return {"project": name, "commit": commit_hash, "thread_id": thread_id}
 
 
+async def _handle_new_feature(
+    config: StudioConfig, *, bot: Optional[Any] = None, chat_id: Optional[int] = None,
+    message_thread_id: Optional[int] = None, **_: Any,
+) -> dict[str, Any]:
+    """
+    Démarre le dialogue de cadrage PM pour une nouvelle feature dans le
+    topic-projet courant (ADR 0015, phase 1 d'implémentation) — délègue à
+    studio.telegram.pm_dialogue.start_feature_dialogue. N'écrit rien ici :
+    le dialogue peut durer plusieurs tours avant de produire une fiche (voir
+    valider_fiche_feature pour l'écriture, à la confirmation finale).
+
+    Import de pm_dialogue différé (pas en tête de module) : pm_dialogue
+    importe execute_tool de ce module pour la confirmation finale de la
+    fiche, un import en tête créerait un cycle.
+    """
+    if bot is None or chat_id is None or message_thread_id is None:
+        raise RuntimeError(
+            "new_feature nécessite un contexte Telegram complet (bot, chat_id, topic)."
+        )
+
+    from studio.telegram.pm_dialogue import start_feature_dialogue
+
+    await start_feature_dialogue(bot, chat_id, message_thread_id, config)
+    return {}
+
+
+async def _handle_valider_fiche_feature(
+    config: StudioConfig, *, run_id: str, content: str, **_: Any,
+) -> dict[str, Any]:
+    """
+    Écrit card-root.md pour ce run_id — pendant final du dialogue de cadrage
+    PM porté sur Telegram (studio.telegram.pm_dialogue, ADR 0015), après
+    confirmation Oui/Non de l'utilisateur. Pas de slash_command : déclenché
+    uniquement par pm_dialogue, jamais tapé ni sélectionné directement.
+    """
+    specs_dir = config.get("structure", {}).get("specs_dir", "specs/")
+    card_root_relative = str(Path(specs_dir) / run_id / "card-root.md")
+    await write_card(config.repo_path / card_root_relative, content)
+    return {"card_root_path": card_root_relative}
+
+
 async def _not_implemented(_config: StudioConfig, **_: Any) -> dict[str, Any]:
     raise NotImplementedError("Cet outil n'est pas encore câblé (voir docs/roadmap.md).")
 
@@ -229,6 +272,37 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         sauvegarde_avant=True,
         handler=_handle_archive_projet,
         slash_command="/archive",
+    ),
+    "new_feature": ToolSpec(
+        name="new_feature",
+        description="Démarre le dialogue de cadrage PM pour une nouvelle feature de ce projet.",
+        parameters=_no_args_schema(),
+        destructif=False,
+        requiert_confirmation=False,
+        sauvegarde_avant=False,
+        handler=_handle_new_feature,
+        slash_command="/new_feature",
+    ),
+    "valider_fiche_feature": ToolSpec(
+        name="valider_fiche_feature",
+        description="Écrit la fiche feature validée par l'utilisateur (dialogue de cadrage PM).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "run_id": {
+                    "type": "string", "description": "Identifiant du run (dossier specs/)",
+                },
+                "content": {
+                    "type": "string", "description": "Contenu markdown complet de la fiche",
+                },
+            },
+            "required": ["run_id", "content"],
+        },
+        destructif=False,
+        requiert_confirmation=True,
+        sauvegarde_avant=False,
+        handler=_handle_valider_fiche_feature,
+        slash_command=None,
     ),
     "reject_checkpoint": ToolSpec(
         name="reject_checkpoint",
@@ -327,6 +401,7 @@ async def execute_tool(
     confirmed: bool = False,
     bot: Optional[Any] = None,
     chat_id: Optional[int] = None,
+    message_thread_id: Optional[int] = None,
 ) -> ToolResult:
     """
     Point d'appel unique du registre — identique que l'appel vienne du
@@ -342,6 +417,11 @@ async def execute_tool(
             besoin (creer_projet, archive_projet). None pour les outils qui
             n'appellent pas l'API Telegram.
         chat_id: chat_id du groupe Telegram, transmis avec bot.
+        message_thread_id: Identifiant du topic Telegram d'origine, transmis
+            comme bot/chat_id — nécessaire aux outils qui doivent savoir dans
+            quel topic agir au-delà de la config déjà résolue (ex.
+            new_feature, ADR 0015, qui démarre un dialogue dans ce topic).
+            None pour les outils qui n'en ont pas besoin.
 
     Returns:
         ToolResult — voir sa docstring pour la sémantique des statuts.
@@ -371,7 +451,9 @@ async def execute_tool(
         )
 
     try:
-        data = await spec.handler(config, bot=bot, chat_id=chat_id, **args)
+        data = await spec.handler(
+            config, bot=bot, chat_id=chat_id, message_thread_id=message_thread_id, **args,
+        )
     except NotImplementedError as exc:
         return ToolResult(status="error", summary=str(exc))
     except (ValueError, RuntimeError) as exc:
