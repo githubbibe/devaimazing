@@ -200,6 +200,35 @@ async def test_run_prefers_already_cadre_over_imported_brief_when_both_set(
     assert updates["current_phase"] == Phase.AUDIT_AMONT
 
 
+# --- build_cadrage_system_prompt (ADR 0016, sources d'inspiration externes) ---
+
+def test_build_cadrage_system_prompt_includes_base_prompt():
+    prompt = pm_node.build_cadrage_system_prompt()
+    assert "PM" in prompt
+
+
+def test_build_cadrage_system_prompt_includes_inspiration_sources_when_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    sources_path = tmp_path / "inspiration-sources.md"
+    sources_path.write_text("## exemple-source\nURL: https://example.com\n", encoding="utf-8")
+    monkeypatch.setattr(pm_node, "_INSPIRATION_SOURCES_PATH", sources_path)
+
+    prompt = pm_node.build_cadrage_system_prompt()
+
+    assert "exemple-source" in prompt
+
+
+def test_build_cadrage_system_prompt_degrades_gracefully_when_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    monkeypatch.setattr(pm_node, "_INSPIRATION_SOURCES_PATH", tmp_path / "absent.md")
+
+    prompt = pm_node.build_cadrage_system_prompt()
+
+    assert prompt == pm_node._PROMPT_PATH.read_text(encoding="utf-8")
+
+
 # --- Raccourci import de brief existant ---
 
 VALID_IMPORTED_BRIEF = (

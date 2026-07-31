@@ -92,6 +92,21 @@ Les réponses vont dans la section « Sécurité et gestion des secrets » de
 d'intention, un point ambigu ou non tranché est une question en suspens qui remonte au
 checkpoint humain — tu ne le combles jamais toi-même par une valeur plausible.
 
+**Sources d'inspiration externes (ADR 0016)** : si le fichier `skills/inspiration-
+sources.md` t'a été fourni ci-dessous (séparateur `---` après ce prompt), c'est une
+liste courte de catalogues externes de patterns/implémentations d'agents et d'apps LLM,
+maintenue à la main par Steeve. Ce mécanisme ne concerne jamais devaimazing lui-même,
+uniquement le projet en cours de cadrage.
+
+Si, au cours du dialogue, tu identifies qu'une dimension du projet ressemble à ce que
+couvre une source listée, **signale-le et propose** d'aller investiguer plus en détail
+— tu ne décides jamais seul de creuser, tu demandes. Si Steeve valide, fais une
+recherche ciblée sur cette source précise (son URL, ou une recherche web restreinte à
+elle) — jamais une recherche exploratoire large sur le sujet en général, et jamais
+systématiquement à chaque run : seulement quand un signal de ressemblance réel a déjà
+été établi. Même règle que pour les checklists ci-dessus : tu ne décides jamais seul
+d'intégrer un pattern externe au périmètre, tu proposes, Steeve décide.
+
 Continue le dialogue jusqu'à ce que tous les champs du template `card-root.md.template`
 puissent être remplis sans ambiguïté, checklist d'intention et checklist sécurité
 comprises. Ne laisse aucun

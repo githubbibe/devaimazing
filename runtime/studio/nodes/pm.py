@@ -50,6 +50,7 @@ from studio.tools.tracer import AgentTracer, RunTracer
 _DEVAIMAZING_ROOT = Path(__file__).resolve().parents[3]
 _PROMPT_PATH = _DEVAIMAZING_ROOT / "prompts" / "pm.md"
 _CARD_ROOT_IMPORT_TEMPLATE_PATH = _DEVAIMAZING_ROOT / "templates" / "card-root-import.md.template"
+_INSPIRATION_SOURCES_PATH = _DEVAIMAZING_ROOT / "skills" / "inspiration-sources.md"
 
 _QUESTION_PATTERN = re.compile(r"QUESTION:\s*(.+)", re.DOTALL)
 _FICHE_VALIDEE_PATTERN = re.compile(r"FICHE_VALIDEE:\s*\n(.*)", re.DOTALL)
@@ -64,6 +65,30 @@ _AFFIRMATIVE_REPLIES = {"oui", "o", "yes", "y"}
 # dans des couleurs distinctes pour ne pas se perdre en scrollant en arrière.
 _cadrage_console = Console()
 _TURN_SEPARATOR = "-" * 60
+
+
+def build_cadrage_system_prompt() -> str:
+    """
+    Prompt système du PM pour le dialogue de cadrage (phase 1, feature ou
+    projet) — `prompts/pm.md` complété par `skills/inspiration-sources.md`
+    (ADR 0016), sur le même motif que `tools.filesystem.inject_skills` déjà
+    utilisé par les autres agents (texte brut concaténé, pas de RAG).
+
+    Contrairement à `inject_skills`, l'absence du fichier n'est pas une
+    erreur : ce mécanisme est optionnel (une liste de sources maintenue à la
+    main par Steeve, pas un skill obligatoire) — dégradation silencieuse
+    plutôt que FileNotFoundError si `skills/inspiration-sources.md` n'existe
+    pas encore ou plus.
+
+    Réutilisée par _run_cadrage/_run_brief_import (dialogue terminal) et par
+    studio.telegram.pm_dialogue._start_dialogue (dialogue Telegram, ADR
+    0015) pour ne pas dupliquer cette construction entre les deux canaux.
+    """
+    base_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
+    if not _INSPIRATION_SOURCES_PATH.is_file():
+        return base_prompt
+    sources = _INSPIRATION_SOURCES_PATH.read_text(encoding="utf-8")
+    return f"{base_prompt}\n\n---\n\n{sources}"
 
 
 def _specs_dir(config: StudioConfig) -> str:
@@ -339,7 +364,7 @@ async def _run_cadrage(state: StudioState, config: StudioConfig) -> dict:
     l'utilisateur — voir prompts/pm.md, section Format de sortie (phase 1),
     et _run_validation_dialogue pour la mécanique du dialogue elle-même.
     """
-    system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
+    system_prompt = build_cadrage_system_prompt()
     transcript_seed = [f"Objectif initial de l'utilisateur : {state.objective_raw}"]
 
     tracer = RunTracer.for_run(config, state.run_id).for_agent("pm", state.current_phase)
@@ -389,7 +414,7 @@ async def _run_brief_import(state: StudioState, config: StudioConfig) -> dict:
     architect-brief.md tel quel ; un card-root.md minimal est synthétisé en
     Python (voir _render_imported_card_root), pas par le LLM.
     """
-    system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
+    system_prompt = build_cadrage_system_prompt()
 
     reference_files = config.get("reference_files", {})
     project_map_content = await _read_optional(

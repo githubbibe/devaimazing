@@ -97,6 +97,20 @@ jamais en clair dans le repo, gérés via un outil tiers de gestion de secrets).
 de l'outil tiers concret n'est pas tranché en phase 1 : c'est une décision de
 l'Architecte, projet par projet (voir phase 2 ci-dessous).
 
+**Sources d'inspiration externes (mécanisme distinct, ADR 0016)** : toujours en phase
+1, `skills/inspiration-sources.md` (liste courte de catalogues externes de patterns
+d'agents/apps LLM, maintenue à la main) est injecté dans le prompt système du PM, sur
+le même mécanisme technique que l'injection de skills des autres agents
+(`tools.filesystem.inject_skills`) — première fois que le PM en bénéficie, ce
+mécanisme n'existait pas avant cet ADR. Ce fichier ne concerne jamais devaimazing
+lui-même, uniquement le projet en cours de cadrage. Si le PM identifie qu'une
+dimension du projet ressemble à ce que couvre une source listée, il **propose**
+d'investiguer — il ne décide jamais seul. Si validé, il fait une recherche ciblée sur
+cette source précise, jamais une recherche exploratoire large ni systématique à chaque
+run. Voir ADR 0016 pour le raisonnement complet, notamment l'écart entre l'intuition
+de départ (contenu figé dans le prompt) et le choix retenu (injection dynamique, pour
+que Steeve puisse enrichir la liste sans toucher au prompt ni au code).
+
 **Contenu de la fiche racine, une fois validée** :
 - Nom de la feature (fourni par l'utilisateur)
 - Objectif reformulé et précisé

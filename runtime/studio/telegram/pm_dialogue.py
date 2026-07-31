@@ -34,13 +34,12 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from studio.config import StudioConfig
-from studio.nodes.pm import run_pm_turn
+from studio.nodes.pm import build_cadrage_system_prompt, run_pm_turn
 from studio.state import Phase
 from studio.telegram.confirmations import build_confirmation_keyboard, pending_confirmations
 from studio.tools.registry import execute_tool, format_tool_result
 from studio.tools.tracer import RunTracer
 
-_PROMPT_PATH = Path(__file__).resolve().parents[3] / "prompts" / "pm.md"
 _MODEL_KEY = "pm_opus"
 _DIALOGUES_STATE_DIR = Path("~/.devaimazing/dialogues").expanduser()
 _CONFIG_RESOLUTION_ERRORS = (FileNotFoundError, ValueError)
@@ -105,7 +104,7 @@ def restore_pending_dialogues(config_dir: Optional[Path] = None) -> None:
     if not _DIALOGUES_STATE_DIR.is_dir():
         return
 
-    system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
+    system_prompt = build_cadrage_system_prompt()
     for path in sorted(_DIALOGUES_STATE_DIR.glob("*.json")):
         try:
             message_thread_id = int(path.stem)
@@ -187,7 +186,7 @@ async def _start_dialogue(
     « Cadrer le projet », voir docs/roadmap.md)."""
     await bot.send_chat_action(chat_id, "typing", message_thread_id=message_thread_id)
 
-    system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
+    system_prompt = build_cadrage_system_prompt()
     transcript = [transcript_seed]
     tracer = RunTracer.for_run(config, trace_id).for_agent("pm", Phase.CADRAGE)
 

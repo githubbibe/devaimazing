@@ -184,7 +184,9 @@ devaimazing/
 │       ├── 0011-orchestrateur-custom-vs-claude-remote.md
 │       ├── 0012-checklist-secrets-phase1.md
 │       ├── 0013-interface-telegram-agent-devaimazing.md
-│       └── 0014-whisper-transcription-vocale.md
+│       ├── 0014-whisper-transcription-vocale.md
+│       ├── 0015-interface-boutons-telegram-cycle-vie.md
+│       └── 0016-sources-inspiration-externes-phase1.md
 ├── prompts/                     # Prompts systeme des agents
 │   ├── pm.md
 │   ├── architect.md
@@ -203,7 +205,8 @@ devaimazing/
 │   ├── stub-first.md
 │   ├── data-privacy.md
 │   ├── scalability.md
-│   └── secrets-management.md
+│   ├── secrets-management.md
+│   └── inspiration-sources.md   # Catalogues externes consultes par le PM (ADR 0016)
 ├── templates/                   # Squelettes de fiches generiques
 │   ├── card-root.md.template
 │   ├── card-root-import.md.template  # Squelette import de fiche root existante

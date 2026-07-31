@@ -99,6 +99,20 @@ en phase 2, jamais redécouverte ni redéfinie par lui. L'agent Sécu audite la 
 Symétrique au principe 8 (l'erreur naît à la racine du run, pas en audit aval). Voir
 ADR 0012.
 
+**12. Sources d'inspiration externes en phase 1, le PM propose, jamais ne décide**
+`skills/inspiration-sources.md` (liste courte de catalogues externes de patterns
+d'agents/apps LLM, maintenue à la main) est injecté dans le prompt système du PM en
+phase 1 — ce mécanisme ne concerne jamais devaimazing lui-même, uniquement les projets
+qu'il développe. Si le PM identifie qu'une dimension du projet en cours de cadrage
+ressemble à une source listée, il **signale et propose** d'investiguer ; il ne décide
+jamais seul d'intégrer un pattern externe au périmètre. Une investigation ciblée
+(l'URL précise de la source, jamais une recherche exploratoire large) n'a lieu que si
+Steeve valide la proposition, et seulement quand un signal de ressemblance a déjà été
+établi — jamais systématiquement à chaque run. Prolonge le principe 8 (le PM propose,
+l'humain décide) à un nouveau type de signal, distinct des checklists obligatoires des
+principes 8 et 11 : ce mécanisme est optionnel et n'a lieu que si une ressemblance
+réelle apparaît. Voir ADR 0016.
+
 ## Composants externes
 
 devaimazing core est strictement le runtime LangGraph + ses 6 nodes (8 rôles d'agent) +

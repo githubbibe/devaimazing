@@ -120,6 +120,30 @@ async def test_start_feature_dialogue_posts_first_question(
     ]
 
 
+async def test_start_feature_dialogue_injects_inspiration_sources(
+    monkeypatch: pytest.MonkeyPatch, config: StudioConfig, tmp_path: Path,
+):
+    """ADR 0016 : le prompt système envoyé au premier tour inclut
+    skills/inspiration-sources.md, via le même point de construction que le
+    dialogue terminal (pm_node.build_cadrage_system_prompt)."""
+    sources_path = tmp_path / "inspiration-sources.md"
+    sources_path.write_text("## exemple-source\nURL: https://example.com\n", encoding="utf-8")
+    monkeypatch.setattr(pm_node, "_INSPIRATION_SOURCES_PATH", sources_path)
+
+    calls = []
+
+    async def fake_run_claude_code(**kwargs):
+        calls.append(kwargs)
+        return _fake_claude_result("QUESTION: quel est le nom de la feature ?")
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    bot = _FakeBot()
+
+    await pm_dialogue.start_feature_dialogue(bot, _CHAT_ID, _THREAD_ID, config)
+
+    assert "exemple-source" in calls[0]["prompt"]
+
+
 async def test_handle_dialogue_reply_without_pending_dialogue_returns_false(
     config: StudioConfig,
 ):
