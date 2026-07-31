@@ -50,7 +50,18 @@ from studio.tools.project_config import write_project_config
 from studio.tools.queries import build_progression_summary, list_projects, parse_run_history_table
 from studio.tools.tracer import RunTracer
 
-console = Console()
+# _environ exclut FORCE_COLOR : Rich le lit explicitement (rich.console.
+# Console.is_terminal) et force la couleur même quand la sortie n'est pas un
+# vrai terminal (ex. CliRunner en test) dès que la variable est présente
+# dans l'environnement — indépendamment de tout code de ce dépôt, juste une
+# variable exportée dans le shell de l'utilisateur (jamais dans un fichier
+# de config, voir docs/roadmap.md). Sans cette exclusion, 3 tests de
+# test_cli.py échouent uniquement dans un shell qui la définit (le texte
+# est bien présent dans la sortie, mais entrecoupé de codes ANSI). Le reste
+# de l'environnement (TERM, COLORTERM, NO_COLOR...) reste inchangé : la
+# détection auto (isatty) et NO_COLOR continuent de fonctionner normalement
+# en usage terminal réel.
+console = Console(_environ={k: v for k, v in os.environ.items() if k != "FORCE_COLOR"})
 
 # Erreurs "attendues" d'un service externe (Ollama, Claude Code CLI, Git),
 # déjà porteuses d'un message clair côté outil (voir tools/ollama.py,

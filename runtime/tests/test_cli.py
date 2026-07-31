@@ -1076,6 +1076,18 @@ def test_projects_no_config_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert "Aucun répertoire" in result.output
 
 
+# --- console / FORCE_COLOR ---
+
+def test_console_environ_excludes_force_color():
+    # Régression : rich.console.Console lit FORCE_COLOR et force la couleur
+    # même hors d'un vrai terminal (ex. CliRunner) dès qu'elle est présente
+    # dans l'environnement — indépendant de tout code de ce dépôt, juste une
+    # variable de shell (voir docs/roadmap.md). cli_module.console doit être
+    # construit avec un _environ qui l'exclut, quel que soit l'environnement
+    # réel du process qui exécute les tests.
+    assert "FORCE_COLOR" not in cli_module.console._environ
+
+
 # --- doctor ---
 
 def test_doctor_without_project_runs(monkeypatch: pytest.MonkeyPatch):
