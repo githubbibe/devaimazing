@@ -1,6 +1,6 @@
 # Feuille de route - devaimazing
 
-**Dernière mise à jour** : 2026-07-30
+**Dernière mise à jour** : 2026-07-31
 
 ## État actuel
 
@@ -11,19 +11,110 @@ registry, queries, project_config, whisper, planification), `devaimazing/agent.p
 new_project_flow, run_flow, menu — cycle de vie complet projet/feature porté
 sur Telegram avec navigation par boutons, compréhension du langage naturel ET
 transcription vocale via Whisper, ADR 0013 tranches S2-S4 + ADR 0014 + ADR
-0015), `graph.py`, les 7 `nodes/*.py`
+0015 + ADR 0016), `graph.py`, les 7 `nodes/*.py`
 (pm, architect, backend, frontend, test, security, closer), `metrics.py` et
 `cli.py` (`run`, `resume`, `retry`, `run-agent`, `runs`, `metrics`,
 `new-project`, `projects`, `doctor`, `telegram-bot`) sont tous implémentés —
 voir `CLAUDE.md` pour la convention (stub-first reste appliquée par le
 pipeline aux projets *cibles*, pas à ce dépôt).
-**543/547 tests verts** sur `runtime/tests/` (2026-07-30) — les 4 échecs
-restants (`test_cli.py::test_run_waiting_human_prints_feedback_when_present`,
-`test_cli.py::test_run_external_service_error_prints_clean_message_and_closes`,
-`test_cli.py::test_metrics_json_format`,
+**565/565 tests verts** sur `runtime/tests/` (2026-07-31) — les 4 échecs
+pré-existants signalés la veille (`test_cli.py` x3,
 `test_pyenv.py::test_check_imports_circular_import_reports_related_files`)
-sont pré-existants et sans rapport avec les travaux du jour — confirmé par
-`git stash` avant de commencer (mêmes 4 échecs sur l'état d'avant-session).
+sont corrigés : tous venaient de `FORCE_COLOR` ambiant dans le shell forçant
+la couleur hors d'un vrai terminal (Rich côté `cli.py`, coloration native
+des tracebacks Python 3.13+ côté sous-processus d'import de
+`tools/pyenv.py`) — voir entrées dédiées ci-dessous.
+
+**2026-07-31 — Suite directe de la session ADR 0015 : vérification en
+conditions réelles, corrections de bugs trouvés à l'usage, `/cadrer_projet`,
+persistance du transcript de cadrage, `FORCE_COLOR` neutralisé, ADR 0016.**
+
+**`webaimazing-v2.yml` restauré.** Le `telegram.thread_id` (valeur 42, vue
+dans le diff de test annulé en tout début de session ADR 0015) a été
+réécrit via `tools.project_config.set_project_thread_id` — les commandes
+topic-scopées (`/archive`, le menu, le clavier persistant) peuvent de
+nouveau agir sur ce topic. Pas de méthode d'API Telegram pour lister les
+topics d'un groupe a posteriori : la valeur a été retrouvée dans l'historique
+de la conversation, pas requêtée.
+
+**`/cadrer_projet` (nouveau, comble un vide non couvert par l'ADR 0015).**
+Gap trouvé en conditions réelles : `/new_project` enchaîne création
+(dossier+repo+topic) ET cadrage en un seul flux, sans point de reprise si
+le dialogue est interrompu, ou si le projet existe déjà sans être jamais
+passé par ce dialogue (cas de `webaimazing-v2` après restauration de son
+thread_id). Nouvel outil `cadrer_projet` (`/cadrer_projet`, topic-scopé,
+délègue à `pm_dialogue.start_project_dialogue`) et bouton « Cadrer le
+projet » dans le menu (racine General et Topic-projet).
+
+**Retour visible manquant au démarrage d'un dialogue de cadrage — corrigé.**
+Bug réel observé en usage (`/cadrer_projet` sur `webaimazing-v2`) : aucun
+signe visible entre le clic/la commande et la première question du PM
+(appel Claude Code CLI potentiellement long), contrairement aux tours
+suivants qui envoient déjà "typing". Deuxième symptôme dans les logs :
+le callback du bouton n'était répondu qu'après ce travail, provoquant
+« query is too old » côté Telegram si l'appel LLM dépassait la fenêtre de
+réponse, et un double-clic produisait « message is not modified »
+(exception non gérée par mise à jour). `pm_dialogue._start_dialogue` envoie
+désormais "typing" avant l'appel PM initial ; `handlers.py` répond au
+callback immédiatement (avant le travail long) sur les deux routes
+(`confirm:`/`menu:`), et absorbe spécifiquement « message is not modified ».
+
+**Persistance du transcript de cadrage PM (survit à un redémarrage du
+bot).** `pm_dialogue._pending_dialogues` était purement en mémoire process —
+un redémarrage pendant un dialogue de cadrage perdait tout, obligeant à
+repartir de zéro (exactement ce qui est arrivé à `webaimazing-v2`). Le
+transcript est désormais aussi écrit sur disque à chaque tour
+(`~/.devaimazing/dialogues/<thread_id>.json`), supprimé dès que le dialogue
+sort de sa phase questions (brouillon présenté ou `/stop`), et rechargé par
+`pm_dialogue.restore_pending_dialogues()` au démarrage du bot
+(`telegram/bot.py::run_bot`). La confirmation Oui/Non qui suit un brouillon
+présenté reste, elle, purement en mémoire (hors périmètre de ce correctif).
+
+**`FORCE_COLOR` ambiant neutralisé — 2 correctifs distincts, 4 tests
+pré-existants corrigés.** Diagnostiqué à la demande de l'utilisateur
+(« d'où viennent les 4 échecs pré-existants ? »), pas juste catalogué comme
+« sans rapport » :
+1. `cli.py::console` (Rich) lit explicitement `FORCE_COLOR` et force la
+   couleur même hors d'un vrai terminal (`Console.is_terminal`) — dès que la
+   variable est présente dans le shell de l'utilisateur (jamais dans un
+   fichier de config persistant, juste une variable de session). Corrigé :
+   `Console(_environ=...)` exclut spécifiquement `FORCE_COLOR`, garde le
+   reste de l'environnement intact (détection auto isatty, NO_COLOR
+   continuent de fonctionner en usage terminal réel).
+2. Diagnostic plus profond que prévu sur `test_check_imports_circular_import_reports_related_files` :
+   ce n'était pas un gap de regex spécifique à l'import circulaire comme
+   supposé au départ, mais la colorisation native des tracebacks Python
+   3.13+ (`PYTHON_COLORS`/`_colorize.can_colorize()`), héritée par le
+   sous-processus d'import de `tools/pyenv.py::check_imports` depuis le
+   FORCE_COLOR ambiant — cassait le regex `File "..."` d'
+   `extract_traceback_files` pour **toutes** les frames, pas seulement le
+   fichier du message final. Corrigé : `PYTHON_COLORS=0` forcé sur
+   l'environnement du sous-processus d'import (`_run(..., env=...)`,
+   nouveau paramètre, même motif que `tools.git._run_git`).
+
+**ADR 0016 — Sources d'inspiration externes consultées par le PM en phase
+1.** Brief déposé par l'utilisateur (`ignore/prompt-claude-code-inspiration-
+sources.md`, dossier `ignore/` recréé après coup — convention de fichiers de
+suivi personnel non versionnés, à ignorer par l'assistant sauf demande
+explicite). Décision : `skills/inspiration-sources.md`, liste courte de
+catalogues externes maintenue à la main par Steeve, injectée dans le prompt
+système du PM en phase 1 ; si une dimension du projet cadré ressemble à une
+source listée, le PM signale et **propose** d'investiguer, il ne décide
+jamais seul (prolongement du principe déjà établi par la checklist
+d'intention, ADR 0008). **Écart trouvé par rapport à l'intuition de départ
+du brief**, vérifié plutôt que présumé : contrairement aux checklists des
+ADR 0008/0012 (texte figé dans `prompts/pm.md`), ce mécanisme suppose un
+fichier maintenu dans la durée — or le PM n'avait, avant cet ADR, **aucun
+mécanisme d'injection dynamique de fichier** dans son prompt système
+(contrairement à Back/Front/Test/Architecte/Sécu, qui bénéficient tous de
+`tools.filesystem.inject_skills`). Nouveau point d'injection câblé pour la
+première fois côté PM : `nodes/pm.py::build_cadrage_system_prompt`
+(dégradation silencieuse si le fichier est absent — mécanisme optionnel, pas
+bloquant), réutilisé par le dialogue terminal et par `telegram/pm_dialogue.py`
+(y compris la reprise après redémarrage du bot). `ARCHITECTURE.md` gagne le
+principe 12. Reste ouvert, documenté dans l'ADR : comportement de Claude
+Code CLI face à un outil réseau (`web_fetch`) en mode headless `-p` jamais
+vérifié empiriquement dans ce dépôt.
 
 **2026-07-30 — ADR 0015 (cycle de vie projet/feature par boutons Telegram)
 entièrement implémentée, en 5 phases commitées séparément.** Session ouverte
@@ -1024,11 +1115,13 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
       plus gros (nécessite que le PM régénère tout le fichier).
    3. Fiche modifiée après un run déjà `COMPLETED` non gérée par `/run`
       (message d'erreur clair plutôt qu'un nouveau run_id auto-généré).
-   4. `config/projects/webaimazing-v2.yml` a perdu son `telegram.thread_id`
-      (annulé par un `git restore` de précaution en tout début de session,
-      voir entrée ci-dessus) — le topic Telegram existe probablement
-      toujours côté serveur, mais les commandes topic-scopées ne peuvent
-      pas encore agir dessus tant qu'il n'est pas retrouvé et réécrit.
+   4. ~~`config/projects/webaimazing-v2.yml` a perdu son `telegram.thread_id`~~
+      — **résolu le 2026-07-31** : valeur (42) retrouvée dans l'historique
+      de conversation de la session ADR 0015 et réécrite (voir entrée
+      dédiée ci-dessus). Complété le même jour par `/cadrer_projet` (gap non
+      couvert par l'ADR 0015 : aucun point de reprise du cadrage projet pour
+      un projet déjà créé) et par la persistance du transcript de cadrage
+      (survit désormais à un redémarrage du bot).
    5. `/reject` (rejet de checkpoint) reste `NotImplementedError`,
       explicitement différé par l'ADR (aucun cas d'usage concret identifié).
 8. **Idée notée le 2026-07-29, pas encore cadrée** : mécanisme d'évolution
@@ -1092,6 +1185,19 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
     branche, dossiers `specs/run-NNN/` orphelins, checkpoints `state.db`
     orphelins sous le `thread_id` du run abandonné) sans aucun moyen rapide de
     la nettoyer.
+11. **ADR 0016 (sources d'inspiration externes consultées par le PM) — livrée
+    le 2026-07-31**, voir entrée dédiée ci-dessus. Reste, documenté dans
+    l'ADR comme points explicitement ouverts :
+    1. Comportement de Claude Code CLI face à un outil réseau (`web_fetch`)
+       en mode headless `-p` jamais vérifié empiriquement dans ce dépôt
+       (seuls Read/Glob/Grep et Write/Edit/Bash l'ont été à ce jour) — si
+       l'investigation se heurte à un refus systématique, le mécanisme
+       dégrade déjà gracieusement (refus non fatal), mais l'investigation
+       elle-même resterait impossible en pratique.
+    2. Format de `skills/inspiration-sources.md` au-delà d'une liste plate
+       (regroupement par catégorie si le fichier grossit) — non tranché.
+    3. Extension du mécanisme à la phase 2 (Architecte) — non tranchée par
+       cet ADR, qui ne statue que sur le PM en phase 1.
 
 Pas d'ordre de priorité déjà acté entre ces points au-delà de leur numérotation
 ci-dessus — à trancher avec l'utilisateur en début de prochaine session.
