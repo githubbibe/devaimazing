@@ -294,6 +294,41 @@ async def test_check_imports_circular_import_reports_related_files(tmp_path: Pat
     assert "pkg/models.py" in error.related_files
 
 
+async def test_check_imports_ignores_ambient_force_color(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    """
+    Régression : FORCE_COLOR dans l'environnement du process appelant (une
+    variable de shell, jamais définie par ce dépôt — voir docs/roadmap.md)
+    activait la coloration de traceback native de Python 3.13+ dans le
+    sous-processus d'import, cassant le regex `File "..."` d'
+    extract_traceback_files pour TOUTES les frames (pas seulement le cas
+    circulaire) — related_files revenait vide quel que soit le scénario.
+    """
+    monkeypatch.setenv("FORCE_COLOR", "3")
+
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "pkg" / "database.py").write_text(
+        "from pkg.models import Base\n", encoding="utf-8"
+    )
+    (tmp_path / "pkg" / "models.py").write_text(
+        "from pkg.database import Base\n", encoding="utf-8"
+    )
+    (tmp_path / "pkg" / "crud.py").write_text(
+        "from pkg.models import Base\n", encoding="utf-8"
+    )
+
+    error = await pyenv.check_imports(
+        repo_path=tmp_path,
+        python_path=Path(sys.executable),
+        files={"pkg/crud.py": ""},
+    )
+    assert error is not None
+    assert "\x1b[" not in error.message
+    assert "pkg/models.py" in error.related_files
+
+
 async def test_check_imports_timeout(tmp_path: Path):
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "__init__.py").write_text("", encoding="utf-8")

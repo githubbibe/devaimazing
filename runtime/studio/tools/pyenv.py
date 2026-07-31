@@ -18,6 +18,7 @@ depuis son requirements.txt avant chaque vérification (no-op si absent).
 
 import ast
 import asyncio
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -74,18 +75,27 @@ def _venv_python(venv_dir: Path) -> Path:
 
 
 async def _run(
-    *args: str, cwd: Optional[Path] = None, timeout: Optional[float] = None
+    *args: str, cwd: Optional[Path] = None, timeout: Optional[float] = None,
+    env: Optional[dict] = None,
 ) -> tuple[int, str, str]:
     """
     Exécute une commande, retourne (returncode, stdout, stderr). En cas de
     timeout : returncode=-1, stderr="timeout" (sentinelle distinguée d'une
     vraie erreur d'exécution par les appelants).
+
+    Args:
+        env: Environnement du sous-processus, None hérite de celui du
+            process courant (mêmes semantics que subprocess.Popen — voir
+            tools.git._run_git pour le même motif). check_imports l'utilise
+            pour neutraliser PYTHON_COLORS et obtenir une traceback stderr
+            en texte brut, indépendamment de FORCE_COLOR/NO_COLOR ambiants.
     """
     process = await asyncio.create_subprocess_exec(
         *args,
         cwd=str(cwd) if cwd else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=env,
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
@@ -261,6 +271,16 @@ async def check_imports(
         réussissent (ou si `files` ne contient aucun fichier .py
         importable).
     """
+    # PYTHON_COLORS=0 : neutralise la coloration de traceback native de
+    # Python 3.13+ (sys.excepthook), qui suit sinon FORCE_COLOR ambiant de
+    # l'environnement de l'utilisateur même hors d'un vrai terminal — sans
+    # ça, stderr contient des codes ANSI qui cassent le regex `File "..."`
+    # d'extract_traceback_files (le "File " littéral n'est plus suivi
+    # immédiatement d'un guillemet) et empêchent de trouver le fichier
+    # réellement en cause. PYTHON_COLORS a priorité sur FORCE_COLOR/NO_COLOR
+    # dans la logique de _colorize.can_colorize() du interpréteur.
+    import_env = {**os.environ, "PYTHON_COLORS": "0"}
+
     for relative_path in sorted(files):
         module_name = _module_name(relative_path)
         if module_name is None:
@@ -271,6 +291,7 @@ async def check_imports(
             f"import {module_name}",
             cwd=repo_path,
             timeout=timeout_seconds,
+            env=import_env,
         )
         if returncode == 0:
             continue
