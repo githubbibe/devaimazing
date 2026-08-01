@@ -856,6 +856,48 @@ async def test_menu_callback_answers_before_running_long_action(
     assert order == ["answer", "handle_menu_callback", "edit_text"]
 
 
+async def test_menu_callback_acknowledges_slow_action_before_dialogue(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path,
+):
+    """"new_feature"/"cadrer_projet" déclenchent un dialogue de cadrage PM
+    potentiellement long derrière handle_menu_callback — sans accusé de
+    réception immédiat, rien ne change visuellement entre le clic et la
+    question du PM (gap remonté en usage réel)."""
+    edits = []
+
+    async def fake_handle_menu_callback(callback_data, *, chat_id, message_thread_id, config_dir, bot):
+        edits.append("handle_menu_callback ran")
+        return "texte", handlers_module.menu.build_root_keyboard(in_topic=True)
+
+    monkeypatch.setattr(handlers_module.menu, "handle_menu_callback", fake_handle_menu_callback)
+
+    router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
+    on_menu_callback = router.callback_query.handlers[1].callback
+
+    async def fake_answer():
+        return None
+
+    async def fake_edit_text(text, reply_markup=None):
+        edits.append(text)
+
+    callback = SimpleNamespace(
+        data="menu:new_feature",
+        message=SimpleNamespace(
+            chat=SimpleNamespace(id=_ALLOWED_CHAT_ID),
+            message_thread_id=111,
+            edit_text=fake_edit_text,
+        ),
+        bot=None,
+        answer=fake_answer,
+    )
+
+    await on_menu_callback(callback)
+
+    assert edits[0] == "⏳ Le PM prépare sa question..."
+    assert edits[1] == "handle_menu_callback ran"
+    assert edits[2] == "texte"
+
+
 async def test_menu_callback_ignores_message_not_modified_error(
     monkeypatch: pytest.MonkeyPatch, config_dir: Path,
 ):

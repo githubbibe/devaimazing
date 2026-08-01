@@ -49,6 +49,13 @@ from studio.tools.whisper import ExternalServiceError, transcribe_voice_message
 # (voir ADR 0013, Décision 4 : /new et /archive sont des commandes General).
 _GENERAL_SCOPE_TOOLS = {"lister_projets", "creer_projet", "archive_projet", "new_project"}
 
+# Actions du menu déclenchant un dialogue de cadrage PM (potentiellement
+# long, Claude Code CLI) derrière handle_menu_callback — voir le commentaire
+# dans _on_menu_callback : sans accusé de réception immédiat, rien ne change
+# visuellement entre le clic et la question du PM (gap remonté en usage réel
+# sur "Nouvelle feature").
+_SLOW_MENU_ACTIONS = {"new_feature", "cadrer_projet"}
+
 
 def _is_stop_command(text: str) -> bool:
     """/stop a priorité absolue sur tout état en attente (ADR 0015,
@@ -559,6 +566,14 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
         # de suite, avant le dialogue de cadrage PM potentiellement long
         # déclenché par certaines actions (new_feature, cadrer_projet).
         await callback.answer()
+        # Accusé de réception immédiat pour les actions qui déclenchent un
+        # dialogue de cadrage PM : sans ça, rien ne change visuellement entre
+        # le clic et la question du PM (le "typing" envoyé par
+        # pm_dialogue._start_dialogue expire au bout de quelques secondes
+        # côté Telegram, largement avant la fin d'un appel Claude Code CLI) —
+        # gap remonté en usage réel sur "Nouvelle feature".
+        if callback.message is not None and _SLOW_MENU_ACTIONS.intersection(callback.data.split(":")):
+            await _safe_edit_text(callback.message, "⏳ Le PM prépare sa question...")
         text, keyboard = await menu.handle_menu_callback(
             callback.data, chat_id=chat_id, message_thread_id=thread_id,
             config_dir=resolved_config_dir, bot=callback.bot,
