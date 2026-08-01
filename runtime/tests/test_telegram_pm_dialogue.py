@@ -21,6 +21,7 @@ from studio.telegram.handlers import handle_confirmation_callback
 
 _CHAT_ID = 42
 _THREAD_ID = 111
+_MESSAGE_ID = 999
 
 
 def _write_yaml(path: Path, data: dict) -> None:
@@ -69,6 +70,7 @@ class _FakeBot:
     def __init__(self):
         self.messages: list[dict] = []
         self.chat_actions: list[dict] = []
+        self.reactions: list[dict] = []
 
     async def send_message(self, chat_id, text, *, message_thread_id=None, reply_markup=None):
         self.messages.append({
@@ -79,6 +81,11 @@ class _FakeBot:
     async def send_chat_action(self, chat_id, action, *, message_thread_id=None):
         self.chat_actions.append({
             "chat_id": chat_id, "action": action, "message_thread_id": message_thread_id,
+        })
+
+    async def set_message_reaction(self, chat_id, message_id, *, reaction=None):
+        self.reactions.append({
+            "chat_id": chat_id, "message_id": message_id, "reaction": reaction,
         })
 
 
@@ -149,7 +156,7 @@ async def test_handle_dialogue_reply_without_pending_dialogue_returns_false(
 ):
     bot = _FakeBot()
 
-    consumed = await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "peu importe")
+    consumed = await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "peu importe", _MESSAGE_ID)
 
     assert consumed is False
     assert bot.messages == []
@@ -158,7 +165,7 @@ async def test_handle_dialogue_reply_without_pending_dialogue_returns_false(
 async def test_handle_dialogue_reply_none_thread_id_returns_false():
     bot = _FakeBot()
 
-    consumed = await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, None, "peu importe")
+    consumed = await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, None, "peu importe", _MESSAGE_ID)
 
     assert consumed is False
 
@@ -208,13 +215,39 @@ async def test_handle_dialogue_reply_updates_persisted_transcript(
     bot = _FakeBot()
     await pm_dialogue.start_feature_dialogue(bot, _CHAT_ID, _THREAD_ID, config)
 
-    await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier")
+    await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier", _MESSAGE_ID)
 
     data = json.loads((_dialogues_state_dir / f"{_THREAD_ID}.json").read_text(encoding="utf-8"))
     assert data["kind"] == "feature"
     assert data["project_name"] == "demo"
     assert any("ajout-panier" in line for line in data["transcript"])
     assert any("à quoi ça sert" in line for line in data["transcript"])
+
+
+async def test_handle_dialogue_reply_acknowledges_receipt(
+    monkeypatch: pytest.MonkeyPatch, config: StudioConfig,
+):
+    """Accusé de réception (réaction 👀) posé sur le message reçu — sans ça,
+    aucun signal visible ne persiste pendant un tour de dialogue long, le
+    "typing" de Telegram expirant après quelques secondes (gap remonté en
+    usage réel)."""
+    responses = [
+        _fake_claude_result("QUESTION: quel est le nom de la feature ?"),
+        _fake_claude_result("QUESTION: à quoi ça sert ?"),
+    ]
+
+    async def fake_run_claude_code(**kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    bot = _FakeBot()
+    await pm_dialogue.start_feature_dialogue(bot, _CHAT_ID, _THREAD_ID, config)
+
+    await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier", _MESSAGE_ID)
+
+    assert len(bot.reactions) == 1
+    assert bot.reactions[0]["chat_id"] == _CHAT_ID
+    assert bot.reactions[0]["message_id"] == _MESSAGE_ID
 
 
 async def test_handle_dialogue_reply_draft_deletes_persisted_transcript(
@@ -233,7 +266,7 @@ async def test_handle_dialogue_reply_draft_deletes_persisted_transcript(
     await pm_dialogue.start_feature_dialogue(bot, _CHAT_ID, _THREAD_ID, config)
     assert (_dialogues_state_dir / f"{_THREAD_ID}.json").is_file()
 
-    await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier")
+    await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier", _MESSAGE_ID)
 
     assert not (_dialogues_state_dir / f"{_THREAD_ID}.json").exists()
 
@@ -265,7 +298,7 @@ async def test_restore_pending_dialogues_reloads_state_and_allows_continuing(
 
     monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
     bot = _FakeBot()
-    consumed = await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "peu importe")
+    consumed = await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "peu importe", _MESSAGE_ID)
 
     assert consumed is True
     assert "à quoi ça sert" in bot.messages[0]["text"]
@@ -305,7 +338,7 @@ async def test_handle_dialogue_reply_advances_to_next_question(
     bot = _FakeBot()
     await pm_dialogue.start_feature_dialogue(bot, _CHAT_ID, _THREAD_ID, config)
 
-    consumed = await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier")
+    consumed = await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier", _MESSAGE_ID)
 
     assert consumed is True
     # 2 : un pour le tour initial (start_feature_dialogue), un pour la
@@ -332,7 +365,7 @@ async def test_handle_dialogue_reply_validated_draft_presents_confirmation(
     bot = _FakeBot()
     await pm_dialogue.start_feature_dialogue(bot, _CHAT_ID, _THREAD_ID, config)
 
-    consumed = await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier")
+    consumed = await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier", _MESSAGE_ID)
 
     assert consumed is True
     # Dialogue terminé : plus en attente d'une réponse texte, relayé à la
@@ -359,7 +392,7 @@ async def test_confirming_draft_writes_card_root(
     monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
     bot = _FakeBot()
     await pm_dialogue.start_feature_dialogue(bot, _CHAT_ID, _THREAD_ID, config)
-    await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier")
+    await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier", _MESSAGE_ID)
 
     confirmation_id = next(iter(confirmations_module.pending_confirmations))
     reply_text = await handle_confirmation_callback(
@@ -417,7 +450,7 @@ async def test_project_dialogue_validated_draft_calls_valider_fiche_projet(
     monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
     bot = _FakeBot()
     await pm_dialogue.start_project_dialogue(bot, _CHAT_ID, _THREAD_ID, config, "mon-projet")
-    await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "une plateforme de paniers")
+    await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "une plateforme de paniers", _MESSAGE_ID)
 
     assert _THREAD_ID not in pm_dialogue._pending_dialogues
     confirmation_id = next(iter(confirmations_module.pending_confirmations))

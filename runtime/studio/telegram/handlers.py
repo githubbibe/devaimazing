@@ -437,6 +437,7 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
             # compris si ça ressemble à une commande slash.
             if await handle_dialogue_reply(
                 message.bot, message.chat.id, message.message_thread_id, message.text,
+                message.message_id,
             ):
                 return
 

@@ -757,6 +757,7 @@ async def test_menu_button_sends_root_menu(
         from_user=SimpleNamespace(is_bot=False),
         chat=SimpleNamespace(id=_ALLOWED_CHAT_ID),
         message_thread_id=111,
+        message_id=1,
         bot=object(),
         reply=None,
     )

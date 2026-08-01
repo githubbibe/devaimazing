@@ -33,6 +33,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
 
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import ReactionTypeEmoji
+
 from studio.config import StudioConfig
 from studio.nodes.pm import build_cadrage_system_prompt, run_pm_turn
 from studio.state import Phase
@@ -121,6 +124,19 @@ def restore_pending_dialogues(config_dir: Optional[Path] = None) -> None:
             kind=data["kind"], trace_id=data["trace_id"], config=config,
             system_prompt=system_prompt, transcript=data["transcript"],
         )
+
+
+async def _acknowledge_receipt(bot: Any, chat_id: int, message_id: int) -> None:
+    """Réaction 👀 posée sur le message reçu, avant l'appel PM potentiellement
+    long — accusé de réception qui reste affiché tant que le tour n'est pas
+    terminé, contrairement à "typing" (send_chat_action) qui expire au bout
+    de quelques secondes côté Telegram et redevient invisible pendant le
+    reste de l'attente sur un tour de dialogue long — gap remonté en usage
+    réel (aucun signe de réception visible après avoir répondu au PM)."""
+    try:
+        await bot.set_message_reaction(chat_id, message_id, reaction=[ReactionTypeEmoji(emoji="👀")])
+    except TelegramBadRequest:
+        pass
 
 
 def _generate_run_id() -> str:
@@ -279,7 +295,7 @@ def cancel_dialogue(message_thread_id: int) -> bool:
 
 
 async def handle_dialogue_reply(
-    bot: Any, chat_id: int, message_thread_id: Optional[int], text: str,
+    bot: Any, chat_id: int, message_thread_id: Optional[int], text: str, message_id: int,
 ) -> bool:
     """
     Traite un message tapé dans un topic où un dialogue de cadrage PM est en
@@ -295,6 +311,8 @@ async def handle_dialogue_reply(
             /new_project engagent tous deux leur dialogue dans un
             topic-projet, jamais en General) — retourne False immédiatement
             dans ce cas.
+        message_id: `message.message_id` du message reçu — voir
+            _acknowledge_receipt.
 
     Returns:
         True si un dialogue était en attente pour ce topic et que ce message
@@ -310,6 +328,7 @@ async def handle_dialogue_reply(
         return False
 
     state.transcript.append(f"Utilisateur : {text}")
+    await _acknowledge_receipt(bot, chat_id, message_id)
     await bot.send_chat_action(chat_id, "typing", message_thread_id=message_thread_id)
 
     tracer = RunTracer.for_run(state.config, state.trace_id).for_agent("pm", Phase.CADRAGE)
