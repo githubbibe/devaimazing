@@ -112,3 +112,81 @@ async def test_list_entries_returns_all_entries_in_order(tmp_path: Path):
 
     assert [e.feature_name for e in entries] == ["ajout-panier", "ajout-recherche"]
     assert entries[1].statut == "fait"
+
+
+async def test_upsert_entry_stores_merged_commit(tmp_path: Path):
+    config = _config(tmp_path)
+
+    await planification.upsert_entry(
+        config,
+        PlanificationEntry(
+            feature_name="ajout-panier", statut="fait",
+            run_id="run-1", content_hash="hash1", merged_commit="abc123",
+        ),
+    )
+
+    entry = await planification.find_entry(config, "ajout-panier")
+    assert entry.merged_commit == "abc123"
+
+
+async def test_merged_commit_defaults_to_none(tmp_path: Path):
+    config = _config(tmp_path)
+
+    await planification.upsert_entry(
+        config,
+        PlanificationEntry(
+            feature_name="ajout-panier", statut="à faire", run_id="run-1", content_hash="hash1",
+        ),
+    )
+
+    entry = await planification.find_entry(config, "ajout-panier")
+    assert entry.merged_commit is None
+
+
+async def test_find_entry_reads_legacy_four_column_row(tmp_path: Path):
+    """Compatibilité ascendante : un specs/planification.md écrit avant
+    l'introduction de merged_commit (4 colonnes) reste lisible."""
+    path = tmp_path / "specs" / "planification.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "# Planification\n\n## Fiches\n\n"
+        "| Feature | Statut | Run ID | Hash |\n"
+        "|---|---|---|---|\n"
+        "| ajout-panier | fait | run-1 | hash1 |\n",
+        encoding="utf-8",
+    )
+    config = _config(tmp_path)
+
+    entry = await planification.find_entry(config, "ajout-panier")
+
+    assert entry == PlanificationEntry(
+        feature_name="ajout-panier", statut="fait", run_id="run-1", content_hash="hash1",
+    )
+
+
+async def test_upsert_entry_preserves_other_legacy_rows(tmp_path: Path):
+    """Une ligne d'une autre feature au format legacy (4 colonnes) ne doit
+    pas faire planter le rendu d'une nouvelle ligne à 5 colonnes."""
+    path = tmp_path / "specs" / "planification.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "# Planification\n\n## Fiches\n\n"
+        "| Feature | Statut | Run ID | Hash |\n"
+        "|---|---|---|---|\n"
+        "| ancienne-feature | fait | run-0 | hash0 |\n",
+        encoding="utf-8",
+    )
+    config = _config(tmp_path)
+
+    await planification.upsert_entry(
+        config,
+        PlanificationEntry(
+            feature_name="nouvelle-feature", statut="fait",
+            run_id="run-1", content_hash="hash1", merged_commit="abc123",
+        ),
+    )
+
+    ancienne = await planification.find_entry(config, "ancienne-feature")
+    nouvelle = await planification.find_entry(config, "nouvelle-feature")
+    assert ancienne.merged_commit is None
+    assert nouvelle.merged_commit == "abc123"

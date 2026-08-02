@@ -177,6 +177,7 @@ async def test_start_run_fresh_launch_completes_and_updates_planification(
         {
             "status": RunStatus.COMPLETED, "current_phase": "CLOTURE", "agent_sequence": [],
             "card_root_path": f"specs/{_RUN_ID}/card-root.md",
+            "merged_commit": "abc123",
         },
     ]
     graph = _fake_graph(states, closed)
@@ -202,6 +203,8 @@ async def test_start_run_fresh_launch_completes_and_updates_planification(
 
     entry = await planification.find_entry(config, _FEATURE_NAME)
     assert entry.statut == "fait"
+    # Traçabilité de la version de code livrée (voir studio.nodes.closer).
+    assert entry.merged_commit == "abc123"
     assert _THREAD_ID not in _active_runs
 
 

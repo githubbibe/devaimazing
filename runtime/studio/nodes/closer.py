@@ -105,8 +105,9 @@ async def run(state: StudioState) -> StudioState:
 
     Returns:
         - Si le merge réussit : état final du run,
-          state.status=RunStatus.COMPLETED, state.completed_at renseigné.
-          Un AgentResult est ajouté à state.agent_results
+          state.status=RunStatus.COMPLETED, state.completed_at renseigné,
+          state.merged_commit renseigné avec le hash du commit de merge sur
+          git.base_branch. Un AgentResult est ajouté à state.agent_results
           (agent="closer", phase=state.current_phase).
         - Si le merge échoue (conflit) : state.status=
           RunStatus.WAITING_HUMAN, state.requires_manual_intervention=True,
@@ -165,7 +166,9 @@ async def run(state: StudioState) -> StudioState:
     base_branch = config.get("git", {}).get("base_branch", "develop")
 
     try:
-        await merge_run_branch(config.repo_path, state.branch_name, target_branch=base_branch)
+        merge_commit = await merge_run_branch(
+            config.repo_path, state.branch_name, target_branch=base_branch
+        )
     except RuntimeError as exc:
         await _notify(
             config,
@@ -200,4 +203,5 @@ async def run(state: StudioState) -> StudioState:
         "agent_results": state.agent_results + [agent_result],
         "status": RunStatus.COMPLETED,
         "completed_at": datetime.now(timezone.utc),
+        "merged_commit": merge_commit,
     }

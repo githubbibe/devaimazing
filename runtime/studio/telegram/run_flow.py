@@ -319,6 +319,7 @@ async def _execute_run(
             planification.PlanificationEntry(
                 feature_name=feature_name, statut="fait",
                 run_id=run_id, content_hash=planification.hash_content(content),
+                merged_commit=final_state.get("merged_commit"),
             ),
         )
     # FAILED : planification.md reste "en cours" (projection best-effort du

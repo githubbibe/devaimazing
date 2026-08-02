@@ -98,6 +98,12 @@ class StudioState:
     # nom de branche contient un hash basé sur le timestamp de création (voir ADR 0007).
     branch_name: Optional[str] = None
 
+    # Hash du commit de merge de branch_name vers git.base_branch, renseigné
+    # par le node closer après un merge réussi (studio.tools.git.merge_run_branch)
+    # — traçabilité de la version de code livrée pour cette feature (voir
+    # studio.tools.planification.PlanificationEntry.merged_commit).
+    merged_commit: Optional[str] = None
+
     # Résultats des agents
     agent_results: list[AgentResult] = field(default_factory=list)
 

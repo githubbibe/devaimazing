@@ -139,6 +139,7 @@ async def test_run_success_merges_and_completes(monkeypatch: pytest.MonkeyPatch,
 
     assert updates["status"] == RunStatus.COMPLETED
     assert "completed_at" in updates
+    assert updates["merged_commit"] == "mergehash123"
     assert updates["agent_results"][-1].agent == "closer"
     assert (repo / "specs" / "project-map.md").is_file()
 

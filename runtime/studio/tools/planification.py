@@ -29,8 +29,8 @@ from typing import Optional
 from studio.config import StudioConfig
 
 _HEADING = "## Fiches"
-_TABLE_HEADER = "| Feature | Statut | Run ID | Hash |"
-_TABLE_SEPARATOR = "|---|---|---|---|"
+_TABLE_HEADER = "| Feature | Statut | Run ID | Hash | Commit fusionné |"
+_TABLE_SEPARATOR = "|---|---|---|---|---|"
 
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 
@@ -60,18 +60,46 @@ class PlanificationEntry:
             par ce module.
         content_hash: hash_content(card-root.md) au moment du dernier
             upsert (validation de la fiche, ou fin de run réussi).
+        merged_commit: Hash du commit de merge vers git.base_branch (voir
+            studio.nodes.closer, studio.tools.git.merge_run_branch) — hash
+            Git réel, contrairement à content_hash (voir docstring module).
+            Renseigné seulement après un run terminé avec succès (statut
+            "fait") ; None sinon, y compris pour une ligne écrite avant
+            l'introduction de ce champ (compatibilité ascendante, voir
+            _normalize_row) — traçabilité de la version de code livrée pour
+            cette feature, utile pour une future reprise/édition d'une
+            feature déjà exécutée.
     """
 
     feature_name: str
     statut: str
     run_id: str
     content_hash: str
+    merged_commit: Optional[str] = None
 
 
 def _normalize(feature_name: str) -> str:
     """Casse et espaces insensibles pour le matching (voir find_entry) —
     le nom stocké dans le fichier reste tel qu'extrait de card-root.md."""
     return _WHITESPACE_PATTERN.sub(" ", feature_name.strip()).lower()
+
+
+def _normalize_row(cells: list[str]) -> Optional[list[str]]:
+    """
+    Complète une ligne à 4 cellules (ancien format, avant l'ajout de
+    merged_commit) avec une 5e cellule vide — compatibilité ascendante avec
+    un specs/planification.md existant écrit par une version antérieure.
+
+    Returns:
+        Toujours 5 cellules si reconnu. None si le nombre de cellules ne
+        correspond à aucun format connu (ligne malformée, ignorée comme
+        avant l'introduction de ce champ).
+    """
+    if len(cells) == 5:
+        return cells
+    if len(cells) == 4:
+        return cells + [""]
+    return None
 
 
 def _specs_dir(config: StudioConfig) -> str:
@@ -114,8 +142,10 @@ def _parse_rows(content: str) -> list[list[str]]:
 
 def _render(rows: list[list[str]]) -> str:
     lines = ["# Planification", "", _HEADING, "", _TABLE_HEADER, _TABLE_SEPARATOR]
-    for feature_name, statut, run_id, content_hash in rows:
-        lines.append(f"| {feature_name} | {statut} | {run_id} | {content_hash} |")
+    for feature_name, statut, run_id, content_hash, merged_commit in rows:
+        lines.append(
+            f"| {feature_name} | {statut} | {run_id} | {content_hash} | {merged_commit} |"
+        )
     lines.append("")
     return "\n".join(lines)
 
@@ -133,14 +163,16 @@ async def find_entry(config: StudioConfig, feature_name: str) -> Optional[Planif
         return None
 
     target = _normalize(feature_name)
-    for cells in _parse_rows(path.read_text(encoding="utf-8")):
-        if len(cells) != 4:
+    for raw_cells in _parse_rows(path.read_text(encoding="utf-8")):
+        cells = _normalize_row(raw_cells)
+        if cells is None:
             continue
-        row_feature_name, statut, run_id, content_hash = cells
+        row_feature_name, statut, run_id, content_hash, merged_commit = cells
         if _normalize(row_feature_name) == target:
             return PlanificationEntry(
                 feature_name=row_feature_name, statut=statut,
                 run_id=run_id, content_hash=content_hash,
+                merged_commit=merged_commit or None,
             )
     return None
 
@@ -159,12 +191,14 @@ async def list_entries(config: StudioConfig) -> list[PlanificationEntry]:
         return []
 
     entries = []
-    for cells in _parse_rows(path.read_text(encoding="utf-8")):
-        if len(cells) != 4:
+    for raw_cells in _parse_rows(path.read_text(encoding="utf-8")):
+        cells = _normalize_row(raw_cells)
+        if cells is None:
             continue
-        feature_name, statut, run_id, content_hash = cells
+        feature_name, statut, run_id, content_hash, merged_commit = cells
         entries.append(PlanificationEntry(
             feature_name=feature_name, statut=statut, run_id=run_id, content_hash=content_hash,
+            merged_commit=merged_commit or None,
         ))
     return entries
 
@@ -180,13 +214,17 @@ async def upsert_entry(config: StudioConfig, entry: PlanificationEntry) -> None:
         template externe : pas de placeholder à substituer).
     """
     path = _planification_path(config)
-    rows = _parse_rows(path.read_text(encoding="utf-8")) if path.is_file() else []
+    raw_rows = _parse_rows(path.read_text(encoding="utf-8")) if path.is_file() else []
+    rows = [r for r in (_normalize_row(cells) for cells in raw_rows) if r is not None]
 
     target = _normalize(entry.feature_name)
-    new_row = [entry.feature_name, entry.statut, entry.run_id, entry.content_hash]
+    new_row = [
+        entry.feature_name, entry.statut, entry.run_id, entry.content_hash,
+        entry.merged_commit or "",
+    ]
     replaced = False
     for index, cells in enumerate(rows):
-        if len(cells) == 4 and _normalize(cells[0]) == target:
+        if _normalize(cells[0]) == target:
             rows[index] = new_row
             replaced = True
             break
