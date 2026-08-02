@@ -767,6 +767,45 @@ async def test_menu_button_sends_root_menu(
     assert calls["args"] == (_ALLOWED_CHAT_ID, 111, config_dir)
 
 
+async def test_menu_button_bypasses_pending_reply_handlers(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path,
+):
+    """"Menu →" a priorité absolue au même titre que /stop (ADR 0015,
+    Décision 7 révisée) — un clic pendant un dialogue de cadrage PM en
+    attente doit afficher le menu, pas être avalé comme réponse au PM (gap
+    remonté en usage réel)."""
+    async def fail_if_called_async(*args, **kwargs):
+        raise AssertionError("ne doit pas être appelé : Menu → a priorité absolue")
+
+    monkeypatch.setattr(handlers_module, "handle_project_name_reply", fail_if_called_async)
+    monkeypatch.setattr(handlers_module, "handle_dialogue_reply", fail_if_called_async)
+    monkeypatch.setattr(handlers_module, "handle_run_reply", fail_if_called_async)
+
+    calls = {}
+
+    async def fake_send_root_menu(bot, chat_id, message_thread_id, config_dir_arg):
+        calls["args"] = (chat_id, message_thread_id, config_dir_arg)
+
+    monkeypatch.setattr(handlers_module.menu, "send_root_menu", fake_send_root_menu)
+
+    router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
+    on_message = router.message.handlers[0].callback
+
+    message = SimpleNamespace(
+        text=handlers_module.menu.MENU_BUTTON_LABEL,
+        from_user=SimpleNamespace(is_bot=False),
+        chat=SimpleNamespace(id=_ALLOWED_CHAT_ID),
+        message_thread_id=111,
+        message_id=1,
+        bot=object(),
+        reply=None,
+    )
+
+    await on_message(message)
+
+    assert calls["args"] == (_ALLOWED_CHAT_ID, 111, config_dir)
+
+
 async def test_confirmation_callback_attaches_root_menu_keyboard(
     monkeypatch: pytest.MonkeyPatch, config_dir: Path,
 ):

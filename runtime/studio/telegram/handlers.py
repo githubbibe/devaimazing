@@ -427,6 +427,18 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
                     await message.reply(reply.text, reply_markup=keyboard)
                 return
 
+            if message.text == menu.MENU_BUTTON_LABEL:
+                # Bouton persistant "Menu →" — priorité absolue au même titre
+                # que /stop (ADR 0015, Décision 7 révisée) : sans ça, un clic
+                # pendant un dialogue de cadrage PM en attente était avalé
+                # comme réponse à la question du PM au lieu d'afficher le
+                # menu — aucun retour visible, confusion pour l'utilisateur
+                # (gap remonté en usage réel, voir docs/roadmap.md).
+                await menu.send_root_menu(
+                    message.bot, message.chat.id, message.message_thread_id, resolved_config_dir,
+                )
+                return
+
             # Un nom de projet attendu dans General (/new_project, ADR 0015)
             # absorbe le message en priorité, avant même un dialogue de
             # cadrage PM (les deux ne peuvent pas être simultanément en
@@ -458,18 +470,6 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
             if await handle_run_reply(
                 message.bot, message.chat.id, message.message_thread_id, message.text,
             ):
-                return
-
-            if message.text == menu.MENU_BUTTON_LABEL:
-                # Bouton persistant "Menu →" (clavier de réponse Telegram,
-                # voir menu.persistent_keyboard) — remplace la commande
-                # tapée /menu. Pas de priorité absolue comme /stop : reste
-                # soumis à l'interception normale ci-dessus par un
-                # dialogue/run en attente (ADR 0015, Décision 7 — pure
-                # navigation UI, pas d'urgence à faire valoir).
-                await menu.send_root_menu(
-                    message.bot, message.chat.id, message.message_thread_id, resolved_config_dir,
-                )
                 return
 
             reply = await handle_slash_command(
