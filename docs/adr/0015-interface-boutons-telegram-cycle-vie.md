@@ -62,6 +62,20 @@ sur un message texte séparé (« Confirmer cette fiche ? ») : `edit_message_te
 (utilisé après confirmation, voir Décision 7) ne peut éditer qu'un message texte,
 jamais un message document.
 
+**Révision (2026-08-05), commit+push immédiat d'une fiche validée** : gap constaté
+(`todolist3`) — tout le cadrage (`fiche-projet.md`, `card-root.md`,
+`planification.md`) restait non suivi par git dans le repo cible, sans protection
+contre une perte locale une fois la confirmation Oui donnée, contrairement aux
+agents du pipeline (Back/Front/Test) qui commitent après chaque tâche.
+`valider_fiche_feature`/`valider_fiche_projet` commitent désormais (identité git
+"pm", `tools.git.commit_as_agent`) et poussent immédiatement après l'écriture du
+fichier, sur la branche courante — `develop` en usage normal, aucune branche de run
+n'existe encore à ce stade (Décision 3). Distinction de principe avec le transcript
+de dialogue (persisté en continu sur disque local uniquement, voir révision
+« robustesse » ci-dessus) : une fiche validée est un livrable, sa perte ne doit pas
+dépendre du seul poste de travail local, alors qu'un dialogue en cours n'est encore
+qu'un brouillon de travail.
+
 **Révision (2026-08-04), suppression du message "Bot démarré."** : le bot ne re-poste
 plus ce message (avec le clavier persistant « Menu ▶ ») à chaque démarrage — spam
 constaté en usage réel (un redémarrage fréquent en session de développement génère
