@@ -737,7 +737,7 @@ async def test_stop_command_bypasses_pending_reply_handlers(
     assert "aucun traitement en cours" in replies[0]
 
 
-# --- bouton persistant "Menu →" et menu à boutons (ADR 0015, Décision 7) ---
+# --- bouton persistant "Menu ▶" et menu à boutons (ADR 0015, Décision 7) ---
 
 async def test_menu_button_sends_root_menu(
     monkeypatch: pytest.MonkeyPatch, config_dir: Path,
@@ -770,12 +770,12 @@ async def test_menu_button_sends_root_menu(
 async def test_menu_button_bypasses_pending_reply_handlers(
     monkeypatch: pytest.MonkeyPatch, config_dir: Path,
 ):
-    """"Menu →" a priorité absolue au même titre que /stop (ADR 0015,
+    """"Menu ▶" a priorité absolue au même titre que /stop (ADR 0015,
     Décision 7 révisée) — un clic pendant un dialogue de cadrage PM en
     attente doit afficher le menu, pas être avalé comme réponse au PM (gap
     remonté en usage réel)."""
     async def fail_if_called_async(*args, **kwargs):
-        raise AssertionError("ne doit pas être appelé : Menu → a priorité absolue")
+        raise AssertionError("ne doit pas être appelé : Menu ▶ a priorité absolue")
 
     monkeypatch.setattr(handlers_module, "handle_project_name_reply", fail_if_called_async)
     monkeypatch.setattr(handlers_module, "handle_dialogue_reply", fail_if_called_async)

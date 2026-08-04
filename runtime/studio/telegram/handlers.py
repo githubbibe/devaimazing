@@ -428,7 +428,7 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
                 return
 
             if message.text == menu.MENU_BUTTON_LABEL:
-                # Bouton persistant "Menu →" — priorité absolue au même titre
+                # Bouton persistant "Menu ▶" — priorité absolue au même titre
                 # que /stop (ADR 0015, Décision 7 révisée) : sans ça, un clic
                 # pendant un dialogue de cadrage PM en attente était avalé
                 # comme réponse à la question du PM au lieu d'afficher le

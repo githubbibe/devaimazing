@@ -65,7 +65,7 @@ def build_bot_and_dispatcher(config_dir: Optional[Path] = None) -> tuple[Bot, Di
 
 async def _send_persistent_keyboards(bot, chat_id: int, config_dir: Optional[Path]) -> None:
     """
-    Poste un message portant le clavier persistant « Menu → »
+    Poste un message portant le clavier persistant « Menu ▶ »
     (studio.telegram.menu.persistent_keyboard, remplace la commande tapée
     /menu) dans General et dans chaque topic-projet déjà connu.
 
@@ -99,7 +99,7 @@ async def run_bot(config_dir: Optional[Path] = None) -> None:
     Side effects:
         Recharge les dialogues de cadrage PM interrompus par un précédent
         arrêt du bot (voir pm_dialogue.restore_pending_dialogues). Poste un
-        message avec le clavier persistant « Menu → » dans General et
+        message avec le clavier persistant « Menu ▶ » dans General et
         chaque topic connu (voir _send_persistent_keyboards). Ouvre une
         connexion réseau persistante à l'API Telegram (long polling). Se
         termine proprement sur SIGINT/SIGTERM (géré nativement par aiogram)

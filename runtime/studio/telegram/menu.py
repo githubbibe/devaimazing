@@ -43,7 +43,7 @@ CALLBACK_PREFIX = "menu"
 # zone de saisie une fois envoyé une première fois dans un chat/topic
 # (voir _send_persistent_keyboards, telegram.bot), plutôt que de compter sur
 # l'utilisateur pour retaper une commande.
-MENU_BUTTON_LABEL = "Menu →"
+MENU_BUTTON_LABEL = "Menu ▶"
 
 
 def persistent_keyboard() -> ReplyKeyboardMarkup:

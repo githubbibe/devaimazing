@@ -148,14 +148,14 @@ d'immédiateté ; elle reste une commande tapée directement.
 de sens dans un topic déjà lié à un projet), **sans** l'étape de sélection — le
 contexte est déjà donné par le topic.
 
-**Révision (2026-08-01)** : le bouton persistant « Menu → » (clavier de réponse
+**Révision (2026-08-01)** : le bouton persistant « Menu ▶ » (clavier de réponse
 Telegram, remplace la commande tapée `/menu`) a **priorité absolue**, au même titre
 que `/stop` (Décision 6) — il n'est **plus** soumis à l'interception normale par un
 dialogue de cadrage PM ou un run en attente. Décision initiale inversée : un clic
 pendant un dialogue en attente était avalé comme réponse à la question du PM au lieu
 d'afficher le menu, sans aucun retour visible côté utilisateur — gap constaté en usage
 réel (`todolist3`, cadrage de la feature `gestion-taches`). Contrairement à `/stop`,
-« Menu → » reste une simple navigation UI sans effet destructif : le dialogue ou run
+« Menu ▶ » reste une simple navigation UI sans effet destructif : le dialogue ou run
 interrompu par ce court-circuit n'est ni annulé ni perdu, il reste en attente et
 reprend normalement à la prochaine réponse de l'utilisateur.
 
