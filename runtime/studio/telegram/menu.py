@@ -50,12 +50,15 @@ def persistent_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[[KeyboardButton(text=MENU_BUTTON_LABEL)]], resize_keyboard=True,
     )
 
-_ROOT_ACTIONS_GENERAL = ["new_project", "cadrer_projet", "new_feature", "run_feature", "archive"]
-_ROOT_ACTIONS_TOPIC = ["cadrer_projet", "new_feature", "run_feature", "archive"]
+_ROOT_ACTIONS_GENERAL = [
+    "new_project", "cadrer_projet", "new_feature", "modifier_feature", "run_feature", "archive",
+]
+_ROOT_ACTIONS_TOPIC = ["cadrer_projet", "new_feature", "modifier_feature", "run_feature", "archive"]
 _LABELS = {
     "new_project": "Nouveau projet",
     "cadrer_projet": "Cadrer le projet",
     "new_feature": "Nouvelle feature",
+    "modifier_feature": "Modifier une feature",
     "run_feature": "Lancer une feature",
     "archive": "Archiver ce projet",
 }
@@ -124,8 +127,15 @@ def _project_selection_screen(config_dir: Path, action: str) -> tuple[str, Inlin
 
 
 async def _feature_list_screen(
-    config_dir: Path, project_name: str,
+    config_dir: Path, project_name: str, *, leaf_prefix: str, title: str,
 ) -> tuple[str, InlineKeyboardMarkup]:
+    """
+    Écran de sélection d'une feature parmi celles de specs/planification.md
+    — réutilisé par « Lancer une feature » (leaf_prefix="feature") et
+    « Modifier une feature » (leaf_prefix="feature_edit", ADR 0015 Décision 7
+    révisée) : même liste, seule la feuille de callback_data (et donc
+    l'action déclenchée au clic) diffère.
+    """
     try:
         config = _project_config(config_dir, project_name)
     except _CONFIG_RESOLUTION_ERRORS:
@@ -140,12 +150,12 @@ async def _feature_list_screen(
     buttons = [
         [_button(
             f"{entry.feature_name} ({entry.statut})",
-            f"{CALLBACK_PREFIX}:feature:{project_name}:{entry.feature_name}",
+            f"{CALLBACK_PREFIX}:{leaf_prefix}:{project_name}:{entry.feature_name}",
         )]
         for entry in entries
     ]
     buttons.append([_BACK_BUTTON])
-    return f"{project_name} — quelle feature lancer ?", InlineKeyboardMarkup(inline_keyboard=buttons)
+    return f"{project_name} — {title}", InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 async def _execute_or_confirm(
@@ -225,6 +235,23 @@ async def _start_run_feature(
     )
 
 
+async def _start_modifier_feature(
+    config_dir: Path, project_name: str, feature_name: str, thread_id: Optional[int], *,
+    bot: Any, chat_id: int,
+) -> tuple[str, InlineKeyboardMarkup]:
+    if thread_id is None:
+        return _error_screen(f"Projet {project_name!r} sans topic Telegram associé.")
+    try:
+        config = _project_config(config_dir, project_name)
+    except _CONFIG_RESOLUTION_ERRORS:
+        return _error_screen(f"Projet {project_name!r} introuvable.")
+
+    return await _execute_or_confirm(
+        "modifier_feature", {"feature_name": feature_name}, config,
+        bot=bot, chat_id=chat_id, message_thread_id=thread_id,
+    )
+
+
 async def send_root_menu(
     bot: Any, chat_id: int, message_thread_id: Optional[int], config_dir: Path,
 ) -> None:
@@ -271,7 +298,7 @@ async def handle_menu_callback(
         )
         return text, InlineKeyboardMarkup(inline_keyboard=[[_BACK_BUTTON]])
 
-    if action in ("cadrer_projet", "new_feature", "archive", "run_feature"):
+    if action in ("cadrer_projet", "new_feature", "modifier_feature", "archive", "run_feature"):
         if message_thread_id is not None:
             project_name = resolve_project(message_thread_id, load_topic_map(config_dir))
             if project_name is None:
@@ -295,6 +322,13 @@ async def handle_menu_callback(
             config_dir, project_name, feature_name, thread_id, bot=bot, chat_id=chat_id,
         )
 
+    if action == "feature_edit" and len(parts) == 4:
+        _, _, project_name, feature_name = parts
+        thread_id = _safe_project_thread_id(config_dir, project_name)
+        return await _start_modifier_feature(
+            config_dir, project_name, feature_name, thread_id, bot=bot, chat_id=chat_id,
+        )
+
     return _error_screen("Action de menu inconnue.")
 
 
@@ -309,5 +343,11 @@ async def _dispatch_project_action(
     if action == "archive":
         return await _start_archive(config_dir, project_name, bot=bot, chat_id=chat_id)
     if action == "run_feature":
-        return await _feature_list_screen(config_dir, project_name)
+        return await _feature_list_screen(
+            config_dir, project_name, leaf_prefix="feature", title="quelle feature lancer ?",
+        )
+    if action == "modifier_feature":
+        return await _feature_list_screen(
+            config_dir, project_name, leaf_prefix="feature_edit", title="quelle feature modifier ?",
+        )
     return _error_screen("Action de menu inconnue.")

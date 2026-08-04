@@ -35,6 +35,7 @@ _ADR_TABLE = {
     "creer_projet": (False, False, False),
     "archive_projet": (True, True, True),
     "new_feature": (False, False, False),
+    "modifier_feature": (False, False, False),
     "cadrer_projet": (False, False, False),
     "valider_fiche_feature": (False, True, False),
     "run_feature": (False, False, False),
@@ -416,6 +417,65 @@ async def test_new_feature_delegates_to_start_feature_dialogue(monkeypatch: pyte
 
     assert result.status == "ok"
     assert calls["args"] == (fake_bot, 222, 333, config)
+
+
+# --- modifier_feature (ADR 0015, Décision 7 révisée) ---
+
+async def test_modifier_feature_without_telegram_context_returns_error():
+    result = await execute_tool(
+        "modifier_feature", {"feature_name": "ajout-panier"}, config=SimpleNamespace(),
+    )
+
+    assert result.status == "error"
+
+
+async def test_modifier_feature_unknown_feature_returns_error(tmp_path: Path):
+    config = SimpleNamespace(repo_path=tmp_path, get=lambda key, default=None: default)
+
+    result = await execute_tool(
+        "modifier_feature", {"feature_name": "inconnue"}, config=config,
+        bot=SimpleNamespace(), chat_id=222, message_thread_id=333,
+    )
+
+    assert result.status == "error"
+
+
+async def test_modifier_feature_delegates_to_start_feature_edit_dialogue(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    import studio.telegram.pm_dialogue as pm_dialogue_module
+    from studio.tools import planification
+
+    config = SimpleNamespace(repo_path=tmp_path, get=lambda key, default=None: default)
+    await planification.upsert_entry(
+        config,
+        planification.PlanificationEntry(
+            feature_name="ajout-panier", statut="fait", run_id="run-1", content_hash="h1",
+        ),
+    )
+    card_root = tmp_path / "specs" / "run-1" / "card-root.md"
+    card_root.parent.mkdir(parents=True)
+    card_root.write_text("# Fiche ajout-panier\n", encoding="utf-8")
+
+    calls = {}
+
+    async def fake_start_feature_edit_dialogue(
+        bot, chat_id, message_thread_id, config_arg, feature_name, existing_content,
+    ):
+        calls["args"] = (bot, chat_id, message_thread_id, feature_name, existing_content)
+
+    monkeypatch.setattr(
+        pm_dialogue_module, "start_feature_edit_dialogue", fake_start_feature_edit_dialogue,
+    )
+
+    fake_bot = SimpleNamespace()
+    result = await execute_tool(
+        "modifier_feature", {"feature_name": "ajout-panier"}, config=config,
+        bot=fake_bot, chat_id=222, message_thread_id=333,
+    )
+
+    assert result.status == "ok"
+    assert calls["args"] == (fake_bot, 222, 333, "ajout-panier", "# Fiche ajout-panier\n")
 
 
 # --- cadrer_projet ---

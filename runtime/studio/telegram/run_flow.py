@@ -179,9 +179,10 @@ async def start_run(
         else:
             await bot.send_message(
                 chat_id,
-                f"La fiche de {feature_name!r} a été modifiée depuis son dernier run "
-                "(déjà terminé) — ce cas n'est pas géré automatiquement en v1, il "
-                "faudrait relancer une fiche via /new_feature.",
+                f"La fiche de {feature_name!r} a été modifiée sur disque depuis son "
+                "dernier run (déjà terminé) sans passer par le cadrage — utilise "
+                "/modifier_feature pour repartir d'un dialogue PM cohérent plutôt que "
+                "d'éditer la fiche directement.",
                 message_thread_id=message_thread_id,
             )
         return {}

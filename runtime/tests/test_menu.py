@@ -69,13 +69,13 @@ def _callback_data(keyboard) -> list[str]:
 def test_build_root_keyboard_general_has_new_project():
     keyboard = menu_module.build_root_keyboard(in_topic=False)
     assert "Nouveau projet" in _button_labels(keyboard)
-    assert len(keyboard.inline_keyboard) == 5
+    assert len(keyboard.inline_keyboard) == 6
 
 
 def test_build_root_keyboard_topic_has_no_new_project():
     keyboard = menu_module.build_root_keyboard(in_topic=True)
     assert "Nouveau projet" not in _button_labels(keyboard)
-    assert len(keyboard.inline_keyboard) == 4
+    assert len(keyboard.inline_keyboard) == 5
 
 
 # --- menu:root ---
@@ -301,6 +301,69 @@ async def test_feature_leaf_delegates_to_run_flow_start_run(
 
     await menu_module.handle_menu_callback(
         "menu:feature:demo:ajout-panier", chat_id=_CHAT_ID, message_thread_id=None,
+        config_dir=config_dir, bot=_FakeBot(),
+    )
+
+    assert calls["args"] == (_CHAT_ID, 111, "demo", "ajout-panier")
+
+
+# --- menu:modifier_feature (liste de features, ADR 0015 Décision 7 révisée) ---
+
+async def test_modifier_feature_from_topic_lists_features(config_dir: Path, tmp_path: Path):
+    from studio.config import StudioConfig
+
+    project_config = StudioConfig(project_name="demo", config_dir=config_dir)
+    await planification.upsert_entry(project_config, PlanificationEntry(
+        feature_name="ajout-panier", statut="fait", run_id="run-1", content_hash="h1",
+    ))
+
+    text, keyboard = await menu_module.handle_menu_callback(
+        "menu:modifier_feature", chat_id=_CHAT_ID, message_thread_id=111,
+        config_dir=config_dir, bot=_FakeBot(),
+    )
+
+    labels = _button_labels(keyboard)
+    assert any("ajout-panier" in label and "fait" in label for label in labels)
+    assert "◀ Retour" in labels
+    callback_data = _callback_data(keyboard)
+    assert any(data.startswith("menu:feature_edit:") for data in callback_data if data)
+
+
+async def test_modifier_feature_without_planification_shows_empty_message(config_dir: Path):
+    text, keyboard = await menu_module.handle_menu_callback(
+        "menu:modifier_feature", chat_id=_CHAT_ID, message_thread_id=111,
+        config_dir=config_dir, bot=_FakeBot(),
+    )
+
+    assert "Aucune feature" in text
+    assert _button_labels(keyboard) == ["◀ Retour"]
+
+
+async def test_feature_edit_leaf_delegates_to_modifier_feature_tool(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path,
+):
+    calls = {}
+
+    async def fake_start_feature_edit_dialogue(
+        bot, chat_id, message_thread_id, config, feature_name, existing_content,
+    ):
+        calls["args"] = (chat_id, message_thread_id, config.project_name, feature_name)
+
+    monkeypatch.setattr(
+        pm_dialogue_module, "start_feature_edit_dialogue", fake_start_feature_edit_dialogue,
+    )
+
+    from studio.config import StudioConfig
+    project_config = StudioConfig(project_name="demo", config_dir=config_dir)
+    await planification.upsert_entry(project_config, PlanificationEntry(
+        feature_name="ajout-panier", statut="fait", run_id="run-1", content_hash="h1",
+    ))
+    card_root = (project_config.repo_path / "specs" / "run-1" / "card-root.md")
+    card_root.parent.mkdir(parents=True)
+    card_root.write_text("# Fiche ajout-panier\n", encoding="utf-8")
+
+    await menu_module.handle_menu_callback(
+        "menu:feature_edit:demo:ajout-panier", chat_id=_CHAT_ID, message_thread_id=None,
         config_dir=config_dir, bot=_FakeBot(),
     )
 

@@ -151,6 +151,32 @@ async def test_start_feature_dialogue_injects_inspiration_sources(
     assert "exemple-source" in calls[0]["prompt"]
 
 
+async def test_start_feature_edit_dialogue_seeds_transcript_with_existing_content(
+    monkeypatch: pytest.MonkeyPatch, config: StudioConfig,
+):
+    """Menu "Modifier une feature" (ADR 0015, Décision 7 révisée) : le PM
+    voit la fiche actuelle dès le premier tour, au lieu de repartir d'une
+    page blanche comme start_feature_dialogue."""
+    calls = []
+
+    async def fake_run_claude_code(**kwargs):
+        calls.append(kwargs)
+        return _fake_claude_result("QUESTION: qu'est-ce qui doit changer ?")
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    bot = _FakeBot()
+
+    await pm_dialogue.start_feature_edit_dialogue(
+        bot, _CHAT_ID, _THREAD_ID, config, "ajout-panier", VALID_FICHE,
+    )
+
+    assert len(bot.messages) == 1
+    assert "qu'est-ce qui doit changer" in bot.messages[0]["text"]
+    assert _THREAD_ID in pm_dialogue._pending_dialogues
+    assert "ajout-panier" in calls[0]["prompt"]
+    assert VALID_FICHE in calls[0]["prompt"]
+
+
 async def test_handle_dialogue_reply_without_pending_dialogue_returns_false(
     config: StudioConfig,
 ):

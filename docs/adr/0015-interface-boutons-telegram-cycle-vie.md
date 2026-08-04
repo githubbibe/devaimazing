@@ -159,6 +159,22 @@ réel (`todolist3`, cadrage de la feature `gestion-taches`). Contrairement à `/
 interrompu par ce court-circuit n'est ni annulé ni perdu, il reste en attente et
 reprend normalement à la prochaine réponse de l'utilisateur.
 
+**Révision (2026-08-04)** : ajout de `[Modifier une feature]` (General et
+Topic-projet, même sélection de topic/liste que `[Lancer une feature]`) — gap
+constaté en usage réel (`todolist3`) : aucun bouton ne permettait de reprendre le
+cadrage d'une feature déjà validée (à faire, en cours, ou déjà terminée) pour la
+corriger. Sélectionne une feature dans la liste de `planification.md`, lit sa fiche
+actuelle (`specs/<run_id>/card-root.md`) et démarre un dialogue de cadrage PM **seedé**
+avec ce contenu (le PM voit l'existant et demande ce qui doit changer, au lieu de
+repartir d'une page blanche). Valide toujours vers un **nouveau** `run_id` — la ligne
+`planification.md` de cette feature est remplacée (Décision 9, indexée par nom de
+feature), ce qui signale naturellement à `/run` qu'une nouvelle version doit être
+produite. Le code déjà fusionné dans `develop` par le run précédent (voir
+`studio.nodes.closer`) n'est **pas retiré** : le nouveau run doit l'**adapter**, pas
+repartir de zéro — un retour en arrière (revert du merge) serait risqué (réécriture
+d'historique, casserait d'éventuelles features postérieures qui en dépendent) pour un
+bénéfice non établi.
+
 ## Décision 8 — Contenu des fiches
 
 - **Fiche projet** : nom, objectif, utilisateurs cibles, contraintes, périmètre.
@@ -184,6 +200,14 @@ Contenu :
 
 Réévalué en entier par le PM à chaque nouvelle fiche produite (Décision 4), pas
 simplement complété en fin de liste.
+
+**Révision (2026-08-04)** : ajout d'une colonne **hash du commit de merge** (vers
+`git.base_branch`, renseigné par `studio.nodes.closer` à la fin d'un run réussi) — un
+hash Git réel, distinct du hash de contenu de la fiche (calculé plus tôt, avant tout
+commit, voir `studio.tools.planification`). Objectif : associer durablement une version
+de fiche à sa version de code livrée, prérequis à la reprise/édition d'une feature déjà
+exécutée (Décision 7, `[Modifier une feature]`). Compatibilité ascendante : une ligne
+écrite avant l'introduction de ce champ (4 colonnes) reste lisible, valeur `None`.
 
 ## Conséquences
 

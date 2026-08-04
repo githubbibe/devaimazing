@@ -254,6 +254,42 @@ async def start_feature_dialogue(
     )
 
 
+async def start_feature_edit_dialogue(
+    bot: Any, chat_id: int, message_thread_id: int, config: StudioConfig,
+    feature_name: str, existing_content: str,
+) -> None:
+    """
+    Démarre un dialogue de cadrage PM pour MODIFIER une feature déjà cadrée
+    (menu "Modifier une feature", ADR 0015 Décision 7 révisée) — même
+    mécanisme que start_feature_dialogue, mais le PM voit la fiche actuelle
+    dès le premier tour et discute des changements à apporter, au lieu de
+    repartir d'une page blanche.
+
+    Valide toujours vers un NOUVEAU run_id (voir _generate_run_id) : la
+    ligne existante de specs/planification.md pour ce nom de feature sera
+    remplacée à la validation (valider_fiche_feature -> upsert_entry, indexé
+    par nom de feature), ce qui signale naturellement à /run qu'une nouvelle
+    version doit être produite. Le code déjà fusionné dans develop par le
+    run précédent (voir studio.nodes.closer) n'est pas retiré : le nouveau
+    run doit l'adapter, pas repartir de zéro.
+
+    Args:
+        feature_name: Nom de la feature tel qu'extrait de sa fiche actuelle
+            (voir studio.nodes.pm.extract_feature_name) — utilisé seulement
+            pour le message initial au PM, pas pour retrouver quoi que ce
+            soit (l'appelant a déjà résolu run_id/contenu, voir
+            tools.registry._handle_modifier_feature).
+        existing_content: Contenu actuel de card-root.md pour cette feature.
+    """
+    run_id = _generate_run_id()
+    await _start_dialogue(
+        bot, chat_id, message_thread_id, config, "feature", run_id,
+        f"Modification d'une feature DÉJÀ CADRÉE : {feature_name}.\n\n"
+        f"Fiche actuelle :\n\n{existing_content}\n\n"
+        "L'utilisateur souhaite la modifier — demande-lui ce qui doit changer.",
+    )
+
+
 async def start_project_dialogue(
     bot: Any, chat_id: int, message_thread_id: int, config: StudioConfig, project_name: str,
 ) -> None:

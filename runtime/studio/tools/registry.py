@@ -191,6 +191,44 @@ async def _handle_new_feature(
     return {}
 
 
+async def _handle_modifier_feature(
+    config: StudioConfig, *, feature_name: str, bot: Optional[Any] = None,
+    chat_id: Optional[int] = None, message_thread_id: Optional[int] = None, **_: Any,
+) -> dict[str, Any]:
+    """
+    Rouvre le cadrage d'une feature déjà cadrée (menu "Modifier une
+    feature", ADR 0015 Décision 7 révisée) — délègue à
+    studio.telegram.pm_dialogue.start_feature_edit_dialogue, qui seed le
+    dialogue avec le contenu actuel de sa fiche au lieu d'une page blanche.
+
+    Raises:
+        ValueError: feature_name absent de specs/planification.md, ou fiche
+            introuvable sur disque (incohérence, ne devrait pas arriver en
+            usage normal).
+    """
+    if bot is None or chat_id is None or message_thread_id is None:
+        raise RuntimeError(
+            "modifier_feature nécessite un contexte Telegram complet (bot, chat_id, topic)."
+        )
+
+    entry = await planification.find_entry(config, feature_name)
+    if entry is None:
+        raise ValueError(f"Feature {feature_name!r} inconnue dans planification.md.")
+
+    specs_dir = config.get("structure", {}).get("specs_dir", "specs/")
+    card_root_path = config.repo_path / specs_dir / entry.run_id / "card-root.md"
+    if not card_root_path.is_file():
+        raise ValueError(f"Fiche introuvable pour {feature_name!r} : {card_root_path}")
+    content = card_root_path.read_text(encoding="utf-8")
+
+    from studio.telegram.pm_dialogue import start_feature_edit_dialogue
+
+    await start_feature_edit_dialogue(
+        bot, chat_id, message_thread_id, config, feature_name, content,
+    )
+    return {}
+
+
 async def _handle_cadrer_projet(
     config: StudioConfig, *, bot: Optional[Any] = None, chat_id: Optional[int] = None,
     message_thread_id: Optional[int] = None, **_: Any,
@@ -441,6 +479,22 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         sauvegarde_avant=False,
         handler=_handle_new_feature,
         slash_command="/new_feature",
+    ),
+    "modifier_feature": ToolSpec(
+        name="modifier_feature",
+        description="Rouvre le cadrage d'une feature déjà cadrée pour la modifier.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "feature_name": {"type": "string", "description": "Nom de la feature"},
+            },
+            "required": ["feature_name"],
+        },
+        destructif=False,
+        requiert_confirmation=False,
+        sauvegarde_avant=False,
+        handler=_handle_modifier_feature,
+        slash_command="/modifier_feature",
     ),
     "cadrer_projet": ToolSpec(
         name="cadrer_projet",
