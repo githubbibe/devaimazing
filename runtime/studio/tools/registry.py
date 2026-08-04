@@ -28,7 +28,7 @@ from studio.config import StudioConfig
 from studio.nodes.pm import extract_feature_name
 from studio.tools import planification, queries
 from studio.tools.filesystem import write_card
-from studio.tools.git import commit_safety_snapshot, current_branch, push_branch
+from studio.tools.git import commit_as_agent, commit_safety_snapshot, current_branch, push_branch
 from studio.tools.project_config import set_project_thread_id
 
 
@@ -275,12 +275,23 @@ async def _handle_valider_fiche_feature(
     "à faire") — c'est le seul point d'écriture qui associe un nom de
     feature (extrait de la fiche) à ce run_id, condition nécessaire pour
     que /run <nom_feature> (ADR 0015, Décision 4) puisse le retrouver.
+
+    Commit + push immédiats (identité git "pm") : contrairement au
+    transcript de dialogue (persisté en continu, voir
+    telegram.pm_dialogue._persist_dialogue_state, mais seulement sur disque
+    local), une fiche validée est un livrable — sa perte (poste de travail
+    perdu, disque local corrompu) ne doit pas être possible une fois
+    l'utilisateur passé au clic « Oui ». Aucune branche de run n'existe
+    encore à ce stade (ADR 0015, Décision 3 : elle naît au démarrage
+    effectif du run) — le commit/push a lieu sur la branche courante
+    (`develop` en usage normal).
     """
     specs_dir = config.get("structure", {}).get("specs_dir", "specs/")
     card_root_relative = str(Path(specs_dir) / run_id / "card-root.md")
     await write_card(config.repo_path / card_root_relative, content)
 
     feature_name = extract_feature_name(content)
+    planification_relative = str(Path(specs_dir) / "planification.md")
     await planification.upsert_entry(
         config,
         planification.PlanificationEntry(
@@ -290,6 +301,13 @@ async def _handle_valider_fiche_feature(
             content_hash=planification.hash_content(content),
         ),
     )
+
+    await commit_as_agent(
+        config.repo_path, "pm", f"docs: valide la fiche feature {feature_name}",
+        [card_root_relative, planification_relative],
+    )
+    await push_branch(config.repo_path, await current_branch(config.repo_path))
+
     return {"card_root_path": card_root_relative, "feature_name": feature_name}
 
 
@@ -325,10 +343,20 @@ async def _handle_valider_fiche_projet(
     n'appartient à aucun run précis, à la différence d'une fiche feature (voir
     valider_fiche_feature). Pas de slash_command : déclenché uniquement par
     pm_dialogue, jamais tapé ni sélectionné directement.
+
+    Commit + push immédiats (identité git "pm") — voir valider_fiche_feature
+    pour le raisonnement (une fiche validée est un livrable, sa perte ne
+    doit pas être possible une fois la confirmation donnée).
     """
     specs_dir = config.get("structure", {}).get("specs_dir", "specs/")
     fiche_projet_relative = str(Path(specs_dir) / "fiche-projet.md")
     await write_card(config.repo_path / fiche_projet_relative, content)
+
+    await commit_as_agent(
+        config.repo_path, "pm", "docs: valide la fiche projet", [fiche_projet_relative],
+    )
+    await push_branch(config.repo_path, await current_branch(config.repo_path))
+
     return {"fiche_projet_path": fiche_projet_relative}
 
 

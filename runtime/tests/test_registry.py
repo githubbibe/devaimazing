@@ -283,6 +283,30 @@ def demo_config_dir(tmp_path: Path) -> Path:
     return config_dir
 
 
+def _patch_fiche_git(monkeypatch: pytest.MonkeyPatch, *, branch: str = "develop"):
+    """Mocke commit_as_agent/current_branch/push_branch pour les tests de
+    valider_fiche_feature/valider_fiche_projet (ADR 0015 : une fiche
+    validée est commitée+poussée immédiatement, voir registry.py) — même
+    motif que _patch_archive_git ci-dessous, pas de vrai repo git dans ces
+    tests unitaires."""
+    calls: dict = {}
+
+    async def fake_commit_as_agent(repo_path, agent, message, files, tracer=None):
+        calls["commit"] = (repo_path, agent, message, files)
+        return "abc123"
+
+    async def fake_current_branch(repo_path):
+        return branch
+
+    async def fake_push_branch(repo_path, target_branch, remote="origin"):
+        calls["push"] = (repo_path, target_branch)
+
+    monkeypatch.setattr(registry_module, "commit_as_agent", fake_commit_as_agent)
+    monkeypatch.setattr(registry_module, "current_branch", fake_current_branch)
+    monkeypatch.setattr(registry_module, "push_branch", fake_push_branch)
+    return calls
+
+
 def _patch_archive_git(monkeypatch: pytest.MonkeyPatch, *, commit_hash):
     calls: dict = {}
 
@@ -520,7 +544,10 @@ async def test_valider_fiche_feature_requires_confirmation():
     assert result.status == "needs_confirmation"
 
 
-async def test_valider_fiche_feature_writes_card(tmp_path: Path):
+async def test_valider_fiche_feature_writes_card(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    calls = _patch_fiche_git(monkeypatch)
     config = SimpleNamespace(repo_path=tmp_path, get=lambda key, default=None: default)
     content = "# Ma fiche\n\n**Nom de la feature** : ajout-panier\n"
 
@@ -535,6 +562,14 @@ async def test_valider_fiche_feature_writes_card(tmp_path: Path):
     assert result.data == {
         "card_root_path": "specs/run-042/card-root.md", "feature_name": "ajout-panier",
     }
+    # Commit+push immédiats (identité "pm") — une fiche validée est un
+    # livrable, sa perte ne doit pas dépendre du seul disque local.
+    repo_path, agent, message, files = calls["commit"]
+    assert repo_path == tmp_path
+    assert agent == "pm"
+    assert "ajout-panier" in message
+    assert set(files) == {"specs/run-042/card-root.md", "specs/planification.md"}
+    assert calls["push"] == (tmp_path, "develop")
 
 
 async def test_valider_fiche_feature_upserts_planification(tmp_path: Path):
@@ -595,7 +630,10 @@ async def test_valider_fiche_projet_requires_confirmation():
     assert result.status == "needs_confirmation"
 
 
-async def test_valider_fiche_projet_writes_card(tmp_path: Path):
+async def test_valider_fiche_projet_writes_card(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    calls = _patch_fiche_git(monkeypatch)
     config = SimpleNamespace(repo_path=tmp_path, get=lambda key, default=None: default)
 
     result = await execute_tool(
@@ -607,6 +645,11 @@ async def test_valider_fiche_projet_writes_card(tmp_path: Path):
     card_path = tmp_path / "specs" / "fiche-projet.md"
     assert card_path.read_text(encoding="utf-8") == "# Ma fiche projet"
     assert result.data == {"fiche_projet_path": "specs/fiche-projet.md"}
+    repo_path, agent, message, files = calls["commit"]
+    assert repo_path == tmp_path
+    assert agent == "pm"
+    assert files == ["specs/fiche-projet.md"]
+    assert calls["push"] == (tmp_path, "develop")
 
 
 # --- run_feature (ADR 0015, Décision 4) ---

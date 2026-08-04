@@ -15,6 +15,7 @@ import yaml
 import studio.nodes.pm as pm_node
 import studio.telegram.confirmations as confirmations_module
 import studio.telegram.pm_dialogue as pm_dialogue
+import studio.tools.registry as registry_module
 from studio.config import StudioConfig
 from studio.tools.registry import execute_tool
 from studio.telegram.handlers import handle_confirmation_callback
@@ -495,9 +496,32 @@ async def test_handle_dialogue_reply_sends_long_draft_as_document(
     assert len(confirmations_module.pending_confirmations) == 1
 
 
+def _patch_fiche_git(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Mocke commit_as_agent/current_branch/push_branch — valider_fiche_feature/
+    projet commite+pousse immédiatement (voir registry.py), pas de vrai repo
+    git dans ces tests unitaires."""
+    calls: dict = {}
+
+    async def fake_commit_as_agent(repo_path, agent, message, files, tracer=None):
+        calls["commit"] = (repo_path, agent, message, files)
+        return "abc123"
+
+    async def fake_current_branch(repo_path):
+        return "develop"
+
+    async def fake_push_branch(repo_path, branch, remote="origin"):
+        calls["push"] = (repo_path, branch)
+
+    monkeypatch.setattr(registry_module, "commit_as_agent", fake_commit_as_agent)
+    monkeypatch.setattr(registry_module, "current_branch", fake_current_branch)
+    monkeypatch.setattr(registry_module, "push_branch", fake_push_branch)
+    return calls
+
+
 async def test_confirming_draft_writes_card_root(
     monkeypatch: pytest.MonkeyPatch, config: StudioConfig, repo: Path,
 ):
+    git_calls = _patch_fiche_git(monkeypatch)
     responses = [
         _fake_claude_result("QUESTION: quel est le nom de la feature ?"),
         _fake_claude_result(f"FICHE_VALIDEE:\n{VALID_FICHE}"),
@@ -516,7 +540,10 @@ async def test_confirming_draft_writes_card_root(
         f"confirm:{confirmation_id}:yes", chat_id=_CHAT_ID, allowed_chat_id=_CHAT_ID, bot=bot,
     )
 
-    assert reply_text is not None
+    # "card_root_path" n'apparaît que dans le texte de succès
+    # (format_tool_result) — distingue un vrai succès d'une erreur avalée
+    # silencieusement (ex. commit_as_agent qui échouerait sans être mocké).
+    assert "card_root_path" in reply_text
     # Le run_id n'est plus dans _pending_dialogues (nettoyé) — on le retrouve
     # via le seul dossier créé sous specs/ (planification.md, écrit par
     # valider_fiche_feature depuis l'ADR 0015/Décision 4, est un fichier,
@@ -525,6 +552,12 @@ async def test_confirming_draft_writes_card_root(
     assert len(run_dirs) == 1
     card_path = run_dirs[0] / "card-root.md"
     assert card_path.read_text(encoding="utf-8") == VALID_FICHE.strip()
+    repo_path, agent, message, files = git_calls["commit"]
+    assert agent == "pm"
+    assert set(files) == {
+        f"specs/{run_dirs[0].name}/card-root.md", "specs/planification.md",
+    }
+    assert git_calls["push"] == (repo_path, "develop")
 
 
 # --- start_project_dialogue (ADR 0015, phase 2) ---
@@ -557,6 +590,7 @@ async def test_start_project_dialogue_posts_first_question(
 async def test_project_dialogue_validated_draft_calls_valider_fiche_projet(
     monkeypatch: pytest.MonkeyPatch, config: StudioConfig, repo: Path,
 ):
+    git_calls = _patch_fiche_git(monkeypatch)
     responses = [
         _fake_claude_result("QUESTION: quel est l'objectif du projet ?"),
         _fake_claude_result(f"FICHE_VALIDEE:\n{VALID_FICHE_PROJET}"),
@@ -580,6 +614,10 @@ async def test_project_dialogue_validated_draft_calls_valider_fiche_projet(
         f"confirm:{confirmation_id}:yes", chat_id=_CHAT_ID, allowed_chat_id=_CHAT_ID, bot=bot,
     )
 
-    assert reply_text is not None
+    assert "fiche_projet_path" in reply_text
     card_path = repo / "specs" / "fiche-projet.md"
     assert card_path.read_text(encoding="utf-8") == VALID_FICHE_PROJET.strip()
+    repo_path, agent, message, files = git_calls["commit"]
+    assert agent == "pm"
+    assert files == ["specs/fiche-projet.md"]
+    assert git_calls["push"] == (repo_path, "develop")
