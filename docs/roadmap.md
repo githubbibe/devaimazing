@@ -1083,6 +1083,24 @@ identifiée — pas de fix tenté, à investiguer séparément si ça se reprodu
       comportement documenté de l'API Telegram (un bot ne reçoit pas ses
       propres messages en update), pas vérifié en conditions réelles avec
       plusieurs bots dans le même groupe.
+   4. **Hallucination en General sur un message hors sujet, limitation
+      connue (2026-08-04)** : un message tapé par erreur dans General (au
+      lieu du topic-projet visé) qui ne concerne ni un outil ni le studio
+      lui-même (ex. une description de fonctionnalité d'un projet) tombe
+      dans la branche 2 de `_build_tool_directive` (`tool_call` null,
+      réponse texte libre) — `gemma3:4b` peut alors halluciner en
+      roleplayant l'application décrite plutôt que de signaler l'absence
+      d'action pertinente (constaté en usage réel, todolist3 : décrire une
+      todolist a produit une fausse réponse d'assistant todo-app, avec de
+      fausses commandes inventées). Une tentative de correctif (instruction
+      négative ajoutée à `_build_tool_directive`) testée empiriquement
+      (`gemma3:4b` réel, pas seulement lu) **n'a pas fonctionné** — le
+      modèle a continué à halluciner, et un effet de bord a été observé sur
+      un cas déjà validé (« comment ça marche ce bot ? » a déclenché
+      `lister_projets` au lieu d'une réponse texte). Corriger proprement
+      demanderait la même rigueur méthodologique que le reste de ce prompt
+      (essais répétés type 11/14, pas un correctif ponctuel non revalidé) —
+      non entrepris, le déclencheur (se tromper de canal) restant étroit.
    **S5** (transfert General → topic-projet + `IMPROVEMENTS.md`) : non
    commencée, dépend de S4. `stop_run`/`reject_checkpoint` (déjà déclarés
    dans `TOOL_REGISTRY` avec leurs métadonnées, handler `NotImplementedError`)
