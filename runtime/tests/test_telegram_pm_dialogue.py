@@ -404,6 +404,39 @@ async def test_handle_dialogue_reply_validated_draft_presents_confirmation(
     assert len(confirmations_module.pending_confirmations) == 1
 
 
+async def test_handle_dialogue_reply_splits_long_draft_across_messages(
+    monkeypatch: pytest.MonkeyPatch, config: StudioConfig,
+):
+    """Une fiche complète peut dépasser la limite Telegram par message
+    (4096 caractères) — crash constaté en usage réel avant ce fix
+    (todolist3, cadrage de gestion-taches). Le clavier de confirmation doit
+    rester joignable, attaché au dernier morceau envoyé."""
+    long_fiche = "**Nom de la feature** : ajout-panier\n" + ("x" * 9000)
+    responses = [
+        _fake_claude_result("QUESTION: quel est le nom de la feature ?"),
+        _fake_claude_result(f"FICHE_VALIDEE:\n{long_fiche}"),
+    ]
+
+    async def fake_run_claude_code(**kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+    bot = _FakeBot()
+    await pm_dialogue.start_feature_dialogue(bot, _CHAT_ID, _THREAD_ID, config)
+
+    consumed = await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier", _MESSAGE_ID)
+
+    assert consumed is True
+    # Plus d'un seul message de brouillon (1 question initiale + plusieurs
+    # morceaux) — aucun crash "message is too long".
+    assert len(bot.messages) > 2
+    for message in bot.messages[1:-1]:
+        assert len(message["text"]) <= pm_dialogue._TELEGRAM_MESSAGE_LIMIT
+        assert message["reply_markup"] is None
+    assert bot.messages[-1]["reply_markup"] is not None
+    assert len(confirmations_module.pending_confirmations) == 1
+
+
 async def test_confirming_draft_writes_card_root(
     monkeypatch: pytest.MonkeyPatch, config: StudioConfig, repo: Path,
 ):

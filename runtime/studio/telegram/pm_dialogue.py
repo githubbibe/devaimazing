@@ -161,6 +161,34 @@ def _validation_tool_call(state: _DialogueState, draft: str) -> tuple[str, dict[
     return "valider_fiche_projet", {"content": draft}
 
 
+# Limite Telegram réelle par message (sendMessage échoue avec "message is
+# too long" au-delà) — une fiche complète (checklist d'intention, checklist
+# sécurité, critères d'acceptation) peut dépasser cette taille, contrairement
+# aux questions courtes du dialogue — crash constaté en usage réel
+# (todolist3, cadrage de gestion-taches, voir docs/roadmap.md).
+_TELEGRAM_MESSAGE_LIMIT = 4096
+
+
+def _split_message(text: str, limit: int = _TELEGRAM_MESSAGE_LIMIT) -> list[str]:
+    """Découpe text en morceaux d'au plus `limit` caractères, sur une
+    frontière de ligne quand c'est possible — un seul élément si text tient
+    déjà dans la limite (cas normal, aucun changement de comportement)."""
+    if len(text) <= limit:
+        return [text]
+
+    chunks = []
+    remaining = text
+    while len(remaining) > limit:
+        split_at = remaining.rfind("\n", 0, limit)
+        if split_at <= 0:
+            split_at = limit
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:].lstrip("\n")
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
 async def _present_draft(
     bot: Any, chat_id: int, message_thread_id: int, state: _DialogueState, draft: str,
 ) -> None:
@@ -169,6 +197,11 @@ async def _present_draft(
     confirmation Oui/Non — réutilise le même mécanisme que les outils
     destructifs du registre (execute_tool + pending_confirmations +
     build_confirmation_keyboard), au lieu d'une réponse tapée comme en CLI.
+
+    Découpé en plusieurs messages si le texte dépasse la limite Telegram
+    (voir _split_message) — le clavier de confirmation reste attaché
+    uniquement au dernier message envoyé, jamais perdu même si le brouillon
+    est long.
     """
     tool_name, args = _validation_tool_call(state, draft)
     result = await execute_tool(tool_name, args, config=state.config)
@@ -176,10 +209,11 @@ async def _present_draft(
     if result.status == "needs_confirmation":
         confirmation_id = uuid.uuid4().hex[:12]
         pending_confirmations[confirmation_id] = (tool_name, args, state.config)
+        chunks = _split_message(f"{draft}\n\n{result.summary}")
+        for chunk in chunks[:-1]:
+            await bot.send_message(chat_id, chunk, message_thread_id=message_thread_id)
         await bot.send_message(
-            chat_id,
-            f"{draft}\n\n{result.summary}",
-            message_thread_id=message_thread_id,
+            chat_id, chunks[-1], message_thread_id=message_thread_id,
             reply_markup=build_confirmation_keyboard(confirmation_id),
         )
         return
