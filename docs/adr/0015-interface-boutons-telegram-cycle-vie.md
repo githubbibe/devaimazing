@@ -53,6 +53,15 @@ faisait perdre tout le dialogue si la présentation échouait (incident réel : 
 de la limite Telegram par message, voir Décision 7). Un échec à ce stade ne coûte plus
 que la ré-émission de la dernière réponse, jamais la reprise du cadrage entier.
 
+**Révision (2026-08-04), fiche en pièce jointe** : le brouillon de fiche présenté par
+`_present_draft` est envoyé en pièce jointe (`bot.send_document`), pas en texte de
+message — le découpage introduit par la révision « robustesse » ci-dessus réglait le
+crash mais fragmentait la lecture sur plusieurs messages ; une pièce jointe n'a pas la
+limite de 4096 caractères et se lit d'un seul tenant. Le clavier de confirmation reste
+sur un message texte séparé (« Confirmer cette fiche ? ») : `edit_message_text`
+(utilisé après confirmation, voir Décision 7) ne peut éditer qu'un message texte,
+jamais un message document.
+
 **Révision (2026-08-04), suppression du message "Bot démarré."** : le bot ne re-poste
 plus ce message (avec le clavier persistant « Menu ▶ ») à chaque démarrage — spam
 constaté en usage réel (un redémarrage fréquent en session de développement génère
