@@ -72,6 +72,7 @@ class _FakeBot:
         self.chat_actions: list[dict] = []
         self.reactions: list[dict] = []
         self.edits: list[dict] = []
+        self.documents: list[dict] = []
         self._next_message_id = 1000
 
     async def send_message(self, chat_id, text, *, message_thread_id=None, reply_markup=None):
@@ -79,6 +80,15 @@ class _FakeBot:
         message_id = self._next_message_id
         self.messages.append({
             "chat_id": chat_id, "text": text, "message_id": message_id,
+            "message_thread_id": message_thread_id, "reply_markup": reply_markup,
+        })
+        return SimpleNamespace(message_id=message_id)
+
+    async def send_document(self, chat_id, document, *, message_thread_id=None, reply_markup=None):
+        self._next_message_id += 1
+        message_id = self._next_message_id
+        self.documents.append({
+            "chat_id": chat_id, "document": document, "message_id": message_id,
             "message_thread_id": message_thread_id, "reply_markup": reply_markup,
         })
         return SimpleNamespace(message_id=message_id)
@@ -411,13 +421,14 @@ async def test_handle_dialogue_reply_validated_draft_presents_confirmation(
     # Dialogue terminé : plus en attente d'une réponse texte, relayé à la
     # confirmation Oui/Non (même mécanisme que les outils du registre).
     assert _THREAD_ID not in pm_dialogue._pending_dialogues
-    # messages[0] = placeholder de start_feature_dialogue (édité en question),
-    # messages[1] = placeholder de ce tour (édité en "Fiche prête"),
-    # messages[2] = brouillon + confirmation (_present_draft).
-    assert len(bot.messages) == 3
-    draft_message = bot.messages[2]
-    assert VALID_FICHE.strip() in draft_message["text"]
-    assert draft_message["reply_markup"] is not None
+    # La fiche est envoyée en pièce jointe (pas en texte de message, voir
+    # _present_draft), la confirmation sur un message texte séparé.
+    assert len(bot.documents) == 1
+    assert bot.documents[0]["reply_markup"] is None
+    assert len(bot.messages) == 3  # 2 placeholders + le message de confirmation
+    confirm_message = bot.messages[2]
+    assert confirm_message["text"] == "Confirmer cette fiche ?"
+    assert confirm_message["reply_markup"] is not None
     assert len(confirmations_module.pending_confirmations) == 1
 
 
@@ -455,13 +466,13 @@ async def test_handle_dialogue_reply_keeps_dialogue_alive_if_present_draft_fails
     assert any("ajout-panier" in line for line in data["transcript"])
 
 
-async def test_handle_dialogue_reply_splits_long_draft_across_messages(
+async def test_handle_dialogue_reply_sends_long_draft_as_document(
     monkeypatch: pytest.MonkeyPatch, config: StudioConfig,
 ):
-    """Une fiche complète peut dépasser la limite Telegram par message
+    """Une fiche complète peut dépasser la limite Telegram par message texte
     (4096 caractères) — crash constaté en usage réel avant ce fix
-    (todolist3, cadrage de gestion-taches). Le clavier de confirmation doit
-    rester joignable, attaché au dernier morceau envoyé."""
+    (todolist3, cadrage de gestion-taches). Envoyée en pièce jointe, cette
+    limite ne s'applique plus."""
     long_fiche = "**Nom de la feature** : ajout-panier\n" + ("x" * 9000)
     responses = [
         _fake_claude_result("QUESTION: quel est le nom de la feature ?"),
@@ -478,12 +489,8 @@ async def test_handle_dialogue_reply_splits_long_draft_across_messages(
     consumed = await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier", _MESSAGE_ID)
 
     assert consumed is True
-    # Plus d'un seul message de brouillon (1 question initiale + plusieurs
-    # morceaux) — aucun crash "message is too long".
-    assert len(bot.messages) > 2
-    for message in bot.messages[1:-1]:
-        assert len(message["text"]) <= pm_dialogue._TELEGRAM_MESSAGE_LIMIT
-        assert message["reply_markup"] is None
+    assert len(bot.documents) == 1
+    assert bot.documents[0]["document"].data == long_fiche.strip().encode("utf-8")
     assert bot.messages[-1]["reply_markup"] is not None
     assert len(confirmations_module.pending_confirmations) == 1
 

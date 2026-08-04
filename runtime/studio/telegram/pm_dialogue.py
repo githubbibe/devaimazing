@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import BufferedInputFile
 
 from studio.config import StudioConfig
 from studio.nodes.pm import build_cadrage_system_prompt, run_pm_turn
@@ -165,47 +166,33 @@ def _validation_tool_call(state: _DialogueState, draft: str) -> tuple[str, dict[
     return "valider_fiche_projet", {"content": draft}
 
 
-# Limite Telegram réelle par message (sendMessage échoue avec "message is
-# too long" au-delà) — une fiche complète (checklist d'intention, checklist
-# sécurité, critères d'acceptation) peut dépasser cette taille, contrairement
-# aux questions courtes du dialogue — crash constaté en usage réel
-# (todolist3, cadrage de gestion-taches, voir docs/roadmap.md).
-_TELEGRAM_MESSAGE_LIMIT = 4096
-
-
-def _split_message(text: str, limit: int = _TELEGRAM_MESSAGE_LIMIT) -> list[str]:
-    """Découpe text en morceaux d'au plus `limit` caractères, sur une
-    frontière de ligne quand c'est possible — un seul élément si text tient
-    déjà dans la limite (cas normal, aucun changement de comportement)."""
-    if len(text) <= limit:
-        return [text]
-
-    chunks = []
-    remaining = text
-    while len(remaining) > limit:
-        split_at = remaining.rfind("\n", 0, limit)
-        if split_at <= 0:
-            split_at = limit
-        chunks.append(remaining[:split_at])
-        remaining = remaining[split_at:].lstrip("\n")
-    if remaining:
-        chunks.append(remaining)
-    return chunks
+def _draft_filename(state: _DialogueState) -> str:
+    return "fiche-projet.md" if state.kind == "project" else f"{state.trace_id}.md"
 
 
 async def _present_draft(
     bot: Any, chat_id: int, message_thread_id: int, state: _DialogueState, draft: str,
 ) -> None:
     """
-    Poste le brouillon de fiche produit par le PM et déclenche sa
-    confirmation Oui/Non — réutilise le même mécanisme que les outils
-    destructifs du registre (execute_tool + pending_confirmations +
-    build_confirmation_keyboard), au lieu d'une réponse tapée comme en CLI.
+    Poste le brouillon de fiche produit par le PM (en pièce jointe, voir
+    Notes) et déclenche sa confirmation Oui/Non — réutilise le même
+    mécanisme que les outils destructifs du registre (execute_tool +
+    pending_confirmations + build_confirmation_keyboard), au lieu d'une
+    réponse tapée comme en CLI.
 
-    Découpé en plusieurs messages si le texte dépasse la limite Telegram
-    (voir _split_message) — le clavier de confirmation reste attaché
-    uniquement au dernier message envoyé, jamais perdu même si le brouillon
-    est long.
+    Notes:
+        La fiche est envoyée en pièce jointe (bot.send_document), pas en
+        texte de message : une fiche complète (checklist d'intention,
+        checklist sécurité, critères d'acceptation) dépasse régulièrement la
+        limite Telegram de 4096 caractères par message texte — crash
+        constaté en usage réel (todolist3, cadrage de gestion-taches, voir
+        docs/roadmap.md). Une pièce jointe n'a pas cette limite (50 Mo côté
+        Telegram), et évite en prime de fragmenter la lecture sur plusieurs
+        messages. Le clavier de confirmation est envoyé sur un message TEXTE
+        séparé (pas en légende du document) : `edit_message_text` (utilisé
+        après confirmation, voir handlers.py::_on_callback) ne peut éditer
+        qu'un message texte, jamais un message document — clic sur Oui/Non
+        doit donc porter sur un message texte, pas sur la pièce jointe.
     """
     tool_name, args = _validation_tool_call(state, draft)
     result = await execute_tool(tool_name, args, config=state.config)
@@ -213,11 +200,10 @@ async def _present_draft(
     if result.status == "needs_confirmation":
         confirmation_id = uuid.uuid4().hex[:12]
         pending_confirmations[confirmation_id] = (tool_name, args, state.config)
-        chunks = _split_message(f"{draft}\n\n{result.summary}")
-        for chunk in chunks[:-1]:
-            await bot.send_message(chat_id, chunk, message_thread_id=message_thread_id)
+        document = BufferedInputFile(draft.encode("utf-8"), filename=_draft_filename(state))
+        await bot.send_document(chat_id, document, message_thread_id=message_thread_id)
         await bot.send_message(
-            chat_id, chunks[-1], message_thread_id=message_thread_id,
+            chat_id, "Confirmer cette fiche ?", message_thread_id=message_thread_id,
             reply_markup=build_confirmation_keyboard(confirmation_id),
         )
         return
@@ -269,9 +255,9 @@ async def _start_dialogue(
         return
 
     # Fiche persistée AVANT toute tentative de présentation — si celle-ci
-    # échoue (ex. dépassement de la limite Telegram, voir _split_message),
-    # le dialogue reste intact (mémoire ET disque) au lieu d'être perdu
-    # (incident réel, todolist3/gestion-taches, voir docs/roadmap.md).
+    # échoue (crash réseau, incident Telegram...), le dialogue reste intact
+    # (mémoire ET disque) au lieu d'être perdu (incident réel,
+    # todolist3/gestion-taches, voir docs/roadmap.md).
     _pending_dialogues[message_thread_id] = state
     _persist_dialogue_state(message_thread_id, state)
     await _edit_or_ignore(bot, chat_id, placeholder.message_id, _PM_DRAFT_READY)
@@ -439,11 +425,11 @@ async def handle_dialogue_reply(
         return True
 
     # Fiche persistée (transcript incluant la réponse finale de l'utilisateur)
-    # AVANT toute tentative de présentation — si celle-ci échoue (ex.
-    # dépassement de la limite Telegram, voir _split_message), le dialogue
-    # reste intact (mémoire ET disque) au lieu d'être perdu (incident réel,
-    # todolist3/gestion-taches, voir docs/roadmap.md) : au pire, il suffit de
-    # renvoyer la même réponse pour que le PM reproduise la fiche.
+    # AVANT toute tentative de présentation — si celle-ci échoue (crash
+    # réseau, incident Telegram...), le dialogue reste intact (mémoire ET
+    # disque) au lieu d'être perdu (incident réel, todolist3/gestion-taches,
+    # voir docs/roadmap.md) : au pire, il suffit de renvoyer la même réponse
+    # pour que le PM reproduise la fiche.
     _persist_dialogue_state(message_thread_id, state)
     await _edit_or_ignore(bot, chat_id, placeholder.message_id, _PM_DRAFT_READY)
     await _present_draft(bot, chat_id, message_thread_id, state, turn.text)
