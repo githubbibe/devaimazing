@@ -27,6 +27,7 @@ pure (pending_confirmations), non couverte ici.
 """
 
 import json
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -42,6 +43,8 @@ from studio.state import Phase
 from studio.telegram.confirmations import build_confirmation_keyboard, pending_confirmations
 from studio.tools.registry import execute_tool, format_tool_result
 from studio.tools.tracer import RunTracer
+
+_logger = logging.getLogger(__name__)
 
 _MODEL_KEY = "pm_opus"
 _DIALOGUES_STATE_DIR = Path("~/.devaimazing/dialogues").expanduser()
@@ -135,8 +138,12 @@ async def _acknowledge_receipt(bot: Any, chat_id: int, message_id: int) -> None:
     réel (aucun signe de réception visible après avoir répondu au PM)."""
     try:
         await bot.set_message_reaction(chat_id, message_id, reaction=[ReactionTypeEmoji(emoji="👀")])
-    except TelegramBadRequest:
-        pass
+    except TelegramBadRequest as exc:
+        # Non fatal (voir docstring) mais tracé : sans ce log, un rejet
+        # systématique côté Telegram (réactions désactivées sur le groupe,
+        # émoji hors de la liste autorisée, etc.) resterait invisible aussi
+        # bien en test (FakeBot simule toujours un succès) qu'en usage réel.
+        _logger.warning("set_message_reaction a échoué : %s", exc)
 
 
 def _generate_run_id() -> str:
