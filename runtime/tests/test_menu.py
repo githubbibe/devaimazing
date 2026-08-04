@@ -69,13 +69,13 @@ def _callback_data(keyboard) -> list[str]:
 def test_build_root_keyboard_general_has_new_project():
     keyboard = menu_module.build_root_keyboard(in_topic=False)
     assert "Nouveau projet" in _button_labels(keyboard)
-    assert len(keyboard.inline_keyboard) == 6
+    assert len(keyboard.inline_keyboard) == 4
 
 
 def test_build_root_keyboard_topic_has_no_new_project():
     keyboard = menu_module.build_root_keyboard(in_topic=True)
     assert "Nouveau projet" not in _button_labels(keyboard)
-    assert len(keyboard.inline_keyboard) == 5
+    assert len(keyboard.inline_keyboard) == 3
 
 
 # --- menu:root ---
@@ -94,6 +94,33 @@ async def test_root_screen_from_known_topic(config_dir: Path):
     )
     assert "demo" in text
     assert "Nouveau projet" not in _button_labels(keyboard)
+
+
+# --- menu:feature_menu (sous-menu Créer/Modifier/Lancer) ---
+
+async def test_root_screen_has_single_feature_button(config_dir: Path):
+    text, keyboard = await menu_module.handle_menu_callback(
+        "menu:root", chat_id=_CHAT_ID, message_thread_id=111, config_dir=config_dir, bot=_FakeBot(),
+    )
+    labels = _button_labels(keyboard)
+    assert "Feature..." in labels
+    assert "Nouvelle feature" not in labels
+    assert "Modifier une feature" not in labels
+    assert "Lancer une feature" not in labels
+
+
+async def test_feature_menu_shows_submenu(config_dir: Path):
+    text, keyboard = await menu_module.handle_menu_callback(
+        "menu:feature_menu", chat_id=_CHAT_ID, message_thread_id=111,
+        config_dir=config_dir, bot=_FakeBot(),
+    )
+
+    labels = _button_labels(keyboard)
+    assert labels == ["Créer", "Modifier", "Lancer", "◀ Retour"]
+    callback_data = _callback_data(keyboard)
+    assert callback_data == [
+        "menu:new_feature", "menu:modifier_feature", "menu:run_feature", "menu:root",
+    ]
 
 
 # --- menu:new_project ---

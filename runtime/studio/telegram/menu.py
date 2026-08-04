@@ -12,9 +12,10 @@ message et config_dir) — pas d'état à perdre si le bot redémarre pendant
 qu'un menu est affiché.
 
 Un seul niveau de retour (« ◀ Retour » ramène toujours à menu:root, jamais
-un retour pas-à-pas) : l'arbre ne fait que 2 niveaux (root -> sélection
-projet -> feuille, ou root -> liste de features), un vrai back-stack serait
-disproportionné pour cette profondeur.
+un retour pas-à-pas), quelle que soit la profondeur réelle de l'écran
+affiché (root -> Feature... -> sélection projet -> liste de features ->
+feuille, au pire) — un vrai back-stack serait disproportionné pour cette
+profondeur.
 """
 
 import uuid
@@ -50,19 +51,30 @@ def persistent_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[[KeyboardButton(text=MENU_BUTTON_LABEL)]], resize_keyboard=True,
     )
 
-_ROOT_ACTIONS_GENERAL = [
-    "new_project", "cadrer_projet", "new_feature", "modifier_feature", "run_feature", "archive",
-]
-_ROOT_ACTIONS_TOPIC = ["cadrer_projet", "new_feature", "modifier_feature", "run_feature", "archive"]
+_ROOT_ACTIONS_GENERAL = ["new_project", "cadrer_projet", "feature_menu", "archive"]
+_ROOT_ACTIONS_TOPIC = ["cadrer_projet", "feature_menu", "archive"]
 _LABELS = {
     "new_project": "Nouveau projet",
     "cadrer_projet": "Cadrer le projet",
+    "feature_menu": "Feature...",
     "new_feature": "Nouvelle feature",
     "modifier_feature": "Modifier une feature",
     "run_feature": "Lancer une feature",
     "archive": "Archiver ce projet",
 }
 _BACK_BUTTON = InlineKeyboardButton(text="◀ Retour", callback_data=f"{CALLBACK_PREFIX}:root")
+
+# Sous-menu "Feature..." (regroupe les 3 actions liées à une feature, moins
+# de boutons à la racine) — callback_data identique à l'ancien bouton
+# racine direct (menu:new_feature, etc.), donc aucun changement du dispatch
+# en aval (handle_menu_callback) : ce sous-menu n'est qu'un regroupement
+# visuel d'un niveau supplémentaire, pas une nouvelle logique.
+_FEATURE_SUBMENU_ACTIONS = ["new_feature", "modifier_feature", "run_feature"]
+_FEATURE_SUBMENU_LABELS = {
+    "new_feature": "Créer",
+    "modifier_feature": "Modifier",
+    "run_feature": "Lancer",
+}
 
 _CONFIG_RESOLUTION_ERRORS = (FileNotFoundError, ValueError)
 
@@ -112,6 +124,19 @@ def _root_screen(config_dir: Path, message_thread_id: Optional[int]) -> tuple[st
     project_name = resolve_project(message_thread_id, load_topic_map(config_dir))
     text = f"Projet {project_name} — que veux-tu faire ?" if project_name else "Que veux-tu faire ?"
     return text, build_root_keyboard(in_topic=True)
+
+
+def _feature_menu_screen() -> tuple[str, InlineKeyboardMarkup]:
+    """Sous-menu du bouton racine « Feature... » — Créer/Modifier/Lancer,
+    identique en General et en Topic-projet (le branchement
+    sélection-de-projet-vs-direct reste géré par handle_menu_callback, pas
+    ici)."""
+    buttons = [
+        [_button(_FEATURE_SUBMENU_LABELS[action], f"{CALLBACK_PREFIX}:{action}")]
+        for action in _FEATURE_SUBMENU_ACTIONS
+    ]
+    buttons.append([_BACK_BUTTON])
+    return "Feature — quelle action ?", InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def _project_selection_screen(config_dir: Path, action: str) -> tuple[str, InlineKeyboardMarkup]:
@@ -286,6 +311,9 @@ async def handle_menu_callback(
 
     if action == "root":
         return _root_screen(config_dir, message_thread_id)
+
+    if action == "feature_menu":
+        return _feature_menu_screen()
 
     if action == "new_project":
         result = await execute_tool(

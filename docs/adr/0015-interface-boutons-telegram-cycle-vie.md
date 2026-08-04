@@ -175,6 +175,16 @@ repartir de zéro — un retour en arrière (revert du merge) serait risqué (r�
 d'historique, casserait d'éventuelles features postérieures qui en dépendent) pour un
 bénéfice non établi.
 
+**Révision (2026-08-04)** : les 3 boutons liés à une feature (`Nouvelle feature`,
+`Modifier une feature`, `Lancer une feature`) sont regroupés derrière un bouton racine
+unique **`Feature...`**, qui ouvre un sous-menu `[Créer, Modifier, Lancer]` — racine
+moins chargée (3 boutons hors ce sous-menu, au lieu de 5). Chaque bouton du sous-menu
+porte le même `callback_data` que l'ancien bouton racine direct
+(`menu:new_feature`/`menu:modifier_feature`/`menu:run_feature`) : aucun changement du
+dispatch en aval, un niveau de navigation purement visuel en plus. `◀ Retour` depuis ce
+sous-menu ramène toujours à `menu:root` (pas au sous-menu précédent), cohérent avec le
+principe déjà posé plus haut (pas de vrai back-stack).
+
 ## Décision 8 — Contenu des fiches
 
 - **Fiche projet** : nom, objectif, utilisateurs cibles, contraintes, périmètre.
