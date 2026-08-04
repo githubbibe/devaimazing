@@ -71,11 +71,21 @@ class _FakeBot:
         self.messages: list[dict] = []
         self.chat_actions: list[dict] = []
         self.reactions: list[dict] = []
+        self.edits: list[dict] = []
+        self._next_message_id = 1000
 
     async def send_message(self, chat_id, text, *, message_thread_id=None, reply_markup=None):
+        self._next_message_id += 1
+        message_id = self._next_message_id
         self.messages.append({
-            "chat_id": chat_id, "text": text,
+            "chat_id": chat_id, "text": text, "message_id": message_id,
             "message_thread_id": message_thread_id, "reply_markup": reply_markup,
+        })
+        return SimpleNamespace(message_id=message_id)
+
+    async def edit_message_text(self, text, *, chat_id, message_id, reply_markup=None):
+        self.edits.append({
+            "chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup,
         })
 
     async def send_chat_action(self, chat_id, action, *, message_thread_id=None):
@@ -114,17 +124,17 @@ async def test_start_feature_dialogue_posts_first_question(
 
     await pm_dialogue.start_feature_dialogue(bot, _CHAT_ID, _THREAD_ID, config)
 
-    assert len(bot.messages) == 1
-    assert bot.messages[0]["message_thread_id"] == _THREAD_ID
-    assert "nom de la feature" in bot.messages[0]["text"]
-    assert bot.messages[0]["reply_markup"] is None
-    assert _THREAD_ID in pm_dialogue._pending_dialogues
-    # "typing" envoyé avant l'appel PM (potentiellement long) — sans ça, le
+    # Un placeholder envoyé avant l'appel PM (potentiellement long), édité
+    # en place par la question réelle une fois disponible — sans ça, le
     # déclenchement initial d'un dialogue reste silencieux jusqu'à la
     # première question (gap trouvé en usage réel, voir docs/roadmap.md).
-    assert bot.chat_actions == [
-        {"chat_id": _CHAT_ID, "action": "typing", "message_thread_id": _THREAD_ID},
-    ]
+    assert len(bot.messages) == 1
+    assert bot.messages[0]["message_thread_id"] == _THREAD_ID
+    assert bot.messages[0]["text"] == pm_dialogue._PM_PREPARES_QUESTION
+    assert len(bot.edits) == 1
+    assert "nom de la feature" in bot.edits[0]["text"]
+    assert bot.edits[0]["message_id"] == bot.messages[0]["message_id"]
+    assert _THREAD_ID in pm_dialogue._pending_dialogues
 
 
 async def test_start_feature_dialogue_injects_inspiration_sources(
@@ -170,8 +180,8 @@ async def test_start_feature_edit_dialogue_seeds_transcript_with_existing_conten
         bot, _CHAT_ID, _THREAD_ID, config, "ajout-panier", VALID_FICHE,
     )
 
-    assert len(bot.messages) == 1
-    assert "qu'est-ce qui doit changer" in bot.messages[0]["text"]
+    assert len(bot.edits) == 1
+    assert "qu'est-ce qui doit changer" in bot.edits[0]["text"]
     assert _THREAD_ID in pm_dialogue._pending_dialogues
     assert "ajout-panier" in calls[0]["prompt"]
     assert VALID_FICHE in calls[0]["prompt"]
@@ -250,13 +260,13 @@ async def test_handle_dialogue_reply_updates_persisted_transcript(
     assert any("à quoi ça sert" in line for line in data["transcript"])
 
 
-async def test_handle_dialogue_reply_acknowledges_receipt(
+async def test_handle_dialogue_reply_shows_placeholder_then_edits_into_question(
     monkeypatch: pytest.MonkeyPatch, config: StudioConfig,
 ):
-    """Accusé de réception (réaction 👀) posé sur le message reçu — sans ça,
-    aucun signal visible ne persiste pendant un tour de dialogue long, le
-    "typing" de Telegram expirant après quelques secondes (gap remonté en
-    usage réel)."""
+    """Accusé de réception textuel — un placeholder est envoyé dès réception
+    de la réponse, avant l'appel PM potentiellement long, puis édité en
+    place par la question réelle. Remplace l'ancien mécanisme de réaction
+    (👀), jugé moins clair en usage réel (voir docs/roadmap.md)."""
     responses = [
         _fake_claude_result("QUESTION: quel est le nom de la feature ?"),
         _fake_claude_result("QUESTION: à quoi ça sert ?"),
@@ -271,9 +281,13 @@ async def test_handle_dialogue_reply_acknowledges_receipt(
 
     await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier", _MESSAGE_ID)
 
-    assert len(bot.reactions) == 1
-    assert bot.reactions[0]["chat_id"] == _CHAT_ID
-    assert bot.reactions[0]["message_id"] == _MESSAGE_ID
+    # bot.messages[0] = placeholder de start_feature_dialogue,
+    # bot.messages[1] = placeholder de ce tour-ci.
+    assert len(bot.messages) == 2
+    assert bot.messages[1]["text"] == pm_dialogue._PM_PREPARES_ANSWER
+    assert len(bot.edits) == 2
+    assert bot.edits[1]["message_id"] == bot.messages[1]["message_id"]
+    assert "à quoi ça sert" in bot.edits[1]["text"]
 
 
 async def test_handle_dialogue_reply_draft_deletes_persisted_transcript(
@@ -327,7 +341,7 @@ async def test_restore_pending_dialogues_reloads_state_and_allows_continuing(
     consumed = await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "peu importe", _MESSAGE_ID)
 
     assert consumed is True
-    assert "à quoi ça sert" in bot.messages[0]["text"]
+    assert "à quoi ça sert" in bot.edits[0]["text"]
 
 
 async def test_restore_pending_dialogues_skips_unknown_project(
@@ -367,12 +381,12 @@ async def test_handle_dialogue_reply_advances_to_next_question(
     consumed = await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier", _MESSAGE_ID)
 
     assert consumed is True
-    # 2 : un pour le tour initial (start_feature_dialogue), un pour la
-    # réponse traitée ici (handle_dialogue_reply).
-    assert len(bot.chat_actions) == 2
-    assert all(action["action"] == "typing" for action in bot.chat_actions)
+    # 2 : un placeholder pour le tour initial (start_feature_dialogue), un
+    # pour la réponse traitée ici (handle_dialogue_reply) — chacun édité en
+    # place par le contenu réel une fois disponible.
     assert len(bot.messages) == 2
-    assert "à quoi ça sert" in bot.messages[1]["text"]
+    assert len(bot.edits) == 2
+    assert "à quoi ça sert" in bot.edits[1]["text"]
     assert _THREAD_ID in pm_dialogue._pending_dialogues
 
 
@@ -397,11 +411,48 @@ async def test_handle_dialogue_reply_validated_draft_presents_confirmation(
     # Dialogue terminé : plus en attente d'une réponse texte, relayé à la
     # confirmation Oui/Non (même mécanisme que les outils du registre).
     assert _THREAD_ID not in pm_dialogue._pending_dialogues
-    assert len(bot.messages) == 2
-    draft_message = bot.messages[1]
+    # messages[0] = placeholder de start_feature_dialogue (édité en question),
+    # messages[1] = placeholder de ce tour (édité en "Fiche prête"),
+    # messages[2] = brouillon + confirmation (_present_draft).
+    assert len(bot.messages) == 3
+    draft_message = bot.messages[2]
     assert VALID_FICHE.strip() in draft_message["text"]
     assert draft_message["reply_markup"] is not None
     assert len(confirmations_module.pending_confirmations) == 1
+
+
+async def test_handle_dialogue_reply_keeps_dialogue_alive_if_present_draft_fails(
+    monkeypatch: pytest.MonkeyPatch, config: StudioConfig, _dialogues_state_dir: Path,
+):
+    """Si _present_draft échoue (crash réseau, incident Telegram...), le
+    dialogue ne doit pas être perdu : il reste en attente (mémoire ET
+    disque), récupérable sans reprendre tout le cadrage — incident réel
+    constaté (todolist3, cadrage de gestion-taches, voir docs/roadmap.md),
+    où le dépassement de la limite Telegram faisait perdre tout le dialogue."""
+    responses = [
+        _fake_claude_result("QUESTION: quel est le nom de la feature ?"),
+        _fake_claude_result(f"FICHE_VALIDEE:\n{VALID_FICHE}"),
+    ]
+
+    async def fake_run_claude_code(**kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr(pm_node, "run_claude_code", fake_run_claude_code)
+
+    async def fake_present_draft(*args, **kwargs):
+        raise RuntimeError("crash simulé")
+
+    monkeypatch.setattr(pm_dialogue, "_present_draft", fake_present_draft)
+
+    bot = _FakeBot()
+    await pm_dialogue.start_feature_dialogue(bot, _CHAT_ID, _THREAD_ID, config)
+
+    with pytest.raises(RuntimeError):
+        await pm_dialogue.handle_dialogue_reply(bot, _CHAT_ID, _THREAD_ID, "ajout-panier", _MESSAGE_ID)
+
+    assert _THREAD_ID in pm_dialogue._pending_dialogues
+    data = json.loads((_dialogues_state_dir / f"{_THREAD_ID}.json").read_text(encoding="utf-8"))
+    assert any("ajout-panier" in line for line in data["transcript"])
 
 
 async def test_handle_dialogue_reply_splits_long_draft_across_messages(
@@ -490,7 +541,8 @@ async def test_start_project_dialogue_posts_first_question(
 
     assert len(bot.messages) == 1
     assert bot.messages[0]["message_thread_id"] == _THREAD_ID
-    assert "objectif du projet" in bot.messages[0]["text"]
+    assert len(bot.edits) == 1
+    assert "objectif du projet" in bot.edits[0]["text"]
     assert _THREAD_ID in pm_dialogue._pending_dialogues
     assert pm_dialogue._pending_dialogues[_THREAD_ID].kind == "project"
 

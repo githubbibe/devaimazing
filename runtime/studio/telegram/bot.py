@@ -13,11 +13,9 @@ from typing import Optional
 
 from aiogram import Bot, Dispatcher
 
-from studio.config import default_config_dir, load_global_telegram_config
-from studio.telegram import menu
+from studio.config import load_global_telegram_config
 from studio.telegram.handlers import build_router
 from studio.telegram.pm_dialogue import restore_pending_dialogues
-from studio.telegram.topics import load_topic_map
 
 _PLACEHOLDER_PREFIX = "<PLACEHOLDER"
 
@@ -63,32 +61,6 @@ def build_bot_and_dispatcher(config_dir: Optional[Path] = None) -> tuple[Bot, Di
     return bot, dispatcher
 
 
-async def _send_persistent_keyboards(bot, chat_id: int, config_dir: Optional[Path]) -> None:
-    """
-    Poste un message portant le clavier persistant « Menu ▶ »
-    (studio.telegram.menu.persistent_keyboard, remplace la commande tapée
-    /menu) dans General et dans chaque topic-projet déjà connu.
-
-    Appelé au démarrage du bot plutôt qu'une seule fois à la création du
-    projet (voir new_project_flow, qui l'attache aussi à ses propres
-    messages) : garantit la présence du bouton même pour un topic créé
-    avant l'introduction de cette fonctionnalité, ou si l'état du clavier
-    côté client a été perdu.
-
-    Side effects:
-        Envoie un message dans General et dans chaque topic connu (voir
-        studio.telegram.topics.load_topic_map).
-    """
-    resolved_config_dir = Path(config_dir) if config_dir is not None else default_config_dir()
-    keyboard = menu.persistent_keyboard()
-
-    await bot.send_message(chat_id, "Bot démarré.", reply_markup=keyboard)
-    for thread_id in load_topic_map(resolved_config_dir):
-        await bot.send_message(
-            chat_id, "Bot démarré.", message_thread_id=thread_id, reply_markup=keyboard,
-        )
-
-
 async def run_bot(config_dir: Optional[Path] = None) -> None:
     """
     Démarre le bot en polling — bloque jusqu'à interruption.
@@ -98,18 +70,23 @@ async def run_bot(config_dir: Optional[Path] = None) -> None:
 
     Side effects:
         Recharge les dialogues de cadrage PM interrompus par un précédent
-        arrêt du bot (voir pm_dialogue.restore_pending_dialogues). Poste un
-        message avec le clavier persistant « Menu ▶ » dans General et
-        chaque topic connu (voir _send_persistent_keyboards). Ouvre une
+        arrêt du bot (voir pm_dialogue.restore_pending_dialogues). Ouvre une
         connexion réseau persistante à l'API Telegram (long polling). Se
         termine proprement sur SIGINT/SIGTERM (géré nativement par aiogram)
         ou sur toute exception non catchée par un handler.
+
+    Notes:
+        Ne poste plus de message "Bot démarré." au démarrage (retiré —
+        spam constaté en usage réel, un redémarrage fréquent en session de
+        développement, voir docs/roadmap.md). Le clavier persistant
+        « Menu ▶ » (studio.telegram.menu.persistent_keyboard) reste attaché
+        normalement à la création d'un topic-projet (voir
+        new_project_flow.py) — seul un topic créé avant l'introduction de
+        ce mécanisme ne l'aurait jamais reçu, cas non couvert ici.
     """
     bot, dispatcher = build_bot_and_dispatcher(config_dir)
     try:
         restore_pending_dialogues(config_dir)
-        allowed_chat_id = load_global_telegram_config(config_dir)["allowed_chat_id"]
-        await _send_persistent_keyboards(bot, int(allowed_chat_id), config_dir)
         await dispatcher.start_polling(bot)
     finally:
         await bot.session.close()

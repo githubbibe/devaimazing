@@ -35,7 +35,6 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import ReactionTypeEmoji
 
 from studio.config import StudioConfig
 from studio.nodes.pm import build_cadrage_system_prompt, run_pm_turn
@@ -129,21 +128,26 @@ def restore_pending_dialogues(config_dir: Optional[Path] = None) -> None:
         )
 
 
-async def _acknowledge_receipt(bot: Any, chat_id: int, message_id: int) -> None:
-    """Réaction 👀 posée sur le message reçu, avant l'appel PM potentiellement
-    long — accusé de réception qui reste affiché tant que le tour n'est pas
-    terminé, contrairement à "typing" (send_chat_action) qui expire au bout
-    de quelques secondes côté Telegram et redevient invisible pendant le
-    reste de l'attente sur un tour de dialogue long — gap remonté en usage
-    réel (aucun signe de réception visible après avoir répondu au PM)."""
+# Texte affiché immédiatement après réception d'un message, avant l'appel
+# PM potentiellement long (Claude Code CLI) — remplace l'ancien mécanisme de
+# réaction (👀), jugé moins clair en usage réel qu'un message texte explicite
+# (voir docs/roadmap.md). Édité en place par le contenu réel une fois le
+# tour terminé (voir _edit_or_ignore) : aucun message-poubelle ne persiste
+# dans l'historique du topic.
+_PM_PREPARES_QUESTION = "⏳ Le PM prépare sa question..."
+_PM_PREPARES_ANSWER = "⏳ Le PM prépare sa réponse..."
+_PM_DRAFT_READY = "✅ Fiche prête — voir ci-dessous."
+
+
+async def _edit_or_ignore(bot: Any, chat_id: int, message_id: int, text: str) -> None:
+    """Édite un message déjà envoyé (voir _PM_PREPARES_QUESTION/_ANSWER) —
+    non fatal si Telegram refuse l'édition (ex. message supprimé entre
+    temps), tracé pour ne pas rester invisible comme l'ancien mécanisme de
+    réaction (voir _PM_PREPARES_QUESTION)."""
     try:
-        await bot.set_message_reaction(chat_id, message_id, reaction=[ReactionTypeEmoji(emoji="👀")])
+        await bot.edit_message_text(text, chat_id=chat_id, message_id=message_id)
     except TelegramBadRequest as exc:
-        # Non fatal (voir docstring) mais tracé : sans ce log, un rejet
-        # systématique côté Telegram (réactions désactivées sur le groupe,
-        # émoji hors de la liste autorisée, etc.) resterait invisible aussi
-        # bien en test (FakeBot simule toujours un succès) qu'en usage réel.
-        _logger.warning("set_message_reaction a échoué : %s", exc)
+        _logger.warning("edit_message_text a échoué : %s", exc)
 
 
 def _generate_run_id() -> str:
@@ -235,13 +239,16 @@ async def _start_dialogue(
     seul appel PM, puis question postée + état enregistré, ou brouillon
     présenté directement si le PM n'a besoin d'aucune question.
 
-    "typing" envoyé avant l'appel PM (potentiellement long, Claude Code CLI)
-    — sans ça, le déclenchement initial d'un dialogue (bouton menu ou
-    commande) reste silencieux jusqu'à la première question, contrairement
-    aux tours suivants (voir handle_dialogue_reply, qui l'envoie déjà) —
-    gap trouvé en usage réel (aucun retour visible après avoir cliqué
-    « Cadrer le projet », voir docs/roadmap.md)."""
-    await bot.send_chat_action(chat_id, "typing", message_thread_id=message_thread_id)
+    Un message placeholder (_PM_PREPARES_QUESTION) est envoyé avant l'appel
+    PM (potentiellement long, Claude Code CLI) puis édité en place par le
+    contenu réel — sans ça, le déclenchement initial d'un dialogue (bouton
+    menu ou commande) reste silencieux jusqu'à la première question,
+    contrairement aux tours suivants (voir handle_dialogue_reply) — gap
+    trouvé en usage réel (aucun retour visible après avoir cliqué « Cadrer
+    le projet », voir docs/roadmap.md)."""
+    placeholder = await bot.send_message(
+        chat_id, _PM_PREPARES_QUESTION, message_thread_id=message_thread_id,
+    )
 
     system_prompt = build_cadrage_system_prompt()
     transcript = [transcript_seed]
@@ -258,10 +265,19 @@ async def _start_dialogue(
         transcript.append(f"PM : {turn.text}")
         _pending_dialogues[message_thread_id] = state
         _persist_dialogue_state(message_thread_id, state)
-        await bot.send_message(chat_id, turn.text, message_thread_id=message_thread_id)
+        await _edit_or_ignore(bot, chat_id, placeholder.message_id, turn.text)
         return
 
+    # Fiche persistée AVANT toute tentative de présentation — si celle-ci
+    # échoue (ex. dépassement de la limite Telegram, voir _split_message),
+    # le dialogue reste intact (mémoire ET disque) au lieu d'être perdu
+    # (incident réel, todolist3/gestion-taches, voir docs/roadmap.md).
+    _pending_dialogues[message_thread_id] = state
+    _persist_dialogue_state(message_thread_id, state)
+    await _edit_or_ignore(bot, chat_id, placeholder.message_id, _PM_DRAFT_READY)
     await _present_draft(bot, chat_id, message_thread_id, state, turn.text)
+    del _pending_dialogues[message_thread_id]
+    _delete_persisted_dialogue_state(message_thread_id)
 
 
 async def start_feature_dialogue(
@@ -388,8 +404,10 @@ async def handle_dialogue_reply(
             /new_project engagent tous deux leur dialogue dans un
             topic-projet, jamais en General) — retourne False immédiatement
             dans ce cas.
-        message_id: `message.message_id` du message reçu — voir
-            _acknowledge_receipt.
+        message_id: `message.message_id` du message reçu — non utilisé
+            directement (l'accusé de réception édite désormais un message
+            posté par le bot lui-même, voir _PM_PREPARES_ANSWER), conservé
+            dans la signature pour l'appelant (telegram.handlers._on_message).
 
     Returns:
         True si un dialogue était en attente pour ce topic et que ce message
@@ -405,8 +423,9 @@ async def handle_dialogue_reply(
         return False
 
     state.transcript.append(f"Utilisateur : {text}")
-    await _acknowledge_receipt(bot, chat_id, message_id)
-    await bot.send_chat_action(chat_id, "typing", message_thread_id=message_thread_id)
+    placeholder = await bot.send_message(
+        chat_id, _PM_PREPARES_ANSWER, message_thread_id=message_thread_id,
+    )
 
     tracer = RunTracer.for_run(state.config, state.trace_id).for_agent("pm", Phase.CADRAGE)
     turn, *_ = await run_pm_turn(
@@ -416,10 +435,18 @@ async def handle_dialogue_reply(
     if turn.kind == "question":
         state.transcript.append(f"PM : {turn.text}")
         _persist_dialogue_state(message_thread_id, state)
-        await bot.send_message(chat_id, turn.text, message_thread_id=message_thread_id)
+        await _edit_or_ignore(bot, chat_id, placeholder.message_id, turn.text)
         return True
 
+    # Fiche persistée (transcript incluant la réponse finale de l'utilisateur)
+    # AVANT toute tentative de présentation — si celle-ci échoue (ex.
+    # dépassement de la limite Telegram, voir _split_message), le dialogue
+    # reste intact (mémoire ET disque) au lieu d'être perdu (incident réel,
+    # todolist3/gestion-taches, voir docs/roadmap.md) : au pire, il suffit de
+    # renvoyer la même réponse pour que le PM reproduise la fiche.
+    _persist_dialogue_state(message_thread_id, state)
+    await _edit_or_ignore(bot, chat_id, placeholder.message_id, _PM_DRAFT_READY)
+    await _present_draft(bot, chat_id, message_thread_id, state, turn.text)
     del _pending_dialogues[message_thread_id]
     _delete_persisted_dialogue_state(message_thread_id)
-    await _present_draft(bot, chat_id, message_thread_id, state, turn.text)
     return True

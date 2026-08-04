@@ -32,6 +32,35 @@ visuellement mais consomme des appels `edit_message` répétés (limite Telegram
 et demande de gérer un état supplémentaire (id du message à éditer/supprimer) pour un
 gain non retenu comme nécessaire.
 
+**Révision (2026-08-04)** : décision inversée pour le dialogue de cadrage PM
+(`studio.telegram.pm_dialogue`) — `"typing"` ne suffit plus, remplacé par un message
+texte explicite (« ⏳ Le PM prépare sa question... » / « ...sa réponse... »), édité en
+place par le contenu réel une fois disponible (le coût d'`edit_message` rejeté
+ci-dessus est ici accepté : une seule édition par tour, pas un cycle périodique).
+Deux gaps constatés en usage réel (`todolist3`) ont motivé ce changement :
+- `"typing"` expire après ~5 secondes côté Telegram, largement avant la fin d'un appel
+  Claude Code CLI (souvent 10 à 150+ secondes) — aucun signal ne reste visible pendant
+  l'essentiel de l'attente.
+- Un accusé de réception par réaction (émoji 👀 posé sur le message reçu, tentative
+  intermédiaire avant cette révision) s'est révélé moins clair pour l'utilisateur qu'un
+  message texte explicite annonçant ce qui se prépare — mécanisme retiré.
+
+**Révision (2026-08-04), robustesse** : le brouillon produit par le PM
+(`FICHE_VALIDEE:`) est désormais persisté (mémoire ET disque, `_persist_dialogue_state`)
+**avant** toute tentative de présentation à l'utilisateur, et le dialogue n'est retiré
+de l'état en attente qu'**après** une présentation réussie — auparavant l'ordre inverse
+faisait perdre tout le dialogue si la présentation échouait (incident réel : dépassement
+de la limite Telegram par message, voir Décision 7). Un échec à ce stade ne coûte plus
+que la ré-émission de la dernière réponse, jamais la reprise du cadrage entier.
+
+**Révision (2026-08-04), suppression du message "Bot démarré."** : le bot ne re-poste
+plus ce message (avec le clavier persistant « Menu ▶ ») à chaque démarrage — spam
+constaté en usage réel (un redémarrage fréquent en session de développement génère
+autant de messages inutiles dans chaque topic connu). Le clavier persistant reste
+attaché normalement à la création d'un topic-projet (`new_project_flow.py`) ; seul un
+topic créé avant l'introduction de ce mécanisme ne l'aurait jamais reçu — cas non
+couvert, jugé négligeable (tous les projets actifs l'ont déjà reçu).
+
 ## Décision 2 — Commandes revues
 
 **Révoquées**, remplacées par la navigation par boutons (Décision 7) ou par une
