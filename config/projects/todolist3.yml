@@ -26,8 +26,13 @@ reference_files:
   architect_map: specs/architect-map.md
 
 # Overrides de modèles (optionnel, hérite de studio.yml si non défini)
-# models:
-#   agents_local: qwen2.5:14b-instruct  # si assez de RAM
+# qwen2.5:7b-instruct (défaut studio.yml) a échoué 3/3 itérations sur l'agent
+# back de gestion-taches (requirements.txt jamais créé -> ModuleNotFoundError
+# pydantic en vérification, + erreur de syntaxe récurrente non corrigée
+# malgré le feedback, run FAILED le 2026-08-05) — passage à 14b, machine à
+# 24 Go de RAM, modèle déjà présent localement (9 Go).
+models:
+  agents_local: qwen2.5:14b-instruct
 
 # Commande de test du projet cible (phase 7, agent Test). Placeholder
 # {target_dir} substitué par repo_path à l'exécution. À décommenter et
