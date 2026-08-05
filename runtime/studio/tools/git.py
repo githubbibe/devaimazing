@@ -504,9 +504,24 @@ async def init_repo(repo_path: Path, initial_branch: str = "develop") -> None:
     await _run_git(repo_path, "init", "-b", initial_branch)
 
 
+_INITIAL_GITIGNORE = """\
+# Fichiers système macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Fichiers système Windows
+Thumbs.db
+ehthumbs.db
+"""
+
+
 async def create_initial_commit(repo_path: Path, project_name: str) -> str:
     """
-    Crée le commit initial (README.md minimal) d'un repo tout juste initialisé.
+    Crée le commit initial (README.md + .gitignore minimal) d'un repo tout
+    juste initialisé.
 
     Args:
         repo_path: Chemin absolu vers le repo projet (déjà initialisé via init_repo).
@@ -519,14 +534,21 @@ async def create_initial_commit(repo_path: Path, project_name: str) -> str:
         RuntimeError: Si le commit échoue.
 
     Side effects:
-        Crée/écrase repo_path/README.md et crée un commit sur la branche courante.
+        Crée/écrase repo_path/README.md et repo_path/.gitignore, et crée un
+        commit sur la branche courante.
 
     Notes:
         Identité Git dédiée (devaimazing-bootstrap), distincte de
         AGENT_GIT_IDENTITIES : ce commit ne représente le travail d'aucun agent,
         seulement l'initialisation du repo par la commande `new-project`.
+
+        Le .gitignore initial ne couvre que les fichiers système (OS) — le
+        stack technique du projet cible n'est pas encore connu à ce stade
+        (choisi plus tard par l'Architecte) ; les agents Back/Front peuvent
+        compléter ce fichier une fois la stack fixée.
     """
     (repo_path / "README.md").write_text(f"# {project_name}\n", encoding="utf-8")
+    (repo_path / ".gitignore").write_text(_INITIAL_GITIGNORE, encoding="utf-8")
     env = {
         **os.environ,
         "GIT_AUTHOR_NAME": "devaimazing-bootstrap",
@@ -534,7 +556,7 @@ async def create_initial_commit(repo_path: Path, project_name: str) -> str:
         "GIT_COMMITTER_NAME": "devaimazing-bootstrap",
         "GIT_COMMITTER_EMAIL": "bootstrap@aimazing.fr",
     }
-    await _run_git(repo_path, "add", "README.md")
+    await _run_git(repo_path, "add", "README.md", ".gitignore")
     await _run_git(repo_path, "commit", "-m", f"chore: initialise {project_name}", env=env)
     return await _run_git(repo_path, "rev-parse", "HEAD")
 

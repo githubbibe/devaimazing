@@ -324,9 +324,12 @@ async def test_create_initial_commit_writes_readme_and_commits(tmp_path: Path):
 
     assert re.fullmatch(r"[0-9a-f]{40}", commit_hash)
     assert (repo_path / "README.md").read_text(encoding="utf-8") == "# mon-projet\n"
+    assert ".DS_Store" in (repo_path / ".gitignore").read_text(encoding="utf-8")
     assert _git(repo_path, "log", "-1", "--format=%s") == "chore: initialise mon-projet"
     author = _git(repo_path, "log", "-1", "--format=%an <%ae>")
     assert author == "devaimazing-bootstrap <bootstrap@aimazing.fr>"
+    tracked_files = set(_git(repo_path, "ls-tree", "-r", "--name-only", "HEAD").splitlines())
+    assert tracked_files == {"README.md", ".gitignore"}
 
 
 async def test_push_branch_no_remote_raises(tmp_path: Path):
