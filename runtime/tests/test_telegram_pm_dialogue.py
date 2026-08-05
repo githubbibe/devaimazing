@@ -141,7 +141,9 @@ async def test_start_feature_dialogue_posts_first_question(
     # première question (gap trouvé en usage réel, voir docs/roadmap.md).
     assert len(bot.messages) == 1
     assert bot.messages[0]["message_thread_id"] == _THREAD_ID
-    assert bot.messages[0]["text"] == pm_dialogue._PM_PREPARES_QUESTION
+    # Citation aléatoire ajoutée en suffixe (studio.telegram.citations) —
+    # préfixe stable, pas d'égalité exacte.
+    assert bot.messages[0]["text"].startswith(pm_dialogue._PM_PREPARES_QUESTION)
     assert len(bot.edits) == 1
     assert "nom de la feature" in bot.edits[0]["text"]
     assert bot.edits[0]["message_id"] == bot.messages[0]["message_id"]
@@ -295,7 +297,7 @@ async def test_handle_dialogue_reply_shows_placeholder_then_edits_into_question(
     # bot.messages[0] = placeholder de start_feature_dialogue,
     # bot.messages[1] = placeholder de ce tour-ci.
     assert len(bot.messages) == 2
-    assert bot.messages[1]["text"] == pm_dialogue._PM_PREPARES_ANSWER
+    assert bot.messages[1]["text"].startswith(pm_dialogue._PM_PREPARES_ANSWER)
     assert len(bot.edits) == 2
     assert bot.edits[1]["message_id"] == bot.messages[1]["message_id"]
     assert "à quoi ça sert" in bot.edits[1]["text"]

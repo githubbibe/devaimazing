@@ -40,6 +40,7 @@ from aiogram.types import BufferedInputFile
 from studio.config import StudioConfig
 from studio.nodes.pm import build_cadrage_system_prompt, run_pm_turn
 from studio.state import Phase
+from studio.telegram.citations import pick_citation
 from studio.telegram.confirmations import build_confirmation_keyboard, pending_confirmations
 from studio.tools.registry import execute_tool, format_tool_result
 from studio.tools.tracer import RunTracer
@@ -140,6 +141,13 @@ _PM_PREPARES_ANSWER = "⏳ Le PM prépare sa réponse..."
 _PM_DRAFT_READY = "✅ Fiche prête — voir ci-dessous."
 
 
+def _with_citation(text: str) -> str:
+    """Ajoute une citation piochée au hasard (studio.telegram.citations) à
+    un texte d'attente — sur le modèle de l'animation de Claude Code CLI
+    pendant qu'il travaille (demande explicite de l'utilisateur, 2026-08-05)."""
+    return f"{text}\n\n💬 {pick_citation()}"
+
+
 async def _edit_or_ignore(bot: Any, chat_id: int, message_id: int, text: str) -> None:
     """Édite un message déjà envoyé (voir _PM_PREPARES_QUESTION/_ANSWER) —
     non fatal si Telegram refuse l'édition (ex. message supprimé entre
@@ -233,7 +241,7 @@ async def _start_dialogue(
     trouvé en usage réel (aucun retour visible après avoir cliqué « Cadrer
     le projet », voir docs/roadmap.md)."""
     placeholder = await bot.send_message(
-        chat_id, _PM_PREPARES_QUESTION, message_thread_id=message_thread_id,
+        chat_id, _with_citation(_PM_PREPARES_QUESTION), message_thread_id=message_thread_id,
     )
 
     system_prompt = build_cadrage_system_prompt()
@@ -410,7 +418,7 @@ async def handle_dialogue_reply(
 
     state.transcript.append(f"Utilisateur : {text}")
     placeholder = await bot.send_message(
-        chat_id, _PM_PREPARES_ANSWER, message_thread_id=message_thread_id,
+        chat_id, _with_citation(_PM_PREPARES_ANSWER), message_thread_id=message_thread_id,
     )
 
     tracer = RunTracer.for_run(state.config, state.trace_id).for_agent("pm", Phase.CADRAGE)
