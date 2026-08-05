@@ -5,11 +5,56 @@ Charge studio.yml (config globale) et le fichier projet cible.
 Les valeurs projet écrasent les valeurs globales si définies.
 """
 
+import contextlib
+import contextvars
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import yaml
+
+# Alternative à DEVAIMAZING_PROJECT/DEVAIMAZING_CONFIG_DIR (os.environ, donc
+# process-wide) pour les appelants qui exécutent plusieurs projets en
+# parallèle dans le même process — le bot Telegram (ADR 0013) sert plusieurs
+# topics-projets à la fois, chacun pouvant avoir un run actif en même temps
+# (studio.telegram.run_flow). Un ContextVar est isolé par tâche asyncio :
+# chaque asyncio.Task capture sa propre copie du contexte à sa création, donc
+# project_context() posé dans une tâche n'affecte jamais les autres tâches en
+# cours — contrairement à os.environ qui aurait pu être écrasé par un autre
+# run pendant un simple `await` (trouvé en run réel, voir docs/roadmap.md).
+# from_env() reste la seule porte d'entrée des nodes vers la config (aucun
+# changement de signature chez eux) ; elle regarde d'abord ce ContextVar,
+# et ne retombe sur os.environ que s'il est vide (chemin CLI, un seul projet
+# par process, inchangé).
+_current_project_name: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "devaimazing_current_project_name", default=None
+)
+_current_config_dir: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "devaimazing_current_config_dir", default=None
+)
+
+
+@contextlib.contextmanager
+def project_context(project_name: str, config_dir: Optional[Path] = None) -> Iterator[None]:
+    """
+    Positionne project_name/config_dir pour la durée du bloc, via ContextVar
+    plutôt que os.environ (voir commentaire de module) — à englober autour de
+    tout code appelant StudioConfig.from_env() indirectement (ex. les nodes
+    du graphe LangGraph, via graph.astream) quand plusieurs projets peuvent
+    tourner en même temps dans le process courant.
+
+    Args:
+        project_name: Nom du projet à exposer à from_env() pour ce bloc.
+        config_dir: Répertoire de config à exposer (optionnel, comme
+            DEVAIMAZING_CONFIG_DIR).
+    """
+    token_project = _current_project_name.set(project_name)
+    token_dir = _current_config_dir.set(str(config_dir) if config_dir is not None else None)
+    try:
+        yield
+    finally:
+        _current_project_name.reset(token_project)
+        _current_config_dir.reset(token_dir)
 
 
 def default_config_dir() -> Path:
@@ -276,20 +321,23 @@ class StudioConfig:
     @classmethod
     def from_env(cls) -> "StudioConfig":
         """
-        Crée une config depuis les variables d'environnement.
+        Crée une config depuis le contexte courant.
 
-        Variables attendues :
+        Cherche d'abord un project_name/config_dir posé via project_context()
+        (ContextVar, isolé par tâche asyncio — voir son docstring), sinon
+        retombe sur les variables d'environnement (chemin CLI historique, un
+        seul projet par process) :
             DEVAIMAZING_PROJECT: Nom du projet
             DEVAIMAZING_CONFIG_DIR: Répertoire de config (optionnel)
 
         Raises:
-            ValueError: Si DEVAIMAZING_PROJECT n'est pas défini.
+            ValueError: Si ni le ContextVar ni DEVAIMAZING_PROJECT ne sont définis.
         """
-        project_name = os.environ.get("DEVAIMAZING_PROJECT")
+        project_name = _current_project_name.get() or os.environ.get("DEVAIMAZING_PROJECT")
         if not project_name:
             raise ValueError("Variable d'environnement DEVAIMAZING_PROJECT non définie")
 
-        config_dir_raw = os.environ.get("DEVAIMAZING_CONFIG_DIR")
+        config_dir_raw = _current_config_dir.get() or os.environ.get("DEVAIMAZING_CONFIG_DIR")
         config_dir = Path(config_dir_raw).expanduser() if config_dir_raw else None
 
         return cls(project_name=project_name, config_dir=config_dir)

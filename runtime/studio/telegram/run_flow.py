@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from studio.config import StudioConfig
+from studio.config import StudioConfig, project_context
 from studio.graph import build_graph
 from studio.state import Phase, RunStatus, StudioState
 from studio.telegram import menu
@@ -261,22 +261,33 @@ async def _execute_run(
     graph = await build_graph(config)
     try:
         thread_config = _thread_config(run_id)
-        if needs_state_update:
-            await graph.aupdate_state(
-                thread_config,
-                {"status": RunStatus.IN_PROGRESS, "awaiting_human_validation": False},
-            )
+        # project_context (ContextVar, pas os.environ) : les nodes du graphe
+        # appellent StudioConfig.from_env() en interne (voir leurs
+        # docstrings) — sans ce bloc, ils ne verraient aucun projet courant
+        # (le chemin Telegram, contrairement au CLI, ne positionne jamais
+        # DEVAIMAZING_PROJECT) et lèveraient ValueError dès le premier node,
+        # plantant la tâche de fond en silence (trouvé en run réel, aucune
+        # trace/checkpoint après le premier node, voir docs/roadmap.md). Un
+        # ContextVar plutôt qu'os.environ car ce process bot peut exécuter
+        # plusieurs runs de projets différents en même temps (un topic
+        # chacun) — os.environ serait partagé et racy entre leurs `await`.
+        with project_context(config.project_name, config.config_dir):
+            if needs_state_update:
+                await graph.aupdate_state(
+                    thread_config,
+                    {"status": RunStatus.IN_PROGRESS, "awaiting_human_validation": False},
+                )
 
-        last_edit_ts = 0.0
-        final_state: dict[str, Any] = {}
-        async for state in graph.astream(
-            initial_state, config=thread_config, stream_mode="values",
-        ):
-            final_state = state
-            now = time.monotonic()
-            if now - last_edit_ts >= _PROGRESS_EDIT_INTERVAL_SECONDS:
-                await _edit_progress(bot, chat_id, message_id, feature_name, final_state)
-                last_edit_ts = now
+            last_edit_ts = 0.0
+            final_state: dict[str, Any] = {}
+            async for state in graph.astream(
+                initial_state, config=thread_config, stream_mode="values",
+            ):
+                final_state = state
+                now = time.monotonic()
+                if now - last_edit_ts >= _PROGRESS_EDIT_INTERVAL_SECONDS:
+                    await _edit_progress(bot, chat_id, message_id, feature_name, final_state)
+                    last_edit_ts = now
         # Flush final obligatoire : le dernier état doit toujours être
         # affiché, même si moins d'1s s'est écoulée depuis la dernière
         # édition (voir ADR 0015, Décision 4 — regroupement des éditions).

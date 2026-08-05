@@ -13,6 +13,7 @@ import pytest
 
 import studio.telegram.run_flow as run_flow_module
 import studio.tools.queries as queries_module
+from studio.config import _current_project_name
 from studio.state import RunStatus
 from studio.telegram.run_flow import (
     _active_runs,
@@ -47,7 +48,7 @@ def repo(tmp_path: Path) -> Path:
 @pytest.fixture
 def config(repo: Path) -> SimpleNamespace:
     return SimpleNamespace(
-        repo_path=repo, project_name="demo",
+        repo_path=repo, project_name="demo", config_dir=None,
         get=lambda key, default=None: default,
     )
 
@@ -200,6 +201,56 @@ async def test_start_run_fresh_launch_completes_and_updates_planification(
     assert "COMPLETED" in bot.edits[-1]["text"] or "CLOTURE" in bot.edits[-1]["text"]
     # Menu à boutons (ADR 0015, Décision 7) rattaché sur un statut terminal.
     assert bot.edits[-1]["reply_markup"] is not None
+
+
+async def test_start_run_exposes_project_via_context_var_during_astream(
+    monkeypatch: pytest.MonkeyPatch, config: SimpleNamespace, repo: Path,
+):
+    """
+    Non-régression : les nodes du graphe appellent StudioConfig.from_env()
+    en interne (pas de config passée explicitement) — sans project_context()
+    posé autour de graph.astream, ils ne verraient aucun projet courant et
+    lèveraient ValueError dès le premier node, plantant la tâche de fond en
+    silence (bug réel trouvé en run, voir docs/roadmap.md). Ce test
+    vérifie directement que le ContextVar est bien positionné pendant
+    l'itération d'astream, et remis à None une fois le run terminé.
+    """
+    _write_card(repo)
+    await _seed_entry(config)
+
+    async def fake_fetch_run_state(config, run_id):
+        return None
+
+    monkeypatch.setattr(queries_module, "fetch_run_state", fake_fetch_run_state)
+
+    seen_project_names: list = []
+
+    async def fake_astream(initial_state, *, config, stream_mode):
+        seen_project_names.append(_current_project_name.get())
+        yield {
+            "status": RunStatus.COMPLETED, "current_phase": "CLOTURE", "agent_sequence": [],
+            "card_root_path": f"specs/{_RUN_ID}/card-root.md", "merged_commit": "abc123",
+        }
+
+    async def fake_aupdate_state(thread_config, values):
+        pass
+
+    graph = SimpleNamespace(
+        astream=fake_astream, aupdate_state=fake_aupdate_state,
+        checkpointer=_fake_checkpointer([]),
+    )
+
+    async def fake_build_graph(config):
+        return graph
+
+    monkeypatch.setattr(run_flow_module, "build_graph", fake_build_graph)
+
+    bot = _FakeBot()
+    await start_run(bot, _CHAT_ID, _THREAD_ID, config, _FEATURE_NAME)
+    await _active_runs[_THREAD_ID].task
+
+    assert seen_project_names == ["demo"]
+    assert _current_project_name.get() is None
 
     entry = await planification.find_entry(config, _FEATURE_NAME)
     assert entry.statut == "fait"

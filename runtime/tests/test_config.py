@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 import yaml
-from studio.config import StudioConfig, load_global_devaimazing_config, load_global_telegram_config
+from studio.config import (
+    StudioConfig,
+    load_global_devaimazing_config,
+    load_global_telegram_config,
+    project_context,
+)
 
 
 def _write_yaml(path: Path, data: dict) -> None:
@@ -149,6 +154,29 @@ def test_config_from_env_reads_environment(config_dir: Path, monkeypatch: pytest
     config = StudioConfig.from_env()
 
     assert config.project_name == "demo"
+
+
+def test_config_from_env_prefers_project_context_over_environment(
+    config_dir: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    project_context() (ContextVar) doit primer sur DEVAIMAZING_PROJECT — le
+    bot Telegram (studio.telegram.run_flow) l'utilise précisément pour ne
+    pas dépendre d'os.environ, partagé et racy entre runs de projets
+    différents dans le même process (voir project_context, docs/roadmap.md).
+    """
+    _write_project(config_dir, "demo", {"repo_path": "~/code/demo"})
+    _write_project(config_dir, "autre-projet", {"repo_path": "~/code/autre"})
+    monkeypatch.setenv("DEVAIMAZING_PROJECT", "demo")
+    monkeypatch.setenv("DEVAIMAZING_CONFIG_DIR", str(config_dir))
+
+    with project_context("autre-projet", config_dir):
+        config = StudioConfig.from_env()
+        assert config.project_name == "autre-projet"
+
+    # Retombe sur la variable d'environnement une fois le bloc refermé.
+    config_after = StudioConfig.from_env()
+    assert config_after.project_name == "demo"
 
 
 def test_load_global_telegram_config_returns_section(config_dir: Path):
