@@ -36,8 +36,10 @@ from studio.telegram.new_project_flow import handle_project_name_reply
 from studio.telegram.pm_dialogue import handle_dialogue_reply
 from studio.telegram.run_flow import (
     CHECKPOINT_CONTINUE_CALLBACK,
+    RETRY_FAILED_CALLBACK_PREFIX,
     handle_checkpoint_continue_callback,
     handle_run_reply,
+    retry_failed_run,
 )
 from studio.telegram.topics import load_topic_map, resolve_project
 from studio.tools.registry import (
@@ -581,6 +583,34 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
         if callback.message is not None:
             text = "▶️ Reprise du run..." if resumed else "Rien à reprendre (déjà traité ou expiré)."
             await _safe_edit_text(callback.message, text)
+
+    @router.callback_query(F.data.startswith(f"{RETRY_FAILED_CALLBACK_PREFIX}:"))
+    async def _on_retry_failed_callback(callback: CallbackQuery) -> None:
+        chat_id = callback.message.chat.id if callback.message else None
+        thread_id = callback.message.message_thread_id if callback.message else None
+        if chat_id is None or callback.data is None or chat_id != allowed_chat_id:
+            await callback.answer()
+            return
+        await callback.answer()
+        # Contrairement à _on_checkpoint_continue_callback, pas de garantie
+        # qu'un _active_runs existe encore pour ce topic (un run FAILED peut
+        # être réessayé bien après, y compris après un redémarrage du bot) —
+        # le nom de feature voyage donc dans callback_data (voir
+        # RETRY_FAILED_CALLBACK_PREFIX) et le projet se résout par topic,
+        # comme menu._project_config.
+        feature_name = callback.data.split(":", 1)[1]
+        project_name = (
+            resolve_project(thread_id, load_topic_map(resolved_config_dir))
+            if thread_id is not None else None
+        )
+        if project_name is None:
+            if callback.message is not None:
+                await _safe_edit_text(callback.message, "Ce topic n'est associé à aucun projet connu.")
+            return
+        config = StudioConfig(project_name=project_name, config_dir=resolved_config_dir)
+        await retry_failed_run(callback.bot, chat_id, thread_id, config, feature_name)
+        if callback.message is not None:
+            await _safe_edit_text(callback.message, "🔄 Nouvel essai en cours...")
 
     @router.callback_query(F.data.startswith(f"{menu.CALLBACK_PREFIX}:"))
     async def _on_menu_callback(callback: CallbackQuery) -> None:

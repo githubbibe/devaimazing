@@ -445,11 +445,14 @@ async def test_checkpoint_continue_callback_resumes_like_text_reply(
     assert await handle_checkpoint_continue_callback(bot, _CHAT_ID, _THREAD_ID) is False
 
 
-# --- FAILED rapporté sans reprise auto ---
+# --- FAILED rapporté avec bouton "Réessayer" (ADR 0015 révision 2026-08-05 bis) ---
 
-async def test_start_run_reports_failed_without_auto_retry(
+async def test_start_run_reports_failed_with_retry_button(
     monkeypatch: pytest.MonkeyPatch, config: SimpleNamespace, repo: Path,
 ):
+    """/run sur une feature FAILED ne relance rien tout seul (aucun
+    build_graph ici), mais propose le bouton "Réessayer" plutôt qu'un
+    message plat sans action possible."""
     _write_card(repo)
     await _seed_entry(config, statut="en cours")
 
@@ -472,7 +475,65 @@ async def test_start_run_reports_failed_without_auto_retry(
     assert result == {}
     assert len(bot.sent) == 1
     assert "back bloqué" in bot.sent[0]["text"]
+    assert bot.sent[0]["reply_markup"] is not None
     assert _THREAD_ID not in _active_runs
+
+
+# --- reprise d'un run FAILED via le bouton "Réessayer" ---
+
+async def test_retry_failed_run_resets_iteration_budget_and_resumes(
+    monkeypatch: pytest.MonkeyPatch, config: SimpleNamespace, repo: Path,
+):
+    """retry_failed_run doit purger les tentatives ratées de l'agent/phase en
+    échec (sinon routing.agent_iteration_count rebloque immédiatement, voir
+    _reset_failed_state_for_retry) et reprendre le run normalement."""
+    _write_card(repo)
+    await _seed_entry(config, statut="en cours")
+
+    failed_result = AgentResult(
+        agent="back", phase=Phase.STUBS, status="feedback_sent", iteration=3,
+    )
+    other_agent_result = AgentResult(
+        agent="front", phase=Phase.STUBS, status="success", iteration=1,
+    )
+
+    async def fake_fetch_run_state(config, run_id):
+        return {
+            "status": RunStatus.FAILED, "current_phase": "STUBS", "agent_sequence": ["back", "front"],
+            "requires_manual_intervention": True,
+            "intervention_reason": "Agent 'back' a atteint la limite de 3 itérations.",
+            "agent_results": [other_agent_result, failed_result],
+        }
+
+    monkeypatch.setattr(queries_module, "fetch_run_state", fake_fetch_run_state)
+
+    states = [{
+        "status": RunStatus.COMPLETED, "current_phase": "CLOTURE", "agent_sequence": [],
+        "card_root_path": f"specs/{_RUN_ID}/card-root.md",
+    }]
+    graph = _fake_graph(states, [])
+
+    async def fake_build_graph(config):
+        return graph
+
+    monkeypatch.setattr(run_flow_module, "build_graph", fake_build_graph)
+
+    bot = _FakeBot()
+    result = await run_flow_module.retry_failed_run(bot, _CHAT_ID, _THREAD_ID, config, _FEATURE_NAME)
+    assert result == {}
+    await _active_runs[_THREAD_ID].task
+
+    assert len(graph.update_calls) == 1
+    _, update = graph.update_calls[0]
+    assert update["status"] == RunStatus.IN_PROGRESS
+    assert update["requires_manual_intervention"] is False
+    assert update["intervention_reason"] is None
+    # "back"/STUBS purgé (l'agent en échec), "front"/STUBS conservé (agent
+    # différent, budget d'itérations indépendant).
+    assert update["agent_results"] == [other_agent_result]
+
+    entry = await planification.find_entry(config, _FEATURE_NAME)
+    assert entry.statut == "fait"
 
 
 # --- garde anti-double-lancement ---

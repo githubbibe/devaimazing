@@ -959,6 +959,82 @@ async def test_checkpoint_continue_callback_ignores_other_chat(
     await on_checkpoint_callback(callback)
 
 
+# --- bouton "Réessayer" (run FAILED, ADR 0015 révision 2026-08-05 bis) ---
+
+async def test_retry_failed_callback_resolves_project_and_retries(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path,
+):
+    calls = []
+
+    async def fake_retry_failed_run(bot, chat_id, message_thread_id, config, feature_name):
+        calls.append((chat_id, message_thread_id, config.project_name, feature_name))
+        return {}
+
+    monkeypatch.setattr(handlers_module, "retry_failed_run", fake_retry_failed_run)
+
+    router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
+    on_retry_callback = router.callback_query.handlers[2].callback
+
+    edits = []
+
+    async def fake_edit_text(text, reply_markup=None):
+        edits.append(text)
+
+    async def fake_answer():
+        return None
+
+    callback = SimpleNamespace(
+        data=f"{handlers_module.RETRY_FAILED_CALLBACK_PREFIX}:gestion-taches",
+        message=SimpleNamespace(
+            chat=SimpleNamespace(id=_ALLOWED_CHAT_ID),
+            message_thread_id=111,  # topic du projet "demo" (fixture config_dir)
+            edit_text=fake_edit_text,
+        ),
+        bot=object(),
+        answer=fake_answer,
+    )
+
+    await on_retry_callback(callback)
+
+    assert calls == [(_ALLOWED_CHAT_ID, 111, "demo", "gestion-taches")]
+    assert edits == ["🔄 Nouvel essai en cours..."]
+
+
+async def test_retry_failed_callback_unknown_topic(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path,
+):
+    async def fail_if_called_async(*args, **kwargs):
+        raise AssertionError("ne doit pas être appelé : topic non associé à un projet")
+
+    monkeypatch.setattr(handlers_module, "retry_failed_run", fail_if_called_async)
+
+    router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
+    on_retry_callback = router.callback_query.handlers[2].callback
+
+    edits = []
+
+    async def fake_edit_text(text, reply_markup=None):
+        edits.append(text)
+
+    async def fake_answer():
+        return None
+
+    callback = SimpleNamespace(
+        data=f"{handlers_module.RETRY_FAILED_CALLBACK_PREFIX}:gestion-taches",
+        message=SimpleNamespace(
+            chat=SimpleNamespace(id=_ALLOWED_CHAT_ID),
+            message_thread_id=222,  # aucun projet mappé sur ce topic
+            edit_text=fake_edit_text,
+        ),
+        bot=object(),
+        answer=fake_answer,
+    )
+
+    await on_retry_callback(callback)
+
+    assert edits == ["Ce topic n'est associé à aucun projet connu."]
+
+
 async def test_confirmation_callback_attaches_root_menu_keyboard(
     monkeypatch: pytest.MonkeyPatch, config_dir: Path,
 ):
@@ -1024,7 +1100,7 @@ async def test_menu_callback_answers_before_running_long_action(
     monkeypatch.setattr(handlers_module.menu, "handle_menu_callback", fake_handle_menu_callback)
 
     router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
-    on_menu_callback = router.callback_query.handlers[2].callback
+    on_menu_callback = router.callback_query.handlers[3].callback
 
     async def fake_answer():
         order.append("answer")
@@ -1064,7 +1140,7 @@ async def test_menu_callback_acknowledges_slow_action_before_dialogue(
     monkeypatch.setattr(handlers_module.menu, "handle_menu_callback", fake_handle_menu_callback)
 
     router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
-    on_menu_callback = router.callback_query.handlers[2].callback
+    on_menu_callback = router.callback_query.handlers[3].callback
 
     async def fake_answer():
         return None
@@ -1099,7 +1175,7 @@ async def test_menu_callback_ignores_message_not_modified_error(
     monkeypatch.setattr(handlers_module.menu, "handle_menu_callback", fake_handle_menu_callback)
 
     router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
-    on_menu_callback = router.callback_query.handlers[2].callback
+    on_menu_callback = router.callback_query.handlers[3].callback
 
     async def fake_answer():
         return None

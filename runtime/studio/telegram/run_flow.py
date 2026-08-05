@@ -53,6 +53,14 @@ from studio.tools.ollama import ExternalServiceError
 # exactement comme handle_run_reply le fait déjà pour un texte tapé.
 CHECKPOINT_CONTINUE_CALLBACK = "run_checkpoint_continue"
 
+# Callback du bouton « 🔄 Réessayer » posté par _send_failure_notification —
+# préfixe + nom de feature (pas juste message_thread_id comme
+# CHECKPOINT_CONTINUE_CALLBACK) : contrairement à un checkpoint WAITING_HUMAN
+# tout juste posté par CE process, un run FAILED peut être rouvert bien plus
+# tard (après un redémarrage du bot, _active_runs vide) — le handler doit
+# pouvoir retrouver la feature sans dépendre d'un état en mémoire encore présent.
+RETRY_FAILED_CALLBACK_PREFIX = "run_retry_failed"
+
 # Mêmes types que cli.py::_EXTERNAL_SERVICE_ERRORS — déjà porteurs d'un
 # message clair côté outil (Ollama, Claude Code CLI, Git), affichés
 # proprement au lieu de laisser remonter la traceback brute.
@@ -208,6 +216,133 @@ async def _send_checkpoint_notification(
         )
 
 
+def _retry_failed_keyboard(feature_name: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="🔄 Réessayer", callback_data=f"{RETRY_FAILED_CALLBACK_PREFIX}:{feature_name}",
+        ),
+    ]])
+
+
+def _reset_failed_state_for_retry(state: dict[str, Any]) -> dict[str, Any]:
+    """
+    Construit les updates (aupdate_state) qui redonnent un budget
+    d'itérations neuf à l'agent qui a fait échouer le run — à appeler
+    uniquement après que la cause du blocage a été corrigée (ex. changement
+    de modèle agents_local, requirements.txt manquant réparé à la main).
+
+    routing.agent_iteration_count compte les entrées de state.agent_results
+    dont agent ET phase correspondent à la tentative courante — sans purger
+    les entrées de la dernière activation en échec, une reprise se
+    reheurterait immédiatement à max_iterations_exceeded, avant même un
+    nouvel appel LLM (le run redeviendrait FAILED sur-le-champ).
+
+    state.agent_results[-1] identifie l'agent/phase à réinitialiser — c'est
+    la dernière tentative enregistrée juste avant que max_iterations_exceeded
+    (studio.nodes.backend/frontend/security/test/pm, seul chemin qui produit
+    RunStatus.FAILED dans ce studio) ne coupe court sans ajouter sa propre
+    entrée. Générique aux cinq nodes qui peuvent échouer ainsi, y compris pm
+    (phase FICHES) qui n'utilise pas state.agent_sequence/current_agent_index
+    contrairement aux quatre autres.
+    """
+    agent_results = state.get("agent_results") or []
+    if not agent_results:
+        kept_results = agent_results
+    else:
+        last = agent_results[-1]
+        kept_results = [
+            r for r in agent_results if not (r.agent == last.agent and r.phase == last.phase)
+        ]
+    return {
+        "status": RunStatus.IN_PROGRESS,
+        "requires_manual_intervention": False,
+        "intervention_reason": None,
+        "agent_results": kept_results,
+    }
+
+
+async def _send_failure_notification(
+    bot: Any, chat_id: int, message_thread_id: int, feature_name: str, state: dict[str, Any],
+) -> None:
+    """
+    Poste un NOUVEAU message (même principe que _send_checkpoint_notification)
+    quand un run atteint RunStatus.FAILED (max_iterations_exceeded) — avec le
+    bouton « 🔄 Réessayer » (voir retry_failed_run, ADR 0015 révision
+    2026-08-05 bis) plutôt que de se contenter de rapporter l'échec sans
+    action possible (gap constaté en usage réel, todolist3, run
+    gestion-taches : agent back en échec à cause d'un modèle local trop
+    faible — après correction de la config, aucune reprise n'était possible
+    sans relancer tout le cadrage/audit amont/fiches via /modifier_feature).
+    """
+    summary = queries.build_progression_summary(state)
+    text = (
+        f"❌ Run {feature_name!r} en échec (phase {summary['current_phase']}).\n"
+        f"{summary['intervention_reason']}\n\n"
+        "Si la cause a été corrigée (ex. changement de modèle), \"Réessayer\" "
+        "redonne un budget d'itérations neuf à l'agent concerné et reprend le run."
+    )
+    await bot.send_message(
+        chat_id, text, message_thread_id=message_thread_id,
+        reply_markup=_retry_failed_keyboard(feature_name),
+    )
+
+
+async def retry_failed_run(
+    bot: Any, chat_id: int, message_thread_id: int, config: StudioConfig, feature_name: str,
+) -> dict[str, Any]:
+    """
+    Réessaie un run FAILED (bouton « 🔄 Réessayer », voir
+    _send_failure_notification) — à la différence de cli.py::retry (réservé
+    aux runs IN_PROGRESS interrompus par un crash), ce chemin est réservé aux
+    runs FAILED et redonne explicitement un budget d'itérations neuf à
+    l'agent qui a échoué (voir _reset_failed_state_for_retry) avant de
+    reprendre, exactement comme une reprise WAITING_HUMAN pour le reste.
+
+    Returns:
+        {"error": ...} si la feature est inconnue ; sinon {} après avoir
+        soit répondu directement dans le topic (rien à réessayer, run déjà
+        en cours), soit lancé la tâche de fond.
+    """
+    entry = await planification.find_entry(config, feature_name)
+    if entry is None:
+        return {
+            "error": f"Feature {feature_name!r} inconnue dans planification.md.",
+        }
+
+    active = _active_runs.get(message_thread_id)
+    if active is not None and active.task is not None and not active.task.done():
+        await bot.send_message(
+            chat_id, f"Un run est déjà en cours pour {feature_name!r} dans ce topic.",
+            message_thread_id=message_thread_id,
+        )
+        return {}
+
+    run_state = await queries.fetch_run_state(config, entry.run_id)
+    if run_state is None or run_state.get("status") != RunStatus.FAILED:
+        await bot.send_message(
+            chat_id, f"Rien à réessayer pour {feature_name!r} (pas de run en échec).",
+            message_thread_id=message_thread_id,
+        )
+        return {}
+
+    sent = await bot.send_message(
+        chat_id, f"Nouvel essai pour {feature_name!r}...", message_thread_id=message_thread_id,
+    )
+    run_entry = _RunState(
+        config=config, run_id=entry.run_id, feature_name=feature_name,
+        chat_id=chat_id, message_id=sent.message_id,
+    )
+    _active_runs[message_thread_id] = run_entry
+    run_entry.task = asyncio.create_task(
+        _execute_run(
+            bot, chat_id, message_thread_id, config, entry.run_id, feature_name,
+            sent.message_id, initial_state=None,
+            state_update=_reset_failed_state_for_retry(run_state),
+        )
+    )
+    return {}
+
+
 async def start_run(
     bot: Any, chat_id: int, message_thread_id: int, config: StudioConfig, feature_name: str,
 ) -> dict[str, Any]:
@@ -282,18 +417,12 @@ async def start_run(
         return {}
 
     if status == RunStatus.FAILED:
-        summary = queries.build_progression_summary(run_state)
-        await bot.send_message(
-            chat_id,
-            f"Le run de {feature_name!r} a échoué : {summary['intervention_reason']}. "
-            "Pas de reprise automatique.",
-            message_thread_id=message_thread_id,
-        )
+        await _send_failure_notification(bot, chat_id, message_thread_id, feature_name, run_state)
         return {}
 
     # WAITING_HUMAN (mémoire process perdue, ex. redémarrage du bot) ou
     # IN_PROGRESS (process tué avant tout checkpoint, comme devaimazing retry)
-    # — dans les deux cas on reprend, la différence est needs_state_update.
+    # — dans les deux cas on reprend, la différence est state_update.
     sent = await bot.send_message(
         chat_id, f"Reprise du run de {feature_name!r}...", message_thread_id=message_thread_id,
     )
@@ -306,7 +435,10 @@ async def start_run(
         _execute_run(
             bot, chat_id, message_thread_id, config, entry.run_id, feature_name,
             sent.message_id, initial_state=None,
-            needs_state_update=(status == RunStatus.WAITING_HUMAN),
+            state_update=(
+                {"status": RunStatus.IN_PROGRESS, "awaiting_human_validation": False}
+                if status == RunStatus.WAITING_HUMAN else None
+            ),
         )
     )
     return {}
@@ -342,7 +474,7 @@ async def _launch_fresh(
     run_entry.task = asyncio.create_task(
         _execute_run(
             bot, chat_id, message_thread_id, config, entry.run_id, feature_name,
-            sent.message_id, initial_state=initial_state, needs_state_update=False,
+            sent.message_id, initial_state=initial_state,
         )
     )
 
@@ -350,7 +482,7 @@ async def _launch_fresh(
 async def _execute_run(
     bot: Any, chat_id: int, message_thread_id: int, config: StudioConfig, run_id: str,
     feature_name: str, message_id: int, *,
-    initial_state: Optional[StudioState], needs_state_update: bool,
+    initial_state: Optional[StudioState], state_update: Optional[dict[str, Any]] = None,
 ) -> None:
     graph = await build_graph(config)
     try:
@@ -366,11 +498,8 @@ async def _execute_run(
         # plusieurs runs de projets différents en même temps (un topic
         # chacun) — os.environ serait partagé et racy entre leurs `await`.
         with project_context(config.project_name, config.config_dir):
-            if needs_state_update:
-                await graph.aupdate_state(
-                    thread_config,
-                    {"status": RunStatus.IN_PROGRESS, "awaiting_human_validation": False},
-                )
+            if state_update:
+                await graph.aupdate_state(thread_config, state_update)
 
             last_edit_ts = 0.0
             final_state: dict[str, Any] = {}
@@ -431,9 +560,13 @@ async def _execute_run(
                 merged_commit=final_state.get("merged_commit"),
             ),
         )
-    # FAILED : planification.md reste "en cours" (projection best-effort du
-    # statut réel, le détail — intervention_reason — reste dans le message
-    # Telegram déjà édité ci-dessus, pas de reprise automatique v1).
+
+    if status == RunStatus.FAILED:
+        # planification.md reste "en cours" (projection best-effort du
+        # statut réel, aucune colonne dédiée) — le détail (intervention_reason)
+        # est dans _send_failure_notification, avec le bouton "Réessayer"
+        # (ADR 0015, révision 2026-08-05 bis).
+        await _send_failure_notification(bot, chat_id, message_thread_id, feature_name, final_state)
 
     _active_runs.pop(message_thread_id, None)
 
@@ -498,7 +631,8 @@ async def _resume_waiting_run(
     active.task = asyncio.create_task(
         _execute_run(
             bot, chat_id, message_thread_id, active.config, active.run_id, active.feature_name,
-            active.message_id, initial_state=None, needs_state_update=True,
+            active.message_id, initial_state=None,
+            state_update={"status": RunStatus.IN_PROGRESS, "awaiting_human_validation": False},
         )
     )
     return True

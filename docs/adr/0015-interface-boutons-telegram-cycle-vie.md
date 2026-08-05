@@ -182,6 +182,28 @@ topic, pas d'équivalent General) :
   rejet — `/reject` reste `NotImplementedError` comme avant, toujours différé faute de
   design tranché pour le feedback qu'il porterait.
 
+  **Révision (2026-08-05 bis)** : un run **FAILED** (`max_iterations_exceeded`,
+  décrit plus haut comme sans reprise automatique v1) obtient désormais une reprise
+  explicite — gap constaté en usage réel (`todolist3`, run `gestion-taches`, agent
+  `back` en échec à cause d'un modèle local trop faible) : une fois la cause
+  corrigée (ex. `agents_local` changé dans `config/projects/<nom>.yml`), il n'existait
+  aucun moyen de reprendre sans relancer tout le cadrage/audit amont/fiches via
+  `[Modifier une feature]` (coûteux en appels Claude payants, alors que seule
+  l'implémentation STUBS avait échoué). `_execute_run` poste maintenant, pour
+  `status == RunStatus.FAILED`, un nouveau message
+  (`studio.telegram.run_flow._send_failure_notification`) avec la raison de l'échec et
+  un bouton inline « 🔄 Réessayer » (`RETRY_FAILED_CALLBACK_PREFIX`) — même chemin
+  utilisable plus tard, y compris après un redémarrage du bot (le nom de feature
+  voyage dans `callback_data`, le projet se résout par topic, pas de dépendance à
+  `_active_runs`). `retry_failed_run` purge d'abord les tentatives ratées de l'agent
+  et de la phase concernés (`_reset_failed_state_for_retry`) — sans ça,
+  `routing.agent_iteration_count` rebloquerait immédiatement sur l'historique
+  d'échecs déjà enregistré, avant même un nouvel appel LLM. Portée volontairement
+  la même que la révision précédente : uniquement la reprise, aucune modification du
+  contenu de la fiche ni du code déjà écrit — si la cause de l'échec est ailleurs
+  (fiche mal cadrée, bug de code non lié au modèle), relancer aveuglément
+  échouera à nouveau, ce cas reste couvert par `[Modifier une feature]`.
+
 ## Décision 5 — `/archive`
 
 `/archive <nom>` (General, argument requis — pas de contexte projet implicite) ;
