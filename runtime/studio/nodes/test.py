@@ -35,7 +35,7 @@ from studio.tools.tracer import RunTracer
 _DEVAIMAZING_ROOT = Path(__file__).resolve().parents[3]
 _PROMPT_PATH = _DEVAIMAZING_ROOT / "prompts" / "test.md"
 _SKILLS_DIR = _DEVAIMAZING_ROOT / "skills"
-_SKILL_NAMES = ["non-regression"]
+_SKILL_NAMES = ["non-regression", "modern-python-apis"]
 
 # Nombre de caractères d'output de test conservés dans la fiche en cas
 # d'échec (évite de dumper une sortie de suite de tests entière).

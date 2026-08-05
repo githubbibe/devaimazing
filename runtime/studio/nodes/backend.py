@@ -48,7 +48,10 @@ from studio.tools.tracer import AgentTracer, RunTracer
 _DEVAIMAZING_ROOT = Path(__file__).resolve().parents[3]
 _PROMPT_PATH = _DEVAIMAZING_ROOT / "prompts" / "backend.md"
 _SKILLS_DIR = _DEVAIMAZING_ROOT / "skills"
-_SKILL_NAMES = ["stub-first", "error-handling", "logging-conventions", "retry-patterns"]
+_SKILL_NAMES = [
+    "stub-first", "error-handling", "logging-conventions", "retry-patterns",
+    "modern-python-apis",
+]
 _TU_EXTRA_SKILLS = ["non-regression"]
 
 _GIT_IDENTITY_AGENT = "back"  # back-tu commit sous l'identité back (docs/agents.md)
