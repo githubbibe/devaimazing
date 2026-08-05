@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup
 
 from studio.config import StudioConfig, project_context
@@ -120,10 +121,25 @@ async def _edit_progress(
     bot: Any, chat_id: int, message_id: int, feature_name: str, state: dict[str, Any],
     *, reply_markup: Any = None,
 ) -> None:
-    await bot.edit_message_text(
-        _progress_text(feature_name, state), chat_id=chat_id, message_id=message_id,
-        reply_markup=reply_markup,
-    )
+    """
+    Édite le message de progression — absorbe l'erreur Telegram "message is
+    not modified" (même motif que handlers._safe_edit_text) : le flush final
+    obligatoire de _execute_run répète parfois exactement le texte/clavier de
+    la dernière édition périodique (rien de nouveau à afficher entre les
+    deux, ex. une seule activation d'agent entre deux éditions rate-limitées)
+    — sans ce garde-fou, TelegramBadRequest n'était pas rattrapé par
+    _EXTERNAL_SERVICE_ERRORS et tuait la tâche de fond en silence, AVANT
+    d'atteindre _send_checkpoint_notification pour un run WAITING_HUMAN (bug
+    réel trouvé en run, todolist3, voir docs/roadmap.md).
+    """
+    try:
+        await bot.edit_message_text(
+            _progress_text(feature_name, state), chat_id=chat_id, message_id=message_id,
+            reply_markup=reply_markup,
+        )
+    except TelegramBadRequest as exc:
+        if "message is not modified" not in str(exc):
+            raise
 
 
 def _checkpoint_continue_keyboard() -> InlineKeyboardMarkup:
