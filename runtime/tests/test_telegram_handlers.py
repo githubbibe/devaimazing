@@ -846,6 +846,119 @@ async def test_menu_button_bypasses_pending_reply_handlers(
     assert calls["args"] == (_ALLOWED_CHAT_ID, 111, config_dir)
 
 
+# --- bouton "Continuer" (checkpoint WAITING_HUMAN, ADR 0015 révision 2026-08-05) ---
+
+async def test_checkpoint_continue_callback_resumes_run(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path,
+):
+    calls = []
+
+    async def fake_handle_checkpoint_continue_callback(bot, chat_id, message_thread_id):
+        calls.append((chat_id, message_thread_id))
+        return True
+
+    monkeypatch.setattr(
+        handlers_module, "handle_checkpoint_continue_callback",
+        fake_handle_checkpoint_continue_callback,
+    )
+
+    router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
+    on_checkpoint_callback = router.callback_query.handlers[1].callback
+
+    edits = []
+
+    async def fake_edit_text(text, reply_markup=None):
+        edits.append(text)
+
+    async def fake_answer():
+        return None
+
+    callback = SimpleNamespace(
+        data=handlers_module.CHECKPOINT_CONTINUE_CALLBACK,
+        message=SimpleNamespace(
+            chat=SimpleNamespace(id=_ALLOWED_CHAT_ID),
+            message_thread_id=111,
+            edit_text=fake_edit_text,
+        ),
+        bot=object(),
+        answer=fake_answer,
+    )
+
+    await on_checkpoint_callback(callback)
+
+    assert calls == [(_ALLOWED_CHAT_ID, 111)]
+    assert edits == ["▶️ Reprise du run..."]
+
+
+async def test_checkpoint_continue_callback_reports_nothing_to_resume(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path,
+):
+    """Bouton cliqué deux fois, ou run déjà repris autrement : pas de
+    run en attente pour ce topic, message d'erreur clair plutôt qu'un
+    silence ou une reprise fantôme."""
+    async def fake_handle_checkpoint_continue_callback(bot, chat_id, message_thread_id):
+        return False
+
+    monkeypatch.setattr(
+        handlers_module, "handle_checkpoint_continue_callback",
+        fake_handle_checkpoint_continue_callback,
+    )
+
+    router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
+    on_checkpoint_callback = router.callback_query.handlers[1].callback
+
+    edits = []
+
+    async def fake_edit_text(text, reply_markup=None):
+        edits.append(text)
+
+    async def fake_answer():
+        return None
+
+    callback = SimpleNamespace(
+        data=handlers_module.CHECKPOINT_CONTINUE_CALLBACK,
+        message=SimpleNamespace(
+            chat=SimpleNamespace(id=_ALLOWED_CHAT_ID),
+            message_thread_id=111,
+            edit_text=fake_edit_text,
+        ),
+        bot=object(),
+        answer=fake_answer,
+    )
+
+    await on_checkpoint_callback(callback)
+
+    assert edits == ["Rien à reprendre (déjà traité ou expiré)."]
+
+
+async def test_checkpoint_continue_callback_ignores_other_chat(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path,
+):
+    async def fail_if_called_async(*args, **kwargs):
+        raise AssertionError("ne doit pas être appelé : chat non autorisé")
+
+    monkeypatch.setattr(
+        handlers_module, "handle_checkpoint_continue_callback", fail_if_called_async,
+    )
+
+    router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
+    on_checkpoint_callback = router.callback_query.handlers[1].callback
+
+    async def fake_answer():
+        return None
+
+    callback = SimpleNamespace(
+        data=handlers_module.CHECKPOINT_CONTINUE_CALLBACK,
+        message=SimpleNamespace(
+            chat=SimpleNamespace(id=999), message_thread_id=111, edit_text=None,
+        ),
+        bot=object(),
+        answer=fake_answer,
+    )
+
+    await on_checkpoint_callback(callback)
+
+
 async def test_confirmation_callback_attaches_root_menu_keyboard(
     monkeypatch: pytest.MonkeyPatch, config_dir: Path,
 ):
@@ -911,7 +1024,7 @@ async def test_menu_callback_answers_before_running_long_action(
     monkeypatch.setattr(handlers_module.menu, "handle_menu_callback", fake_handle_menu_callback)
 
     router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
-    on_menu_callback = router.callback_query.handlers[1].callback
+    on_menu_callback = router.callback_query.handlers[2].callback
 
     async def fake_answer():
         order.append("answer")
@@ -951,7 +1064,7 @@ async def test_menu_callback_acknowledges_slow_action_before_dialogue(
     monkeypatch.setattr(handlers_module.menu, "handle_menu_callback", fake_handle_menu_callback)
 
     router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
-    on_menu_callback = router.callback_query.handlers[1].callback
+    on_menu_callback = router.callback_query.handlers[2].callback
 
     async def fake_answer():
         return None
@@ -986,7 +1099,7 @@ async def test_menu_callback_ignores_message_not_modified_error(
     monkeypatch.setattr(handlers_module.menu, "handle_menu_callback", fake_handle_menu_callback)
 
     router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
-    on_menu_callback = router.callback_query.handlers[1].callback
+    on_menu_callback = router.callback_query.handlers[2].callback
 
     async def fake_answer():
         return None

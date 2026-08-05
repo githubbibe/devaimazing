@@ -165,6 +165,23 @@ topic, pas d'équivalent General) :
   mécanisme dédié : il retombe sur le principe déjà établi — un message est posté dans
   le topic, l'utilisateur y répond, exactement comme le reste du dialogue.
 
+  **Révision (2026-08-05)** : décision inversée — gap constaté en usage réel
+  (`todolist3`, run `gestion-taches`, checkpoint après l'audit amont de l'Architecte).
+  Un checkpoint en cours d'exécution partageait jusqu'ici le même mécanisme que la
+  progression normale : **édition** du même message (voir ci-dessus), qui n'émet
+  aucune notification push Telegram — invisible tant que l'utilisateur n'ouvre pas le
+  chat de lui-même. Le contenu ne disait de plus ni quoi relire ni où, et « répondre
+  n'importe quoi pour reprendre » n'est pas une vraie action explicite. `_execute_run`
+  poste désormais, uniquement pour `status == WAITING_HUMAN`, un **nouveau** message
+  (`studio.telegram.run_flow._send_checkpoint_notification`) : le dernier fichier
+  produit (`state.agent_results[-1].output_files`, ex. `architect-brief.md`) en pièce
+  jointe, puis un message texte séparé avec un bouton inline « ✅ Continuer »
+  (`CHECKPOINT_CONTINUE_CALLBACK`) qui déclenche la même reprise que taper n'importe
+  quel texte dans le topic (les deux chemins restent valides, aucun des deux n'est
+  retiré). Portée volontairement réduite : uniquement le bouton de reprise, pas de
+  rejet — `/reject` reste `NotImplementedError` comme avant, toujours différé faute de
+  design tranché pour le feedback qu'il porterait.
+
 ## Décision 5 — `/archive`
 
 `/archive <nom>` (General, argument requis — pas de contexte projet implicite) ;

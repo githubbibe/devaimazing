@@ -34,7 +34,11 @@ from studio.telegram.confirmations import pending_confirmations as _pending_conf
 from studio.telegram import menu
 from studio.telegram.new_project_flow import handle_project_name_reply
 from studio.telegram.pm_dialogue import handle_dialogue_reply
-from studio.telegram.run_flow import handle_run_reply
+from studio.telegram.run_flow import (
+    CHECKPOINT_CONTINUE_CALLBACK,
+    handle_checkpoint_continue_callback,
+    handle_run_reply,
+)
 from studio.telegram.topics import load_topic_map, resolve_project
 from studio.tools.registry import (
     TOOL_REGISTRY,
@@ -561,6 +565,22 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
                 callback.message, reply_text,
                 reply_markup=menu.build_root_keyboard(in_topic=in_topic),
             )
+
+    @router.callback_query(F.data == CHECKPOINT_CONTINUE_CALLBACK)
+    async def _on_checkpoint_continue_callback(callback: CallbackQuery) -> None:
+        chat_id = callback.message.chat.id if callback.message else None
+        thread_id = callback.message.message_thread_id if callback.message else None
+        if chat_id is None or chat_id != allowed_chat_id:
+            await callback.answer()
+            return
+        # Répond tout de suite (voir le commentaire équivalent de
+        # _on_callback) : la reprise relance un run potentiellement long en
+        # tâche de fond, mais callback.answer() ne doit pas attendre ça.
+        await callback.answer()
+        resumed = await handle_checkpoint_continue_callback(callback.bot, chat_id, thread_id)
+        if callback.message is not None:
+            text = "▶️ Reprise du run..." if resumed else "Rien à reprendre (déjà traité ou expiré)."
+            await _safe_edit_text(callback.message, text)
 
     @router.callback_query(F.data.startswith(f"{menu.CALLBACK_PREFIX}:"))
     async def _on_menu_callback(callback: CallbackQuery) -> None:

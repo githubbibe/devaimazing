@@ -19,10 +19,13 @@ lancement et de référence forte (une tâche asyncio non référencée peut êt
 garbage-collectée avant sa fin).
 
 Checkpoint humain en cours de run (audit Architecte/Sécu, agent bloqué) :
-n'importe quel message reçu dans le topic pendant que le run est en attente
-déclenche la reprise (voir handle_run_reply) — le contenu du texte n'est
-pas lu, aucun vrai mécanisme de feedback/rejet à ce niveau (cohérent avec
-/reject, explicitement différé par l'ADR 0015).
+un message dédié est posté (pas une édition, voir _send_checkpoint_notification)
+avec le fichier produit en pièce jointe et un bouton « ✅ Continuer » — soit ce
+bouton, soit n'importe quel texte tapé dans le topic (voir handle_run_reply)
+déclenche la reprise. Le contenu du texte n'est jamais lu, aucun vrai
+mécanisme de feedback/rejet à ce niveau (cohérent avec /reject,
+explicitement différé par l'ADR 0015 — révisé pour la notification/l'action
+de reprise elle-même, voir ADR 0015 révision 2026-08-05).
 """
 
 import asyncio
@@ -32,6 +35,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup
+
 from studio.config import StudioConfig, project_context
 from studio.graph import build_graph
 from studio.state import Phase, RunStatus, StudioState
@@ -39,6 +44,13 @@ from studio.telegram import menu
 from studio.tools import planification, queries
 from studio.tools.git import commit_safety_snapshot, current_branch, push_branch
 from studio.tools.ollama import ExternalServiceError
+
+# Callback du bouton « ✅ Continuer » posté par _send_checkpoint_notification
+# — une seule valeur constante (pas de préfixe + id à parser) : la reprise ne
+# porte aucun paramètre, elle s'appuie sur callback.message.message_thread_id
+# (voir handlers.build_router) pour retrouver le run actif dans _active_runs,
+# exactement comme handle_run_reply le fait déjà pour un texte tapé.
+CHECKPOINT_CONTINUE_CALLBACK = "run_checkpoint_continue"
 
 # Mêmes types que cli.py::_EXTERNAL_SERVICE_ERRORS — déjà porteurs d'un
 # message clair côté outil (Ollama, Claude Code CLI, Git), affichés
@@ -112,6 +124,72 @@ async def _edit_progress(
         _progress_text(feature_name, state), chat_id=chat_id, message_id=message_id,
         reply_markup=reply_markup,
     )
+
+
+def _checkpoint_continue_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Continuer", callback_data=CHECKPOINT_CONTINUE_CALLBACK),
+    ]])
+
+
+def _last_output_file(state: dict[str, Any]) -> Optional[str]:
+    agent_results = state.get("agent_results") or []
+    if not agent_results:
+        return None
+    output_files = agent_results[-1].output_files
+    return output_files[-1] if output_files else None
+
+
+async def _send_checkpoint_notification(
+    bot: Any, chat_id: int, message_thread_id: int, config: StudioConfig,
+    feature_name: str, state: dict[str, Any],
+) -> None:
+    """
+    Poste un NOUVEAU message (pas une édition, contrairement au reste de la
+    progression, voir _edit_progress) quand le run atteint un checkpoint
+    humain (status == WAITING_HUMAN) — gap constaté en usage réel
+    (todolist3, run gestion-taches) : une édition n'émet aucune notification
+    push côté Telegram, invisible tant que l'utilisateur n'ouvre pas le chat
+    de lui-même ; le texte de progression seul ne dit pas non plus quoi
+    relire ni où (voir ADR 0015, révision 2026-08-05).
+
+    Le dernier fichier produit (state.agent_results[-1].output_files, ex.
+    architect-brief.md) est joint en pièce jointe s'il existe sur disque —
+    même pattern que studio.telegram.pm_dialogue._present_draft (pièce
+    jointe, pas de limite à 4096 caractères, lecture d'un seul tenant).
+
+    Le bouton « ✅ Continuer » est posté sur un message TEXTE séparé de la
+    pièce jointe (jamais en légende du document) : edit_message_text (utilisé
+    par le callback, voir handlers.py) ne peut éditer qu'un message texte,
+    jamais un message document — même contrainte déjà documentée pour
+    _present_draft.
+    """
+    summary = queries.build_progression_summary(state)
+    lines = [
+        f"⏸ Run {feature_name!r} en pause — validation requise avant de continuer "
+        f"(phase {summary['current_phase']}).",
+    ]
+    if summary["last_result"]:
+        last_result = summary["last_result"]
+        lines.append(f"Dernier résultat : {last_result['agent']} — {last_result['status']}.")
+    text = "\n".join(lines)
+
+    output_file = _last_output_file(state)
+    artifact_path = config.repo_path / output_file if output_file else None
+    if artifact_path is not None and artifact_path.is_file():
+        document = BufferedInputFile(artifact_path.read_bytes(), filename=artifact_path.name)
+        await bot.send_document(
+            chat_id, document, caption=text, message_thread_id=message_thread_id,
+        )
+        await bot.send_message(
+            chat_id, "Continuer ?", message_thread_id=message_thread_id,
+            reply_markup=_checkpoint_continue_keyboard(),
+        )
+    else:
+        await bot.send_message(
+            chat_id, text, message_thread_id=message_thread_id,
+            reply_markup=_checkpoint_continue_keyboard(),
+        )
 
 
 async def start_run(
@@ -321,6 +399,9 @@ async def _execute_run(
         active = _active_runs.get(message_thread_id)
         if active is not None:
             active.awaiting_human = True
+        await _send_checkpoint_notification(
+            bot, chat_id, message_thread_id, config, feature_name, final_state,
+        )
         return
 
     if status == RunStatus.COMPLETED:
@@ -378,21 +459,17 @@ async def stop_active_run(message_thread_id: int) -> Optional[dict[str, Any]]:
     return {"feature_name": active.feature_name, "run_id": active.run_id, "commit": commit_hash}
 
 
-async def handle_run_reply(
-    bot: Any, chat_id: int, message_thread_id: Optional[int], text: str,
+async def _resume_waiting_run(
+    bot: Any, chat_id: int, message_thread_id: Optional[int],
 ) -> bool:
     """
-    Traite un message tapé dans un topic où un run est en attente de
-    validation humaine (voir _execute_run, status == WAITING_HUMAN) — à
-    appeler par telegram.handlers._on_message, après handle_dialogue_reply.
-
-    Le contenu de `text` n'est jamais lu (voir docstring module) —
-    n'importe quel message reprend le run.
+    Cœur partagé de handle_run_reply (texte tapé) et handle_checkpoint_continue
+    (bouton « ✅ Continuer », voir _send_checkpoint_notification) — reprend le
+    run en attente de validation humaine dans ce topic, si présent.
 
     Returns:
-        True si un run était en attente pour ce topic et que ce message a
-        été consommé comme déclencheur de reprise. False sinon (l'appelant
-        continue son dispatch normal).
+        True si un run était en attente pour ce topic et a été relancé.
+        False sinon (l'appelant continue son dispatch normal).
     """
     if message_thread_id is None:
         return False
@@ -409,3 +486,29 @@ async def handle_run_reply(
         )
     )
     return True
+
+
+async def handle_run_reply(
+    bot: Any, chat_id: int, message_thread_id: Optional[int], text: str,
+) -> bool:
+    """
+    Traite un message tapé dans un topic où un run est en attente de
+    validation humaine (voir _execute_run, status == WAITING_HUMAN) — à
+    appeler par telegram.handlers._on_message, après handle_dialogue_reply.
+
+    Le contenu de `text` n'est jamais lu (voir docstring module) —
+    n'importe quel message reprend le run, voir _resume_waiting_run.
+    """
+    return await _resume_waiting_run(bot, chat_id, message_thread_id)
+
+
+async def handle_checkpoint_continue_callback(
+    bot: Any, chat_id: int, message_thread_id: Optional[int],
+) -> bool:
+    """
+    Traite un clic sur le bouton « ✅ Continuer » posté par
+    _send_checkpoint_notification — à appeler par telegram.handlers, sur le
+    callback_query CHECKPOINT_CONTINUE_CALLBACK. Même reprise que
+    handle_run_reply, voir _resume_waiting_run.
+    """
+    return await _resume_waiting_run(bot, chat_id, message_thread_id)

@@ -14,9 +14,10 @@ import pytest
 import studio.telegram.run_flow as run_flow_module
 import studio.tools.queries as queries_module
 from studio.config import _current_project_name
-from studio.state import RunStatus
+from studio.state import AgentResult, Phase, RunStatus
 from studio.telegram.run_flow import (
     _active_runs,
+    handle_checkpoint_continue_callback,
     handle_run_reply,
     start_run,
     stop_active_run,
@@ -77,11 +78,24 @@ class _SentMessage:
 class _FakeBot:
     def __init__(self):
         self.sent: list[dict] = []
+        self.documents: list[dict] = []
         self.edits: list[dict] = []
         self._next_message_id = 1
 
     async def send_message(self, chat_id, text, *, message_thread_id=None, reply_markup=None):
-        self.sent.append({"chat_id": chat_id, "text": text, "message_thread_id": message_thread_id})
+        self.sent.append({
+            "chat_id": chat_id, "text": text, "message_thread_id": message_thread_id,
+            "reply_markup": reply_markup,
+        })
+        message_id = self._next_message_id
+        self._next_message_id += 1
+        return _SentMessage(message_id)
+
+    async def send_document(self, chat_id, document, *, caption=None, message_thread_id=None):
+        self.documents.append({
+            "chat_id": chat_id, "filename": document.filename, "caption": caption,
+            "message_thread_id": message_thread_id,
+        })
         message_id = self._next_message_id
         self._next_message_id += 1
         return _SentMessage(message_id)
@@ -289,6 +303,14 @@ async def test_waiting_human_then_reply_resumes(
     # Pas de menu à boutons sur WAITING_HUMAN (ADR 0015, Décision 7) : le
     # topic attend une réponse pour reprendre, pas un nouveau choix de menu.
     assert bot.edits[-1]["reply_markup"] is None
+    # Notification de checkpoint (ADR 0015, révision 2026-08-05) : un
+    # NOUVEAU message avec le bouton "Continuer", pas seulement l'édition de
+    # progression ci-dessus — aucun agent_results ici, donc pas de pièce
+    # jointe, juste le texte + bouton dans le même message.
+    checkpoint_message = bot.sent[-1]
+    assert checkpoint_message["reply_markup"] is not None
+    assert "en pause" in checkpoint_message["text"]
+    assert bot.documents == []
 
     # Reprise : nouveau graphe factice, states menant à COMPLETED.
     second_states = [
@@ -317,6 +339,110 @@ async def test_waiting_human_then_reply_resumes(
     entry = await planification.find_entry(config, _FEATURE_NAME)
     assert entry.statut == "fait"
     assert _THREAD_ID not in _active_runs
+
+
+# --- checkpoint WAITING_HUMAN : pièce jointe + bouton "Continuer" ---
+
+async def test_waiting_human_attaches_last_output_file(
+    monkeypatch: pytest.MonkeyPatch, config: SimpleNamespace, repo: Path,
+):
+    """
+    ADR 0015 (révision 2026-08-05) : le fichier produit par le dernier agent
+    (ex. architect-brief.md) doit être joint en pièce jointe au message de
+    checkpoint, avec le bouton "Continuer" sur un message texte séparé (voir
+    _send_checkpoint_notification — jamais en légende du document,
+    edit_message_text ne peut pas éditer un message document).
+    """
+    _write_card(repo)
+    await _seed_entry(config)
+
+    artifact_path = repo / "specs" / _RUN_ID / "architect-brief.md"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text("Audit amont : rien à signaler.\n", encoding="utf-8")
+
+    async def fake_fetch_run_state(config, run_id):
+        return None
+
+    monkeypatch.setattr(queries_module, "fetch_run_state", fake_fetch_run_state)
+
+    agent_result = AgentResult(
+        agent="architect", phase=Phase.AUDIT_AMONT, status="success",
+        output_files=[f"specs/{_RUN_ID}/architect-brief.md"],
+    )
+    states = [{
+        "status": RunStatus.WAITING_HUMAN, "current_phase": "FICHES", "agent_sequence": [],
+        "agent_results": [agent_result],
+    }]
+    graph = _fake_graph(states, [])
+
+    async def fake_build_graph(config):
+        return graph
+
+    monkeypatch.setattr(run_flow_module, "build_graph", fake_build_graph)
+
+    bot = _FakeBot()
+    await start_run(bot, _CHAT_ID, _THREAD_ID, config, _FEATURE_NAME)
+    await _active_runs[_THREAD_ID].task
+
+    assert len(bot.documents) == 1
+    assert bot.documents[0]["filename"] == "architect-brief.md"
+    assert bot.documents[0]["message_thread_id"] == _THREAD_ID
+
+    continue_message = bot.sent[-1]
+    assert continue_message["text"] == "Continuer ?"
+    assert continue_message["reply_markup"] is not None
+
+
+# --- checkpoint WAITING_HUMAN : reprise par le bouton "Continuer" ---
+
+async def test_checkpoint_continue_callback_resumes_like_text_reply(
+    monkeypatch: pytest.MonkeyPatch, config: SimpleNamespace, repo: Path,
+):
+    """Le bouton "Continuer" (handle_checkpoint_continue_callback) doit
+    reprendre le run exactement comme un texte tapé (handle_run_reply,
+    _resume_waiting_run partagé)."""
+    _write_card(repo)
+    await _seed_entry(config)
+
+    async def fake_fetch_run_state(config, run_id):
+        return None
+
+    monkeypatch.setattr(queries_module, "fetch_run_state", fake_fetch_run_state)
+
+    states = [{"status": RunStatus.WAITING_HUMAN, "current_phase": "AUDIT_AMONT", "agent_sequence": []}]
+    graph = _fake_graph(states, [])
+
+    async def fake_build_graph(config):
+        return graph
+
+    monkeypatch.setattr(run_flow_module, "build_graph", fake_build_graph)
+
+    bot = _FakeBot()
+    await start_run(bot, _CHAT_ID, _THREAD_ID, config, _FEATURE_NAME)
+    await _active_runs[_THREAD_ID].task
+
+    assert _active_runs[_THREAD_ID].awaiting_human is True
+
+    second_states = [{
+        "status": RunStatus.COMPLETED, "current_phase": "CLOTURE", "agent_sequence": [],
+        "card_root_path": f"specs/{_RUN_ID}/card-root.md",
+    }]
+    graph2 = _fake_graph(second_states, [])
+
+    async def fake_build_graph_2(config):
+        return graph2
+
+    monkeypatch.setattr(run_flow_module, "build_graph", fake_build_graph_2)
+
+    resumed = await handle_checkpoint_continue_callback(bot, _CHAT_ID, _THREAD_ID)
+    assert resumed is True
+    await _active_runs[_THREAD_ID].task
+
+    entry = await planification.find_entry(config, _FEATURE_NAME)
+    assert entry.statut == "fait"
+
+    # Un topic sans run en attente : le bouton ne doit rien déclencher.
+    assert await handle_checkpoint_continue_callback(bot, _CHAT_ID, _THREAD_ID) is False
 
 
 # --- FAILED rapporté sans reprise auto ---
