@@ -767,6 +767,46 @@ async def test_menu_button_sends_root_menu(
     assert calls["args"] == (_ALLOWED_CHAT_ID, 111, config_dir)
 
 
+async def test_slash_menu_text_sends_root_menu(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path,
+):
+    """
+    "/menu" tapé au clavier doit afficher le menu comme le bouton persistant
+    "Menu ▶", pas être traité comme une commande slash inconnue puis
+    retomber sur handle_natural_language (gap remonté en usage réel, voir
+    docs/roadmap.md) : /menu n'a jamais été un vrai outil du registre, donc
+    parse_slash_command("/menu") renvoie None comme pour tout texte libre.
+    """
+    calls = {}
+
+    async def fake_send_root_menu(bot, chat_id, message_thread_id, config_dir_arg):
+        calls["args"] = (chat_id, message_thread_id, config_dir_arg)
+
+    monkeypatch.setattr(handlers_module.menu, "send_root_menu", fake_send_root_menu)
+
+    async def fail_if_called_async(*args, **kwargs):
+        raise AssertionError("ne doit pas être appelé : /menu doit être intercepté avant")
+
+    monkeypatch.setattr(handlers_module, "handle_natural_language", fail_if_called_async)
+
+    router = handlers_module.build_router(config_dir=config_dir, allowed_chat_id=_ALLOWED_CHAT_ID)
+    on_message = router.message.handlers[0].callback
+
+    message = SimpleNamespace(
+        text="/menu",
+        from_user=SimpleNamespace(is_bot=False),
+        chat=SimpleNamespace(id=_ALLOWED_CHAT_ID),
+        message_thread_id=111,
+        message_id=1,
+        bot=object(),
+        reply=None,
+    )
+
+    await on_message(message)
+
+    assert calls["args"] == (_ALLOWED_CHAT_ID, 111, config_dir)
+
+
 async def test_menu_button_bypasses_pending_reply_handlers(
     monkeypatch: pytest.MonkeyPatch, config_dir: Path,
 ):

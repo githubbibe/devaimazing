@@ -427,13 +427,20 @@ def build_router(config_dir: Optional[Path], allowed_chat_id: int) -> Router:
                     await message.reply(reply.text, reply_markup=keyboard)
                 return
 
-            if message.text == menu.MENU_BUTTON_LABEL:
+            if message.text == menu.MENU_BUTTON_LABEL or message.text.strip().lower() == "/menu":
                 # Bouton persistant "Menu ▶" — priorité absolue au même titre
                 # que /stop (ADR 0015, Décision 7 révisée) : sans ça, un clic
                 # pendant un dialogue de cadrage PM en attente était avalé
                 # comme réponse à la question du PM au lieu d'afficher le
                 # menu — aucun retour visible, confusion pour l'utilisateur
                 # (gap remonté en usage réel, voir docs/roadmap.md).
+                # "/menu" tapé au clavier traité comme un alias texte du même
+                # bouton — pas une vraie commande slash du registre (aucun
+                # ToolSpec "menu" à exécuter, juste afficher l'écran racine) :
+                # sans ce garde-fou il tombait dans parse_slash_command() ->
+                # None (commande non reconnue) -> handle_natural_language,
+                # qui répondait par une présentation générique au lieu du
+                # menu (gap remonté en usage réel, voir docs/roadmap.md).
                 await menu.send_root_menu(
                     message.bot, message.chat.id, message.message_thread_id, resolved_config_dir,
                 )
