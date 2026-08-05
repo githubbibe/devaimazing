@@ -28,6 +28,7 @@ from studio.routing import (
     agent_iteration_count,
     is_last_agent_of_phase,
     max_iterations_exceeded,
+    model_for_attempt,
 )
 from studio.state import AgentResult, Phase, RunStatus, StudioState
 from studio.tools.filesystem import (
@@ -115,6 +116,7 @@ async def _feedback_sent(
     result: dict,
     tracer: AgentTracer,
     retry_scope_entry: Optional[dict[str, str]],
+    model: str,
 ) -> StudioState:
     """
     Chemin commun aux deux cas de blocage de ce node : l'agent signale
@@ -135,7 +137,7 @@ async def _feedback_sent(
         tokens_completion=result["tokens_completion"],
         duration_ms=result["duration_ms"],
     )
-    await record_agent_result(config, state, agent_result, model=config.models["agents_local"])
+    await record_agent_result(config, state, agent_result, model=model)
     tracer.emit("node_exit", status="feedback_sent")
     return {
         "agent_results": state.agent_results + [agent_result],
@@ -297,6 +299,7 @@ async def run(state: StudioState) -> StudioState:
     inner_retry_limit = config.get("agents", {}).get("inner_retry_limit", 3)
 
     iteration = agent_iteration_count(state, role) + 1
+    model = model_for_attempt(config, state, role)
 
     tokens_prompt_total = 0
     tokens_completion_total = 0
@@ -309,7 +312,7 @@ async def run(state: StudioState) -> StudioState:
         result = await run_ollama(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            model=config.models["agents_local"],
+            model=model,
             base_url=config.ollama_base_url,
             timeout_seconds=ollama_config.get("timeout_seconds", 120),
             num_ctx=ollama_config.get("num_ctx", 16384),
@@ -380,7 +383,7 @@ async def run(state: StudioState) -> StudioState:
         return await _feedback_sent(
             config, state, role, card_path, iteration,
             blocked_reason or result["content"], result, tracer,
-            retry_scope_entry=None,
+            retry_scope_entry=None, model=model,
         )
 
     if verify_error is not None:
@@ -389,6 +392,7 @@ async def run(state: StudioState) -> StudioState:
             retry_scope_entry={
                 f: verify_error.message for f in [verify_error.file, *verify_error.related_files]
             },
+            model=model,
         )
 
     is_implementation = state.current_phase == Phase.IMPLEMENTATION
@@ -417,7 +421,7 @@ async def run(state: StudioState) -> StudioState:
         tokens_completion=result["tokens_completion"],
         duration_ms=result["duration_ms"],
     )
-    await record_agent_result(config, state, agent_result, model=config.models["agents_local"])
+    await record_agent_result(config, state, agent_result, model=model)
     tracer.emit("node_exit", status="success", output_files=sorted(files.keys()))
 
     updates: dict = {

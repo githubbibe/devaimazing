@@ -271,8 +271,14 @@ class StudioConfig:
         return self._project_name
 
     @property
-    def models(self) -> dict[str, str]:
-        """Mapping nom_modèle -> identifiant LLM."""
+    def models(self) -> dict[str, Any]:
+        """
+        Mapping nom_modèle -> identifiant LLM (chaîne), sauf
+        "agents_local" qui accepte aussi une liste (cascade de modèles
+        locaux, voir routing.model_for_attempt, ADR 0006 révision
+        2026-08-05) — chaîne unique toujours valide (comportement
+        historique, cascade à un seul élément).
+        """
         return dict(self._raw.get("models", {}))
 
     @property

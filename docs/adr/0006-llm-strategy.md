@@ -33,6 +33,49 @@ Donc détecter cette dette exige une capacité strictement supérieure au produc
 - Back, Front, Test : Qwen 2.5 7B Instruct (Q4_K_M, ~4.5 Go).
 - Un seul modèle chargé à la fois (contrainte RAM 24 Go avec containers Podman actifs).
 
+**Révision (2026-08-05) — cascade de modèles locaux plutôt qu'un modèle unique** :
+`models.agents_local` (config/studio.yml) passe d'une chaîne unique à une **liste
+ordonnée** : `qwen2.5:7b-instruct → qwen2.5:14b-instruct → devstral:24b → gpt-oss:20b`.
+Gap constaté en run réel (todolist3, run `gestion-taches`) : trois activations
+complètes de l'agent Back avec le même modèle (7b puis 14b) ont produit **trois fois
+le même bug de syntaxe périmée** (`from pydantic import BaseSettings` — API pydantic
+v1, incompatible avec pydantic v2 pourtant demandé ; SQLAlchemy synchrone au lieu
+d'async) — zéro convergence sur 6 activations cumulées. Un modèle qui régénère
+depuis les mêmes poids ne « réessaie » pas différemment de lui-même à chaque
+itération : la boucle `max_iterations` (3 tentatives identiques) n'apportait donc
+rien pour cette classe d'échec (connaissance d'API périmée), à la différence d'un
+bug ponctuel qu'un nouveau tirage aléatoire du même modèle peut corriger.
+
+`studio.routing.model_for_attempt` sélectionne le modèle selon
+`agent_iteration_count(state, agent)` (même indexation que le compteur
+`max_iterations` déjà existant) — **entre chaque activation complète**, jamais au
+sein de la boucle de correction ciblée interne à une activation
+(`inner_retry_limit`, studio.nodes.backend/frontend.py) : une correction ciblée
+répond à une erreur précise déjà montrée au modèle, changer de modèle en cours de
+correction lui ferait perdre ce contexte. `agents.max_iterations` passe de 3 à 4
+pour couvrir toute la cascade (sinon `gpt-oss:20b`, dernier maillon, ne serait
+jamais atteint). Compatibilité ascendante : une chaîne unique reste valide
+(normalisée en cascade à un seul élément), aucun projet existant n'a besoin d'être
+migré pour continuer à fonctionner comme avant.
+
+Ordre du moins cher (7B, le plus rapide) au plus capable, cohérent avec le principe
+coût-d'abord de cet ADR — la plupart des fichiers simples réussissent dès le premier
+modèle, la cascade n'entre en jeu que sur les échecs réels. `devstral:24b` est
+spécifiquement entraîné pour du coding agentique (SWE-bench) — candidat le plus
+pertinent pour ce type d'échec, positionné avant `gpt-oss:20b` (généraliste) plutôt
+qu'après.
+
+**Distinct du « fallback API automatique » explicitement rejeté plus bas** : la
+cascade reste entièrement Ollama (coût électricité, pas de tokens API) — elle ne
+remet pas en cause l'arbitrage de contrôle des coûts, juste le choix de répéter
+aveuglément un modèle qui a déjà montré ses limites de connaissance plutôt que d'en
+essayer un autre du même budget (local, gratuit).
+
+**Non vérifié à ce stade** : la fenêtre de contexte `ollama.num_ctx` (32768,
+calibrée sur qwen2.5:7b-instruct) n'a pas été revalidée pour les trois autres
+modèles de la cascade — à surveiller si des troncatures de prompt apparaissent en
+usage réel avec devstral/gpt-oss.
+
 **Sécu - Claude Sonnet 4.6 (API Anthropic), deux couches complémentaires**
 - SAST déterministe (Semgrep, Bandit — voir `config/studio.yml` section `sast`) :
   premier passage, zéro token.

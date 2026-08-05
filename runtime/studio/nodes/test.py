@@ -17,7 +17,7 @@ from typing import Optional
 
 from studio.config import StudioConfig
 from studio.metrics import record_agent_result
-from studio.routing import agent_iteration_count, max_iterations_exceeded
+from studio.routing import agent_iteration_count, max_iterations_exceeded, model_for_attempt
 from studio.state import AgentResult, Phase, RunStatus, StudioState
 from studio.tools.filesystem import (
     append_feedback,
@@ -240,10 +240,11 @@ async def run(state: StudioState) -> StudioState:
     )
 
     ollama_config = config.get("ollama", {})
+    model = model_for_attempt(config, state, role)
     result = await run_ollama(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
-        model=config.models["agents_local"],
+        model=model,
         base_url=config.ollama_base_url,
         timeout_seconds=ollama_config.get("timeout_seconds", 120),
         num_ctx=ollama_config.get("num_ctx", 16384),
@@ -272,7 +273,7 @@ async def run(state: StudioState) -> StudioState:
             tokens_completion=result["tokens_completion"],
             duration_ms=result["duration_ms"],
         )
-        await record_agent_result(config, state, agent_result, model=config.models["agents_local"])
+        await record_agent_result(config, state, agent_result, model=model)
         tracer.emit("node_exit", status="feedback_sent")
         return {
             "agent_results": state.agent_results + [agent_result],
@@ -304,7 +305,7 @@ async def run(state: StudioState) -> StudioState:
         passed, output = await _run_test_command(test_command, config.repo_path)
         if not passed:
             agent_result = AgentResult(status="error", **result_kwargs)
-            await record_agent_result(config, state, agent_result, model=config.models["agents_local"])
+            await record_agent_result(config, state, agent_result, model=model)
             feedback_text = output[-_MAX_FEEDBACK_OUTPUT_CHARS:]
             updates: dict = {
                 "agent_results": state.agent_results + [agent_result],
@@ -366,7 +367,7 @@ async def run(state: StudioState) -> StudioState:
     )
 
     agent_result = AgentResult(status="success", **result_kwargs)
-    await record_agent_result(config, state, agent_result, model=config.models["agents_local"])
+    await record_agent_result(config, state, agent_result, model=model)
     tracer.emit("node_exit", status="success", output_files=sorted(files.keys()))
     return {
         "agent_results": state.agent_results + [agent_result],

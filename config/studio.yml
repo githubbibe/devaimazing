@@ -5,7 +5,26 @@ models:
   pm_opus: claude-opus-4-8         # Phase 1 : cadrage (coûteux, rare)
   pm_sonnet: claude-sonnet-4-6     # Phase 3 : raffinement (mode croisière)
   agent_auditor: claude-sonnet-4-6 # Architecte (phases 2, 5, 9) + Sécu (phase 8)
-  agents_local: qwen2.5:7b-instruct # Back, Front, Test
+  # Back, Front, Test — cascade de modèles locaux (ADR 0006, révision
+  # 2026-08-05), pas un modèle unique : le modèle change entre chaque
+  # ACTIVATION COMPLÈTE d'un agent (studio.routing.model_for_attempt), pas
+  # au sein de la boucle de correction ciblée (inner_retry_limit).
+  # Constaté en run réel (todolist3, gestion-taches) : qwen2.5:7b puis
+  # qwen2.5:14b ont produit trois fois le MÊME bug de syntaxe périmée
+  # (pydantic v1, SQLAlchemy sync) sans converger — un modèle qui régénère
+  # depuis les mêmes connaissances d'entraînement ne "réessaie" pas
+  # différemment de lui-même. Ordre du moins cher (gratuit, rapide) au plus
+  # capable, cohérent avec le principe coût-d'abord de l'ADR : qwen2.5:7b
+  # d'abord (beaucoup de tâches simples réussissent dès ce niveau), puis
+  # qwen2.5:14b, puis devstral:24b (spécialisé code agentique/SWE), puis
+  # gpt-oss:20b en dernier recours. Chaîne au-delà de 3 modèles => agents.
+  # max_iterations doit couvrir toute la cascade (voir plus bas), sinon les
+  # derniers modèles ne sont jamais atteints.
+  agents_local:
+    - qwen2.5:7b-instruct
+    - qwen2.5:14b-instruct
+    - devstral:24b
+    - gpt-oss:20b
   devaimazing: gemma3:4b            # Agent Devaimazing (ADR 0013), validé 2026-07-29
 
 # Ollama
@@ -58,7 +77,11 @@ checkpoints:
 
 # Retry agents
 agents:
-  max_iterations: 3
+  # Aligné sur la longueur de la cascade models.agents_local (4 modèles,
+  # voir plus haut) — sinon le dernier maillon de la cascade (gpt-oss:20b)
+  # ne serait jamais atteint (routing.model_for_attempt indexe la cascade
+  # par le nombre d'activations déjà tentées).
+  max_iterations: 4
   retry_delay_seconds: 5
   # Tentatives de correction ciblée DANS une même activation d'un agent
   # producteur (Back/Front/Test), après un échec de tools.pyenv.verify_python_files

@@ -137,6 +137,58 @@ def max_iterations_exceeded(state: StudioState, config: StudioConfig, agent: str
     return agent_iteration_count(state, agent) >= max_iterations
 
 
+def model_for_attempt(config: StudioConfig, state: StudioState, agent: str) -> str:
+    """
+    Modèle local à utiliser pour la tentative courante de `agent` (Back,
+    Front, Test — config.models["agents_local"]), selon une cascade
+    statique plutôt qu'un modèle fixe (ADR 0006, révision 2026-08-05) :
+    le modèle change entre chaque ACTIVATION COMPLÈTE de l'agent (même
+    indexation que agent_iteration_count), pas au sein de la boucle de
+    correction ciblée d'une même activation (studio.nodes.backend.run,
+    inner_retry_limit) — un bug de syntaxe corrigé "à chaud" reste sur le
+    modèle qui vient de recevoir le message d'erreur précis, cohérent avec
+    ce qu'il a déjà écrit ; changer de modèle en pleine correction ciblée
+    lui ferait perdre ce contexte.
+
+    Motivation : trois activations complètes avec le même modèle
+    (qwen2.5:7b puis qwen2.5:14b) ont produit trois fois le même bug de
+    syntaxe périmée (pydantic v1 BaseSettings, SQLAlchemy sync) sans
+    converger, run réel — todolist3, gestion-taches — un modèle ne
+    "réessaie" pas différemment de lui-même, il régénère depuis les mêmes
+    connaissances d'entraînement à chaque fois.
+
+    Args:
+        config: Configuration du run (models.agents_local — chaîne unique
+            ou liste, voir Notes).
+        state: État courant, avant la tentative envisagée.
+        agent: Nom de l'agent (tel qu'écrit dans state.agent_sequence).
+
+    Returns:
+        Identifiant du modèle Ollama à utiliser pour cette tentative.
+
+    Raises:
+        ValueError: Si config.models.agents_local est vide ou absent.
+
+    Notes:
+        config.models["agents_local"] accepte toujours une simple chaîne
+        (un seul modèle, comportement historique, compatible avec les
+        projets qui n'ont pas adopté la cascade) — normalisée ici en liste
+        à un élément. Au-delà de la longueur de la cascade,
+        max_iterations_exceeded coupe court avant d'atteindre cette
+        fonction avec un index hors bornes tant que agents.max_iterations
+        (config/studio.yml) reste aligné sur le nombre de modèles listés ;
+        le dernier modèle de la liste est répété par sécurité si ce n'est
+        pas le cas (config incohérente plutôt qu'IndexError).
+    """
+    cascade = config.models.get("agents_local", [])
+    if isinstance(cascade, str):
+        cascade = [cascade]
+    if not cascade:
+        raise ValueError("config.models.agents_local vide ou absent")
+    index = min(agent_iteration_count(state, agent), len(cascade) - 1)
+    return cascade[index]
+
+
 def should_checkpoint(state: StudioState) -> bool:
     """
     Détermine si un checkpoint humain est nécessaire pour la phase courante.

@@ -12,6 +12,7 @@ from studio.routing import (
     agent_iteration_count,
     is_last_agent_of_phase,
     max_iterations_exceeded,
+    model_for_attempt,
 )
 from studio.state import AgentResult, Phase, StudioState
 
@@ -24,7 +25,21 @@ def _write_yaml(path: Path, data: dict) -> None:
 @pytest.fixture
 def config(tmp_path: Path) -> StudioConfig:
     config_dir = tmp_path / "config"
-    _write_yaml(config_dir / "studio.yml", {"agents": {"max_iterations": 3}})
+    _write_yaml(config_dir / "studio.yml", {
+        "agents": {"max_iterations": 3},
+        "models": {"agents_local": "qwen2.5:7b-instruct"},
+    })
+    _write_yaml(config_dir / "projects" / "demo.yml", {"repo_path": str(tmp_path / "project")})
+    return StudioConfig(project_name="demo", config_dir=config_dir)
+
+
+@pytest.fixture
+def config_with_cascade(tmp_path: Path) -> StudioConfig:
+    config_dir = tmp_path / "config"
+    _write_yaml(config_dir / "studio.yml", {
+        "agents": {"max_iterations": 4},
+        "models": {"agents_local": ["qwen2.5:7b-instruct", "qwen2.5:14b-instruct", "devstral:24b", "gpt-oss:20b"]},
+    })
     _write_yaml(config_dir / "projects" / "demo.yml", {"repo_path": str(tmp_path / "project")})
     return StudioConfig(project_name="demo", config_dir=config_dir)
 
@@ -153,3 +168,63 @@ def test_max_iterations_not_exceeded_below_threshold(config: StudioConfig):
 def test_max_iterations_exceeded_at_threshold(config: StudioConfig):
     state = StudioState(current_phase=Phase.STUBS, agent_results=_results("back", Phase.STUBS, 3))
     assert max_iterations_exceeded(state, config, "back") is True
+
+
+# --- model_for_attempt (cascade de modèles locaux, ADR 0006 révision 2026-08-05) ---
+
+def test_model_for_attempt_single_string_always_returns_it(config: StudioConfig):
+    """models.agents_local en simple chaîne (comportement historique,
+    projets qui n'ont pas adopté la cascade) — toujours le même modèle,
+    quel que soit le nombre de tentatives déjà faites."""
+    state = StudioState(current_phase=Phase.STUBS, agent_results=_results("back", Phase.STUBS, 2))
+    assert model_for_attempt(config, state, "back") == "qwen2.5:7b-instruct"
+
+
+def test_model_for_attempt_cascade_advances_with_iteration_count(
+    config_with_cascade: StudioConfig,
+):
+    """Chaque activation complète déjà tentée avance d'un cran dans la
+    cascade — 0 tentative -> premier modèle, 1 tentative -> second, etc."""
+    for previous_attempts, expected_model in [
+        (0, "qwen2.5:7b-instruct"),
+        (1, "qwen2.5:14b-instruct"),
+        (2, "devstral:24b"),
+        (3, "gpt-oss:20b"),
+    ]:
+        state = StudioState(
+            current_phase=Phase.STUBS,
+            agent_results=_results("back", Phase.STUBS, previous_attempts),
+        )
+        assert model_for_attempt(config_with_cascade, state, "back") == expected_model
+
+
+def test_model_for_attempt_clamps_beyond_cascade_length(config_with_cascade: StudioConfig):
+    """Garde-fou : au-delà de la longueur de la cascade (config
+    incohérente, max_iterations > nombre de modèles listés), répète le
+    dernier modèle plutôt que de lever une IndexError."""
+    state = StudioState(
+        current_phase=Phase.STUBS, agent_results=_results("back", Phase.STUBS, 10),
+    )
+    assert model_for_attempt(config_with_cascade, state, "back") == "gpt-oss:20b"
+
+
+def test_model_for_attempt_independent_per_agent(config_with_cascade: StudioConfig):
+    """La position dans la cascade est propre à chaque agent — back en
+    échec ne fait pas avancer la cascade de front."""
+    state = StudioState(
+        current_phase=Phase.STUBS,
+        agent_results=_results("back", Phase.STUBS, 3) + _results("front", Phase.STUBS, 0),
+    )
+    assert model_for_attempt(config_with_cascade, state, "back") == "gpt-oss:20b"
+    assert model_for_attempt(config_with_cascade, state, "front") == "qwen2.5:7b-instruct"
+
+
+def test_model_for_attempt_raises_on_empty_cascade(tmp_path: Path):
+    config_dir = tmp_path / "config"
+    _write_yaml(config_dir / "studio.yml", {"models": {}})
+    _write_yaml(config_dir / "projects" / "demo.yml", {"repo_path": str(tmp_path / "project")})
+    config = StudioConfig(project_name="demo", config_dir=config_dir)
+    state = StudioState(current_phase=Phase.STUBS)
+
+    with pytest.raises(ValueError):
+        model_for_attempt(config, state, "back")
