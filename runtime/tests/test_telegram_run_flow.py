@@ -503,6 +503,7 @@ async def test_retry_failed_run_resets_iteration_budget_and_resumes(
             "requires_manual_intervention": True,
             "intervention_reason": "Agent 'back' a atteint la limite de 3 itérations.",
             "agent_results": [other_agent_result, failed_result],
+            "retry_scope": {"back": {"backend/routers/tasks.py": "erreur obsolète"}},
         }
 
     monkeypatch.setattr(queries_module, "fetch_run_state", fake_fetch_run_state)
@@ -531,6 +532,10 @@ async def test_retry_failed_run_resets_iteration_budget_and_resumes(
     # "back"/STUBS purgé (l'agent en échec), "front"/STUBS conservé (agent
     # différent, budget d'itérations indépendant).
     assert update["agent_results"] == [other_agent_result]
+    # retry_scope["back"] purgé aussi (voir _reset_failed_state_for_retry) —
+    # régénération complète propre plutôt qu'une correction ciblée avec un
+    # message d'erreur obsolète.
+    assert update["retry_scope"] == {}
 
     entry = await planification.find_entry(config, _FEATURE_NAME)
     assert entry.statut == "fait"

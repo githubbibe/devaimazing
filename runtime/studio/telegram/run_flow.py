@@ -244,20 +244,39 @@ def _reset_failed_state_for_retry(state: dict[str, Any]) -> dict[str, Any]:
     entrée. Générique aux cinq nodes qui peuvent échouer ainsi, y compris pm
     (phase FICHES) qui n'utilise pas state.agent_sequence/current_agent_index
     contrairement aux quatre autres.
+
+    Purge aussi state.retry_scope[agent] s'il existe : sans ça, la
+    prochaine activation reste en « mode correction ciblée »
+    (backend.py::_targeted_correction_prompt) sur le fichier qui a fait
+    échouer le run, avec un message d'erreur devenu obsolète si ce fichier a
+    été corrigé à la main entre-temps (gap trouvé en run réel, todolist3,
+    backend/routers/tasks.py) — mieux vaut une régénération complète propre
+    qu'un modèle confronté à un contenu déjà correct mais présenté comme
+    fautif.
     """
     agent_results = state.get("agent_results") or []
     if not agent_results:
         kept_results = agent_results
+        failed_agent = None
     else:
         last = agent_results[-1]
         kept_results = [
             r for r in agent_results if not (r.agent == last.agent and r.phase == last.phase)
         ]
+        failed_agent = last.agent
+
+    retry_scope = state.get("retry_scope") or {}
+    kept_retry_scope = (
+        {k: v for k, v in retry_scope.items() if k != failed_agent}
+        if failed_agent is not None else retry_scope
+    )
+
     return {
         "status": RunStatus.IN_PROGRESS,
         "requires_manual_intervention": False,
         "intervention_reason": None,
         "agent_results": kept_results,
+        "retry_scope": kept_retry_scope,
     }
 
 
