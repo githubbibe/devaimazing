@@ -74,6 +74,19 @@ def _venv_python(venv_dir: Path) -> Path:
     return venv_dir / "bin" / "python"
 
 
+def existing_venv_python(project_name: str) -> Optional[Path]:
+    """
+    Chemin de l'exécutable python du venv déjà créé pour `project_name`,
+    None si ce venv n'existe pas encore. Contrairement à ensure_venv,
+    jamais de création ni d'installation ici (lecture seule) — utilisé par
+    tools.live_docs, qui doit pouvoir s'abstenir proprement (chaîne vide)
+    plutôt que forcer une installation prématurée juste pour introspecter
+    des symboles.
+    """
+    python_path = _venv_python(VENV_ROOT / project_name)
+    return python_path if python_path.is_file() else None
+
+
 async def _run(
     *args: str, cwd: Optional[Path] = None, timeout: Optional[float] = None,
     env: Optional[dict] = None,

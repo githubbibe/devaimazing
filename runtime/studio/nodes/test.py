@@ -28,6 +28,7 @@ from studio.tools.filesystem import (
     write_card,
 )
 from studio.tools.git import commit_as_agent
+from studio.tools.live_docs import extract_live_docs
 from studio.tools.ollama import FILE_OUTPUT_SCHEMA, run_ollama
 from studio.tools.pyenv import extract_traceback_files
 from studio.tools.tracer import RunTracer
@@ -238,6 +239,11 @@ async def run(state: StudioState) -> StudioState:
         skill_names=_SKILL_NAMES,
         skills_dir=_SKILLS_DIR,
     )
+    live_docs = await extract_live_docs(config.project_name)
+    if live_docs:
+        system_prompt = (
+            f"{system_prompt}\n\n## Référence à jour (extraite du venv du projet)\n\n{live_docs}"
+        )
 
     ollama_config = config.get("ollama", {})
     model = model_for_attempt(config, state, role)
