@@ -479,6 +479,51 @@ async def test_start_run_reports_failed_with_retry_button(
     assert _THREAD_ID not in _active_runs
 
 
+async def test_start_run_crash_attaches_menu_keyboard(
+    monkeypatch: pytest.MonkeyPatch, config: SimpleNamespace, repo: Path,
+):
+    """Un crash externe (timeout Ollama/Claude Code CLI) pendant l'astream
+    ne doit pas laisser un message texte sans aucune action possible —
+    gap constaté en run réel (todolist3, gestion-taches, timeout Architecte)."""
+    _write_card(repo)
+    await _seed_entry(config)
+
+    async def fake_fetch_run_state(config, run_id):
+        return None
+
+    monkeypatch.setattr(queries_module, "fetch_run_state", fake_fetch_run_state)
+
+    closed: list = []
+
+    async def fake_astream(initial_state, *, config, stream_mode):
+        raise TimeoutError("Claude Code CLI a dépassé le délai imparti (600s) pour 'claude-sonnet-4-6'")
+        yield  # pragma: no cover - fait de fake_astream un générateur
+
+    graph = SimpleNamespace(
+        astream=fake_astream,
+        aupdate_state=lambda *a, **k: None,
+        checkpointer=_fake_checkpointer(closed),
+    )
+
+    async def fake_build_graph(config):
+        return graph
+
+    monkeypatch.setattr(run_flow_module, "build_graph", fake_build_graph)
+
+    bot = _FakeBot()
+    result = await start_run(bot, _CHAT_ID, _THREAD_ID, config, _FEATURE_NAME)
+    assert result == {}
+
+    active = _active_runs[_THREAD_ID]
+    await active.task
+
+    assert closed == [True]
+    assert len(bot.edits) == 1
+    assert "interrompu" in bot.edits[0]["text"]
+    assert bot.edits[0]["reply_markup"] is not None
+    assert _THREAD_ID not in _active_runs
+
+
 # --- reprise d'un run FAILED via le bouton "Réessayer" ---
 
 async def test_retry_failed_run_resets_iteration_budget_and_resumes(

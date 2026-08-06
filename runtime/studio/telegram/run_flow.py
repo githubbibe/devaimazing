@@ -546,8 +546,18 @@ async def _execute_run(
             bot, chat_id, message_id, feature_name, final_state, reply_markup=menu_keyboard,
         )
     except _EXTERNAL_SERVICE_ERRORS as exc:
+        # Contrairement à FAILED (bouton "Réessayer") et WAITING_HUMAN
+        # (bouton "Continuer"), ce chemin couvre un crash externe (timeout
+        # Ollama/Claude Code CLI, service indisponible) — le run reste
+        # IN_PROGRESS côté LangGraph (aucun node n'a rendu son résultat),
+        # une simple reprise (comme après un redémarrage du bot) suffit.
+        # Sans clavier ici, le message restait un cul-de-sac (aucun bouton
+        # nulle part) obligeant à retrouver soi-même Feature... dans le
+        # menu — gap constaté en run réel (todolist3, gestion-taches,
+        # timeout Claude Code CLI sur l'audit Architecte).
         await bot.edit_message_text(
             f"Run de {feature_name!r} interrompu : {exc}", chat_id=chat_id, message_id=message_id,
+            reply_markup=menu.build_root_keyboard(in_topic=True),
         )
         _active_runs.pop(message_thread_id, None)
         return
