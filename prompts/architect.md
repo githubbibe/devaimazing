@@ -28,6 +28,16 @@ Produis le brief architectural du run. Sois exhaustif et précis.
    devaimazing installe les dépendances depuis ce chemin précis, un fichier à
    la racine ne serait jamais lu.
 
+   Pour le fichier de dépendances lui-même (`requirements.txt`, `package.json`,
+   etc.) : donne une **version précise** pour chaque bibliothèque (ex.
+   `fastapi>=0.115`, `pydantic>=2.7`, `sqlalchemy>=2.0`, `pytest-asyncio>=0.24`),
+   jamais juste un nom sans version. Les agents producteurs locaux (Back, Front,
+   Test) ne sont pas fiables sur ce terrain : versions incohérentes entre elles
+   (ex. `pydantic` v2 déclaré mais du code v1 généré), noms de paquets mal
+   orthographiés (`aiiosqlite` au lieu de `aiosqlite`, `dotenv` au lieu de
+   `python-dotenv`) — gaps constatés en run réel (todolist3, gestion-taches). Ne
+   laisse aucune version à choisir par l'agent producteur.
+
 2. **Doublons potentiels** : compare avec `project-map.md`. Signale tout fichier
    qui ferait doublon avec l'existant (même rôle, noms différents).
 
