@@ -453,6 +453,31 @@ def test_parse_agent_file_output_multiple_files():
     assert blocked_reason == ""
 
 
+def test_parse_agent_file_output_recovers_missing_end_delimiter_before_next_file():
+    # Régression (2026-08-06, run réel todolist3) : qwen2.5:7b-instruct a
+    # oublié <<<DEVAIMAZING_END>>> avant d'enchaîner sur le fichier suivant —
+    # sans repli, tout le second fichier (délimiteur d'ouverture compris)
+    # était absorbé comme contenu littéral du premier.
+    content = (
+        '<<<DEVAIMAZING_FILE path="backend/a.py">>>\na = 1\n'
+        '<<<DEVAIMAZING_FILE path="backend/b.py">>>\nb = 2\n<<<DEVAIMAZING_END>>>'
+    )
+
+    files, blocked_reason = parse_agent_file_output(content)
+
+    assert files == {"backend/a.py": "a = 1", "backend/b.py": "b = 2"}
+    assert blocked_reason == ""
+
+
+def test_parse_agent_file_output_recovers_missing_end_delimiter_at_end_of_text():
+    content = '<<<DEVAIMAZING_FILE path="backend/a.py">>>\na = 1'
+
+    files, blocked_reason = parse_agent_file_output(content)
+
+    assert files == {"backend/a.py": "a = 1"}
+    assert blocked_reason == ""
+
+
 def test_parse_agent_file_output_blocked():
     content = "<<<DEVAIMAZING_BLOCKED>>>\nContradiction avec le brief.\n<<<DEVAIMAZING_END>>>"
 
@@ -474,6 +499,15 @@ def test_parse_agent_file_output_blocked_takes_priority_over_file_blocks():
 
     assert files == {}
     assert blocked_reason == "Raison."
+
+
+def test_parse_agent_file_output_blocked_recovers_missing_end_delimiter_at_end_of_text():
+    content = "<<<DEVAIMAZING_BLOCKED>>>\nContradiction avec le brief."
+
+    files, blocked_reason = parse_agent_file_output(content)
+
+    assert files == {}
+    assert blocked_reason == "Contradiction avec le brief."
 
 
 def test_parse_agent_file_output_no_blocks_falls_back_to_raw_text_as_blocked_reason():

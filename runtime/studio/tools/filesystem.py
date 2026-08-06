@@ -21,8 +21,17 @@ EMPTY_FEEDBACK_MARKER = "_Aucun feedback pour l'instant._"
 # de sortie"). Délimiteurs distinctifs (pas des ``` markdown standards) pour
 # éviter toute ambiguïté avec des blocs de code que l'agent citerait dans son
 # raisonnement en dehors d'un vrai bloc fichier.
+#
+# Le contenu s'arrête au premier de : "<<<DEVAIMAZING_END>>>", le prochain
+# "<<<DEVAIMAZING_FILE path=...>>>", ou la fin du texte — jamais seulement au
+# premier (exiger explicitement <<<DEVAIMAZING_END>>>) : un agent qui oublie
+# ce délimiteur de fermeture avant d'enchaîner sur le fichier suivant (gap
+# constaté en run réel, todolist3, 2026-08-06 : qwen2.5:7b-instruct, dernier
+# palier de la cascade) faisait sinon absorber tout le fichier suivant —
+# délimiteur d'ouverture compris — comme contenu littéral du premier.
 _FILE_BLOCK_PATTERN = re.compile(
-    r'<<<DEVAIMAZING_FILE path="([^"]+)">>>\n(.*?)\n<<<DEVAIMAZING_END>>>',
+    r'<<<DEVAIMAZING_FILE path="([^"]+)">>>\n(.*?)'
+    r'(?=\n<<<DEVAIMAZING_END>>>|\n<<<DEVAIMAZING_FILE path="|\Z)',
     re.DOTALL,
 )
 
@@ -30,7 +39,7 @@ _FILE_BLOCK_PATTERN = re.compile(
 # le cas où l'agent détecte une impossibilité — remplace le champ
 # blocked_reason du défunt contrat JSON (voir tools.ollama.run_ollama).
 _BLOCKED_BLOCK_PATTERN = re.compile(
-    r'<<<DEVAIMAZING_BLOCKED>>>\n(.*?)\n<<<DEVAIMAZING_END>>>',
+    r'<<<DEVAIMAZING_BLOCKED>>>\n(.*?)(?=\n<<<DEVAIMAZING_END>>>|\Z)',
     re.DOTALL,
 )
 
