@@ -66,14 +66,16 @@ def _fake_ollama_result(content: str, tokens_prompt=5, tokens_completion=10, dur
     }
 
 
-def _structured_output(files: dict[str, str], blocked_reason: str = "") -> str:
-    return json.dumps({
-        "files": [{"path": path, "content": content} for path, content in files.items()],
-        "blocked_reason": blocked_reason,
-    })
+def _delimited_output(files: dict[str, str], blocked_reason: str = "") -> str:
+    if blocked_reason:
+        return f"<<<DEVAIMAZING_BLOCKED>>>\n{blocked_reason}\n<<<DEVAIMAZING_END>>>"
+    return "\n".join(
+        f'<<<DEVAIMAZING_FILE path="{path}">>>\n{content}\n<<<DEVAIMAZING_END>>>'
+        for path, content in files.items()
+    )
 
 
-FILE_OUTPUT = _structured_output({"backend/auth/endpoints.py": "def login():\n    ..."})
+FILE_OUTPUT = _delimited_output({"backend/auth/endpoints.py": "def login():\n    ..."})
 
 
 def _card_metadata(**overrides) -> dict:
@@ -132,7 +134,11 @@ async def test_backend_stub_phase_writes_files_and_commits(monkeypatch: pytest.M
     assert "current_phase" not in updates
 
 
-async def test_backend_calls_ollama_with_structured_output_schema(monkeypatch: pytest.MonkeyPatch):
+async def test_backend_calls_ollama_without_response_format(monkeypatch: pytest.MonkeyPatch):
+    # Depuis le 2026-08-06 (expérience A/B, docs/roadmap.md) : contraindre
+    # le contenu par schéma JSON dégradait la fidélité de génération du
+    # code — Back n'y passe plus response_format, sortie texte par
+    # délimiteurs (voir _delimited_output).
     captured = {}
 
     async def fake_read_card(path, tracer=None):
@@ -164,7 +170,7 @@ async def test_backend_calls_ollama_with_structured_output_schema(monkeypatch: p
 
     await backend_node.run(state)
 
-    assert captured["response_format"] == backend_node.FILE_OUTPUT_SCHEMA
+    assert captured["response_format"] is None
 
 
 async def test_backend_includes_existing_file_content_in_prompt(
@@ -300,7 +306,7 @@ async def test_backend_blocked_reason_appends_feedback_and_waits_for_human(
 
     async def fake_run_ollama(**kwargs):
         return _fake_ollama_result(
-            _structured_output({}, blocked_reason="Contradiction détectée avec le brief architecte.")
+            _delimited_output({}, blocked_reason="Contradiction détectée avec le brief architecte.")
         )
 
     async def fake_append_feedback(card_path, agent_source, feedback):
@@ -375,10 +381,10 @@ async def test_backend_absolute_path_output_appends_feedback_and_waits_for_human
     chemin de fichier absolu ("/backend/main.py", imitation littérale de
     prompts/backend.md) — sans garde-fou, config.repo_path / "/backend/
     main.py" ignore silencieusement repo_path (pathlib) et le node tente une
-    écriture hors du repo cible. tools.filesystem.parse_structured_file_output
+    écriture hors du repo cible. tools.filesystem.parse_agent_file_output
     rejette désormais ce chemin (ValueError), déjà absorbée par le
-    `except ValueError` existant du node — même dégradation que pour un JSON
-    malformé, pas de crash.
+    `except ValueError` existant du node — même dégradation que pour une
+    sortie malformée, pas de crash.
     """
     feedback_calls = []
 
@@ -387,7 +393,7 @@ async def test_backend_absolute_path_output_appends_feedback_and_waits_for_human
 
     async def fake_run_ollama(**kwargs):
         return _fake_ollama_result(
-            '{"files": [{"path": "/backend/main.py", "content": "x"}], "blocked_reason": ""}'
+            '<<<DEVAIMAZING_FILE path="/backend/main.py">>>\nx\n<<<DEVAIMAZING_END>>>'
         )
 
     async def fake_append_feedback(card_path, agent_source, feedback):
@@ -640,8 +646,8 @@ async def test_backend_inner_retry_converges_without_feedback_sent(monkeypatch: 
     committed = {}
     feedback_calls = []
 
-    BROKEN_OUTPUT = _structured_output({"backend/auth/endpoints.py": "def login(:\n    ..."})
-    FIXED_OUTPUT = _structured_output({"backend/auth/endpoints.py": "def login():\n    ..."})
+    BROKEN_OUTPUT = _delimited_output({"backend/auth/endpoints.py": "def login(:\n    ..."})
+    FIXED_OUTPUT = _delimited_output({"backend/auth/endpoints.py": "def login():\n    ..."})
 
     async def fake_read_card(path, tracer=None):
         return "fiche back"
@@ -710,7 +716,7 @@ async def test_backend_inner_retry_exhausted_falls_back_to_feedback_sent(
     calls = {"count": 0}
     feedback_calls = []
 
-    BROKEN_OUTPUT = _structured_output({"backend/auth/endpoints.py": "def login(:\n    ..."})
+    BROKEN_OUTPUT = _delimited_output({"backend/auth/endpoints.py": "def login(:\n    ..."})
 
     async def fake_read_card(path, tracer=None):
         return "fiche back"
@@ -892,7 +898,7 @@ async def test_backend_blocked_reason_clears_retry_scope(monkeypatch: pytest.Mon
 
     async def fake_run_ollama(**kwargs):
         return _fake_ollama_result(
-            _structured_output({}, blocked_reason="Contradiction détectée.")
+            _delimited_output({}, blocked_reason="Contradiction détectée.")
         )
 
     async def fake_append_feedback(card_path, agent_source, feedback):

@@ -45,31 +45,34 @@ types, ou docstrings validés sauf si une annotation de feedback le demande expl
 
 ## Format de sortie
 
-Ta réponse est contrainte automatiquement à un JSON conforme à ce schéma — tu n'as
-pas besoin (et ne peux pas) répondre autrement :
+Chaque fichier créé ou modifié va dans un bloc délimité, texte brut (jamais de JSON,
+jamais d'échappement) :
 
-```json
-{
-  "files": [
-    {"path": "<chemin exact de ta fiche>", "content": "<contenu intégral du fichier>"}
-  ],
-  "blocked_reason": ""
-}
+```
+<<<DEVAIMAZING_FILE path="chemin/exact/de/ta/fiche.py">>>
+<contenu intégral du fichier, tel quel, avec ses vrais retours à la ligne>
+<<<DEVAIMAZING_END>>>
 ```
 
-- `files` : un élément par fichier créé ou modifié. `path` relatif à la racine du
-  projet cible, EXACTEMENT le chemin donné dans ta fiche sous "Fichiers à créer"/
-  "Fichiers à modifier" (ex : `backend/auth/endpoints.py` si ta fiche a un dossier
-  `/backend/`, ou `main.py` si ton projet est backend-seul et sans sous-dossier
-  dédié) — jamais un chemin absolu, et jamais un dossier `backend/` ajouté de
-  ta propre initiative si ta fiche ne le mentionne pas. `content` est le contenu
-  **intégral** du fichier — pas de diff, pas d'extrait, même quand tu modifies un
-  fichier existant dont le contenu actuel t'est fourni dans ta fiche.
-- `blocked_reason` : laisse une chaîne vide `""` dans le cas normal. Si tu détectes
-  une impossibilité ou une contradiction, laisse `files` vide (`[]`) et explique la
-  raison précisément dans `blocked_reason` — ne devine pas, ne code pas quelque
-  chose que tu sais incorrect.
+- Un bloc par fichier. `path` relatif à la racine du projet cible, EXACTEMENT le
+  chemin donné dans ta fiche sous "Fichiers à créer"/"Fichiers à modifier" (ex :
+  `backend/auth/endpoints.py` si ta fiche a un dossier `/backend/`, ou `main.py` si
+  ton projet est backend-seul et sans sous-dossier dédié) — jamais un chemin
+  absolu, et jamais un dossier `backend/` ajouté de ta propre initiative si ta
+  fiche ne le mentionne pas.
+- Le contenu entre `<<<DEVAIMAZING_FILE ...>>>` et `<<<DEVAIMAZING_END>>>` est le
+  contenu **intégral** du fichier — pas de diff, pas d'extrait, même quand tu
+  modifies un fichier existant dont le contenu actuel t'est fourni dans ta fiche.
+  Écris le code directement, comme tu l'écrirais dans un fichier — pas de
+  guillemets à échapper, pas de `\n` littéral, aucune transformation : ce que tu
+  écris entre les délimiteurs est lu tel quel.
+- Aucun texte hors de ces blocs n'est pris en compte par le runtime — tu peux
+  réfléchir avant si besoin, seuls les blocs comptent.
+- Si tu détectes une impossibilité ou une contradiction : ne produis AUCUN bloc
+  `<<<DEVAIMAZING_FILE>>>`, et utilise à la place ce bloc unique :
 
-Le format JSON lui-même est garanti par le runtime — inutile d'ajouter des balises
-` ``` ` ou tout autre habillage : `content` est déjà une chaîne de texte JSON,
-le code source y va directement (avec ses propres retours à la ligne échappés).
+```
+<<<DEVAIMAZING_BLOCKED>>>
+<raison précise, actionnable>
+<<<DEVAIMAZING_END>>>
+```

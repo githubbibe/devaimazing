@@ -1,6 +1,6 @@
 # Feuille de route - devaimazing
 
-**Dernière mise à jour** : 2026-07-31
+**Dernière mise à jour** : 2026-08-06
 
 ## État actuel
 
@@ -17,13 +17,74 @@ transcription vocale via Whisper, ADR 0013 tranches S2-S4 + ADR 0014 + ADR
 `new-project`, `projects`, `doctor`, `telegram-bot`) sont tous implémentés —
 voir `CLAUDE.md` pour la convention (stub-first reste appliquée par le
 pipeline aux projets *cibles*, pas à ce dépôt).
-**565/565 tests verts** sur `runtime/tests/` (2026-07-31) — les 4 échecs
-pré-existants signalés la veille (`test_cli.py` x3,
-`test_pyenv.py::test_check_imports_circular_import_reports_related_files`)
-sont corrigés : tous venaient de `FORCE_COLOR` ambiant dans le shell forçant
-la couleur hors d'un vrai terminal (Rich côté `cli.py`, coloration native
-des tracebacks Python 3.13+ côté sous-processus d'import de
-`tools/pyenv.py`) — voir entrées dédiées ci-dessous.
+**603/603 tests verts** sur `runtime/tests/` (2026-08-06) — voir entrées
+dédiées ci-dessous.
+
+**2026-08-06 — Run réel todolist3/gestion-taches : cascade de modèles
+réordonnée, checkpoint STUBS assoupli, timeout Claude Code CLI augmenté, et
+retour au contrat texte par délimiteurs pour Back/Front/Test (abandon de la
+sortie JSON contrainte par schéma introduite le 2026-07-11).**
+
+**Cascade `models.agents_local` réordonnée** (`config/studio.yml`) :
+`devstral:24b`, `gpt-oss:20b` en tête (plus efficaces en théorie sur ce type
+de bug Python), les deux Qwen en filet de secours — la cascade redémarre
+toujours à l'index 0 à chaque nouvel essai (`routing.agent_iteration_count`
+reset-on-retry), donc l'ordre pèse directement sur chaque retry, pas
+seulement la première activation.
+
+**`checkpoints.phase_5_audit_stubs` désactivé pour todolist3** (override
+projet, pas global) : chaque cycle "Architecte détecte un écart → agent
+producteur corrige" repassait par un WAITING_HUMAN nécessitant un clic
+humain avant même d'être une vraie décision à arbitrer — des dizaines de
+reprises manuelles enchaînées en quelques heures sur le run réel. Le vrai
+point d'arrêt qui doit rester manuel est `RunStatus.FAILED`
+(max_iterations_exceeded, bouton "Réessayer"), pas chaque itération
+intermédiaire d'un run encore actif.
+
+**`claude_code.timeout_seconds` : 300 → 600.** L'audit AUDIT_STUBS de
+l'Architecte (Sonnet) a timeout à 300s sur un prompt de ~64k caractères
+(plusieurs fichiers stub audités en une fois) — un audit volumineux, pas un
+appel bloqué.
+
+**Clavier menu rattaché au message de crash externe**
+(`telegram/run_flow.py::_execute_run`) : un crash `_EXTERNAL_SERVICE_ERRORS`
+(timeout Ollama/Claude Code CLI) éditait le message en texte plat sans
+aucun bouton, contrairement à FAILED ("Réessayer") ou WAITING_HUMAN
+("Continuer") — cul-de-sac réel, fallait retrouver Feature... dans le menu
+à la main.
+
+**`tools/live_docs.py` (nouveau)** : injecte dans les prompts Back/Test la
+signature + docstring réellement installées (pydantic `BaseSettings`,
+`field_validator`, `ConfigDict`, SQLAlchemy `create_async_engine`,
+`async_sessionmaker`) extraites à l'exécution du venv du projet cible —
+complète `skills/modern-python-apis.md` (texte statique, peut devenir faux
+si les versions épinglées changent) par une source toujours alignée sur ce
+qui tourne vraiment. Lecture seule, best-effort (chaîne vide si le venv
+n'existe pas encore ou si un symbole ne se résout pas).
+
+**Retour au contrat texte `<<<DEVAIMAZING_FILE>>>` pour Back/Front/Test —
+abandon de `FILE_OUTPUT_SCHEMA` (JSON contraint par grammaire).** Sur ce
+run réel, `back`/`back-tu` ont buté des dizaines de fois sur des erreurs de
+syntaxe (chaînes non terminées, indentation perdue, guillemets/parenthèses
+non fermés) — motif récurrent sur les 4 modèles de la cascade
+indifféremment, sur la quasi-totalité des activations depuis le 4 août.
+Expérience A/B menée en conditions réelles (même modèle `devstral:24b`,
+même prompt système+utilisateur, même fiche `back-tu.md`) : 0/4 essais
+propres en JSON contraint (2 blocages, 1 réponse vide, 1 essai avec les
+deux fichiers produits en `SyntaxError` dès la ligne 1 — `//` au lieu de
+`#` pour les commentaires, indentation perdue après les deux-points) contre
+1/1 essai propre en texte par délimiteurs (code syntaxiquement valide et
+sémantiquement cohérent). Hypothèse retenue : contraindre le contenu d'un
+fichier à être une valeur de chaîne JSON échappée dégrade mesurablement la
+fidélité de génération de code, au-delà du seul risque d'échappement de
+guillemets envisagé au départ. `tools/ollama.py::FILE_OUTPUT_SCHEMA` et
+`tools/filesystem.py::parse_structured_file_output` supprimés, remplacés
+par `tools/filesystem.py::parse_agent_file_output` (délimiteurs
+`<<<DEVAIMAZING_FILE path="...">>>...<<<DEVAIMAZING_END>>>`, plus un bloc
+`<<<DEVAIMAZING_BLOCKED>>>...<<<DEVAIMAZING_END>>>` en remplacement du
+champ `blocked_reason` structuré). `nodes/backend.py`, `nodes/frontend.py`,
+`nodes/test.py` et `prompts/backend.md`, `prompts/frontend.md`,
+`prompts/test.md` mis à jour en conséquence. 603 tests verts.
 
 **2026-07-31 — Suite directe de la session ADR 0015 : vérification en
 conditions réelles, corrections de bugs trouvés à l'usage, `/cadrer_projet`,

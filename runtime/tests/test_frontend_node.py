@@ -44,14 +44,16 @@ def _fake_ollama_result(content: str, tokens_prompt=5, tokens_completion=10, dur
     }
 
 
-def _structured_output(files: dict[str, str], blocked_reason: str = "") -> str:
-    return json.dumps({
-        "files": [{"path": path, "content": content} for path, content in files.items()],
-        "blocked_reason": blocked_reason,
-    })
+def _delimited_output(files: dict[str, str], blocked_reason: str = "") -> str:
+    if blocked_reason:
+        return f"<<<DEVAIMAZING_BLOCKED>>>\n{blocked_reason}\n<<<DEVAIMAZING_END>>>"
+    return "\n".join(
+        f'<<<DEVAIMAZING_FILE path="{path}">>>\n{content}\n<<<DEVAIMAZING_END>>>'
+        for path, content in files.items()
+    )
 
 
-FILE_OUTPUT = _structured_output({"frontend/components/LoginForm.tsx": "export const LoginForm = () => null;"})
+FILE_OUTPUT = _delimited_output({"frontend/components/LoginForm.tsx": "export const LoginForm = () => null;"})
 
 
 def _card_metadata(**overrides) -> dict:
@@ -105,7 +107,7 @@ async def test_frontend_stub_phase_writes_files_and_commits(monkeypatch: pytest.
     assert updates["current_agent_index"] == 0
 
 
-async def test_frontend_calls_ollama_with_structured_output_schema(monkeypatch: pytest.MonkeyPatch):
+async def test_frontend_calls_ollama_without_response_format(monkeypatch: pytest.MonkeyPatch):
     captured = {}
 
     async def fake_read_card(path, tracer=None):
@@ -137,7 +139,7 @@ async def test_frontend_calls_ollama_with_structured_output_schema(monkeypatch: 
 
     await frontend_node.run(state)
 
-    assert captured["response_format"] == frontend_node.FILE_OUTPUT_SCHEMA
+    assert captured["response_format"] is None
 
 
 async def test_frontend_includes_existing_file_content_in_prompt(
@@ -241,7 +243,7 @@ async def test_frontend_blocked_reason_appends_feedback_and_waits_for_human(
 
     async def fake_run_ollama(**kwargs):
         return _fake_ollama_result(
-            _structured_output({}, blocked_reason="Endpoint backend manquant, je ne peux pas continuer.")
+            _delimited_output({}, blocked_reason="Endpoint backend manquant, je ne peux pas continuer.")
         )
 
     async def fake_append_feedback(card_path, agent_source, feedback):
@@ -348,7 +350,7 @@ async def test_frontend_verify_failure_appends_feedback_and_waits_for_human(
 
     async def fake_run_ollama(**kwargs):
         return _fake_ollama_result(
-            _structured_output({"frontend/scripts/build.py": "print('x')"})
+            _delimited_output({"frontend/scripts/build.py": "print('x')"})
         )
 
     async def fake_write_card(path, content, tracer=None):

@@ -5,7 +5,6 @@ Lecture et écriture des fiches .md, project-map, architect-map.
 Injection des skills dans les prompts.
 """
 
-import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +23,14 @@ EMPTY_FEEDBACK_MARKER = "_Aucun feedback pour l'instant._"
 # raisonnement en dehors d'un vrai bloc fichier.
 _FILE_BLOCK_PATTERN = re.compile(
     r'<<<DEVAIMAZING_FILE path="([^"]+)">>>\n(.*?)\n<<<DEVAIMAZING_END>>>',
+    re.DOTALL,
+)
+
+# Échappatoire de parse_agent_file_output (Back/Front/Test uniquement) pour
+# le cas où l'agent détecte une impossibilité — remplace le champ
+# blocked_reason du défunt contrat JSON (voir tools.ollama.run_ollama).
+_BLOCKED_BLOCK_PATTERN = re.compile(
+    r'<<<DEVAIMAZING_BLOCKED>>>\n(.*?)\n<<<DEVAIMAZING_END>>>',
     re.DOTALL,
 )
 
@@ -77,7 +84,7 @@ PM_FICHES_SCHEMA = {
 def _validate_relative_path(path: str) -> None:
     """
     Garde-fou appliqué à tout chemin de fichier produit par un agent
-    (parse_structured_file_output, parse_agent_file_blocks) avant qu'il ne
+    (parse_agent_file_output, parse_agent_file_blocks) avant qu'il ne
     serve à construire un chemin d'écriture (config.repo_path / path).
 
     pathlib ignore silencieusement le premier opérande d'un `/` dès que le
@@ -508,84 +515,74 @@ def _parse_agent_file_blocks(text: str, fallback_path: Optional[str]) -> dict[st
     )
 
 
-def parse_structured_file_output(
-    content: str, tracer: Optional[AgentTracer] = None
+def parse_agent_file_output(
+    text: str, tracer: Optional[AgentTracer] = None
 ) -> tuple[dict[str, str], str]:
     """
-    Parse la sortie structurée d'un agent producteur (Back/Front/Test) appelé
-    avec tools.ollama.FILE_OUTPUT_SCHEMA (voir docs/roadmap.md, chantier
-    "sortie structurée", 2026-07-11) — remplace parse_agent_file_blocks pour
-    ces trois agents (Ollama/Qwen), qui n'utilisent plus le contrat par
-    délimiteurs texte <<<DEVAIMAZING_FILE>>>.
+    Parse la sortie d'un agent producteur (Back/Front/Test) appelé sans
+    contrainte de schéma JSON — contrat texte par délimiteurs
+    <<<DEVAIMAZING_FILE>>> (voir prompts/backend.md, frontend.md, test.md,
+    section "Format de sortie"). Remplace parse_structured_file_output
+    (JSON contraint par grammaire, introduit le 2026-07-11) depuis le
+    2026-08-06 : contraindre le contenu d'un fichier à être une valeur de
+    chaîne JSON dégradait mesurablement la fidélité de génération (perte de
+    syntaxe des commentaires — `//` au lieu de `#`, perte d'indentation
+    après les deux-points) — voir docs/roadmap.md, expérience A/B du
+    2026-08-06 (0/4 générations propres en JSON contraint contre 1/1 en
+    texte délimité, même modèle même prompt, même fiche réelle todolist3).
 
     Args:
-        content: Sortie JSON brute générée par l'agent (champ "content" du
-            retour de tools.ollama.run_ollama, appelé avec
-            response_format=FILE_OUTPUT_SCHEMA).
+        text: Sortie brute générée par l'agent (champ "content" du retour
+            de tools.ollama.run_ollama, appelé sans response_format).
         tracer: AgentTracer optionnel (voir tools.tracer) — émet
-            "parse_output" (outcome success/error), avec raw_output_head en
-            cas d'erreur. `None` (défaut) : aucune trace émise.
+            "parse_output" (outcome success/blocked/no_blocks), avec
+            raw_output_head si no_blocks. `None` (défaut) : aucune trace
+            émise.
 
     Returns:
-        (files, blocked_reason). `files` : mapping chemin relatif -> contenu
-        intégral, vide si l'agent a signalé un blocage. `blocked_reason` :
-        raison du blocage signalée par l'agent ; chaîne vide si aucun blocage
-        (cas normal).
+        (files, blocked_reason). Un bloc <<<DEVAIMAZING_BLOCKED>>> présent
+        prime sur tout bloc fichier (l'agent a explicitement signalé un
+        blocage) : files vide, blocked_reason = contenu du bloc. Sinon, les
+        blocs <<<DEVAIMAZING_FILE>>> sont extraits normalement (files non
+        vide, blocked_reason=""). Si aucun bloc d'aucune sorte n'est
+        trouvé, tout le texte brut devient blocked_reason (repli — mieux
+        qu'un crash sur une sortie qui n'a suivi aucun format, comportement
+        du contrat pré-JSON).
 
     Raises:
-        ValueError: Si `content` n'est pas un JSON valide, ou si sa structure
-            ne correspond pas au schéma attendu (champs "files"/"blocked_reason"
-            absents, ou entrée de fichier sans "path"/"content"). Le grammar-
-            constrained decoding d'Ollama garantit normalement la conformité,
-            mais ce n'est pas supposé sans vérification (voir Notes de
-            tools.ollama.run_ollama). Également si un "path" est absolu ou
-            contient une traversée de répertoire ('..') — voir
+        ValueError: Si un "path" de bloc <<<DEVAIMAZING_FILE>>> est absolu
+            ou contient une traversée de répertoire ('..') — voir
             _validate_relative_path ; trouvé en pratique (2026-07-14,
             qwen2.5:1.5b-instruct produisant "/backend/main.py").
 
     Example:
-        >>> parse_structured_file_output(
-        ...     '{"files": [{"path": "backend/a.py", "content": "x = 1"}], '
-        ...     '"blocked_reason": ""}'
+        >>> parse_agent_file_output(
+        ...     '<<<DEVAIMAZING_FILE path="backend/a.py">>>\\n'
+        ...     'x = 1\\n<<<DEVAIMAZING_END>>>'
         ... )
         ({'backend/a.py': 'x = 1'}, '')
     """
-    try:
-        files, blocked_reason = _parse_structured_file_output(content)
-    except ValueError:
+    blocked_match = _BLOCKED_BLOCK_PATTERN.search(text)
+    if blocked_match:
+        if tracer is not None:
+            tracer.emit("parse_output", parser="parse_agent_file_output", outcome="blocked")
+        return {}, blocked_match.group(1).strip()
+
+    matches = _FILE_BLOCK_PATTERN.findall(text)
+    if matches:
+        for path, _content in matches:
+            _validate_relative_path(path)
+        files = {path: content for path, content in matches}
         if tracer is not None:
             tracer.emit(
-                "parse_output", parser="parse_structured_file_output", outcome="error",
-                raw_output_head=content[:RAW_OUTPUT_HEAD_CHARS],
+                "parse_output", parser="parse_agent_file_output", outcome="success",
+                files=sorted(files), blocked=False,
             )
-        raise
+        return files, ""
+
     if tracer is not None:
         tracer.emit(
-            "parse_output", parser="parse_structured_file_output", outcome="success",
-            files=sorted(files), blocked=bool(blocked_reason),
+            "parse_output", parser="parse_agent_file_output", outcome="no_blocks",
+            raw_output_head=text[:RAW_OUTPUT_HEAD_CHARS],
         )
-    return files, blocked_reason
-
-
-def _parse_structured_file_output(content: str) -> tuple[dict[str, str], str]:
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Sortie structurée invalide (JSON attendu) : {exc}") from exc
-
-    if not isinstance(data, dict) or "files" not in data or "blocked_reason" not in data:
-        raise ValueError(
-            "Sortie structurée incomplète : champs 'files' et 'blocked_reason' "
-            f"attendus (voir tools.ollama.FILE_OUTPUT_SCHEMA), reçu : {content!r}"
-        )
-
-    files: dict[str, str] = {}
-    for entry in data["files"]:
-        if not isinstance(entry, dict) or "path" not in entry or "content" not in entry:
-            raise ValueError(
-                f"Entrée de fichier incomplète (path/content attendus), reçu : {entry!r}"
-            )
-        _validate_relative_path(entry["path"])
-        files[entry["path"]] = entry["content"]
-
-    return files, data["blocked_reason"]
+    return {}, text.strip()

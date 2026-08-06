@@ -76,6 +76,37 @@ calibrée sur qwen2.5:7b-instruct) n'a pas été revalidée pour les trois autre
 modèles de la cascade — à surveiller si des troncatures de prompt apparaissent en
 usage réel avec devstral/gpt-oss.
 
+**Révision (2026-08-06) — ordre de la cascade inversé (le plus capable en
+premier), et retour au contrat texte par délimiteurs pour Back/Front/Test** :
+
+`models.agents_local` passe de `qwen2.5:7b-instruct → qwen2.5:14b-instruct →
+devstral:24b → gpt-oss:20b` à `devstral:24b → gpt-oss:20b →
+qwen2.5:14b-instruct → qwen2.5:7b-instruct`. Raison : `studio.routing`
+réinitialise `agent_iteration_count` (donc l'index de cascade) à 0 à chaque
+nouvel essai (retry après FAILED, ou reprise après un blocage
+`WAITING_HUMAN`) — l'ordre "du moins cher au plus capable" retenu le
+2026-08-05 signifiait donc que chaque *retry* recommençait sur le modèle le
+plus faible, pas seulement la première activation d'un run. Sur le run réel
+todolist3/gestion-taches, ça s'est traduit par des dizaines de cycles perdus
+sur `qwen2.5:7b-instruct` avant d'atteindre `devstral:24b`/`gpt-oss:20b`, qui
+convergeaient nettement plus souvent. Le principe coût-d'abord de cet ADR
+reste valable pour le choix des modèles retenus (tous locaux, aucun coût
+API) ; ce qui change est l'ordre à l'intérieur de la cascade, optimisé pour
+le taux de convergence par essai plutôt que pour épuiser le moins cher
+avant le plus cher.
+
+Distinct de la cascade : abandon de `tools.ollama.FILE_OUTPUT_SCHEMA` (sortie
+JSON contrainte par grammaire, introduite le 2026-07-11) pour Back/Front/Test,
+retour au contrat texte par délimiteurs `<<<DEVAIMAZING_FILE>>>`. Expérience
+A/B en conditions réelles (même modèle, même prompt, même fiche réelle) :
+0/4 générations propres en JSON contraint (2 blocages, 1 réponse vide, 1
+essai avec `SyntaxError` dès la ligne 1 sur les deux fichiers produits)
+contre 1/1 en texte délimité. Contraindre le contenu d'un fichier à être une
+valeur de chaîne JSON échappée dégradait la fidélité de génération du code
+(syntaxe des commentaires, indentation) au-delà du seul risque d'échappement
+de guillemets envisagé à l'introduction du schéma — voir
+`docs/roadmap.md` (2026-08-06) pour le détail de l'expérience.
+
 **Sécu - Claude Sonnet 4.6 (API Anthropic), deux couches complémentaires**
 - SAST déterministe (Semgrep, Bandit — voir `config/studio.yml` section `sast`) :
   premier passage, zéro token.

@@ -41,25 +41,27 @@ Les appels API backend utilisent UNIQUEMENT les endpoints documentés dans les s
 
 ## Format de sortie
 
-Ta réponse est contrainte automatiquement à un JSON conforme à ce schéma — tu n'as
-pas besoin (et ne peux pas) répondre autrement :
+Chaque fichier créé ou modifié va dans un bloc délimité, texte brut (jamais de JSON,
+jamais d'échappement) :
 
-```json
-{
-  "files": [
-    {"path": "frontend/components/LoginForm.tsx", "content": "<contenu intégral du fichier>"}
-  ],
-  "blocked_reason": ""
-}
+```
+<<<DEVAIMAZING_FILE path="frontend/components/LoginForm.tsx">>>
+<contenu intégral du fichier, tel quel, avec ses vrais retours à la ligne>
+<<<DEVAIMAZING_END>>>
 ```
 
-- `files` : un élément par fichier créé ou modifié. `path` relatif à la racine du
-  projet cible. `content` est le contenu **intégral** du fichier — pas de diff, pas
-  d'extrait, même quand tu modifies un fichier existant dont le contenu actuel
-  t'est fourni dans ta fiche.
-- `blocked_reason` : laisse une chaîne vide `""` dans le cas normal. Si tu détectes
-  une impossibilité ou une contradiction avec les stubs Back, laisse `files` vide
-  (`[]`) et explique la raison précisément dans `blocked_reason` — ne devine pas.
+- Un bloc par fichier. `path` relatif à la racine du projet cible.
+- Le contenu entre `<<<DEVAIMAZING_FILE ...>>>` et `<<<DEVAIMAZING_END>>>` est le
+  contenu **intégral** du fichier — pas de diff, pas d'extrait, même quand tu
+  modifies un fichier existant dont le contenu actuel t'est fourni dans ta fiche.
+  Écris le code directement, comme tu l'écrirais dans un fichier — pas de
+  guillemets à échapper, pas de `\n` littéral.
+- Aucun texte hors de ces blocs n'est pris en compte par le runtime.
+- Si tu détectes une impossibilité ou une contradiction avec les stubs Back : ne
+  produis AUCUN bloc `<<<DEVAIMAZING_FILE>>>`, et utilise à la place ce bloc unique :
 
-Le format JSON lui-même est garanti par le runtime — inutile d'ajouter des balises
-` ``` ` ou tout autre habillage : `content` est déjà une chaîne de texte JSON.
+```
+<<<DEVAIMAZING_BLOCKED>>>
+<raison précise, actionnable>
+<<<DEVAIMAZING_END>>>
+```

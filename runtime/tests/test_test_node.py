@@ -47,14 +47,16 @@ def _fake_ollama_result(content: str) -> dict:
     return {"content": content, "tokens_prompt": 5, "tokens_completion": 10, "duration_ms": 100}
 
 
-def _structured_output(files: dict[str, str], blocked_reason: str = "") -> str:
-    return json.dumps({
-        "files": [{"path": path, "content": content} for path, content in files.items()],
-        "blocked_reason": blocked_reason,
-    })
+def _delimited_output(files: dict[str, str], blocked_reason: str = "") -> str:
+    if blocked_reason:
+        return f"<<<DEVAIMAZING_BLOCKED>>>\n{blocked_reason}\n<<<DEVAIMAZING_END>>>"
+    return "\n".join(
+        f'<<<DEVAIMAZING_FILE path="{path}">>>\n{content}\n<<<DEVAIMAZING_END>>>'
+        for path, content in files.items()
+    )
 
 
-FILE_OUTPUT = _structured_output({"tests/integration/test_login_flow.py": "def test_login():\n    assert True"})
+FILE_OUTPUT = _delimited_output({"tests/integration/test_login_flow.py": "def test_login():\n    assert True"})
 
 
 def _card_metadata(**overrides) -> dict:
@@ -109,7 +111,7 @@ async def test_test_node_no_command_configured_writes_and_advances(
     assert updates["current_agent_index"] == 0
 
 
-async def test_test_node_calls_ollama_with_structured_output_schema(
+async def test_test_node_calls_ollama_without_response_format(
     tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
     _configure_env(tmp_path, repo, monkeypatch, test_command=None)
@@ -135,7 +137,7 @@ async def test_test_node_calls_ollama_with_structured_output_schema(
 
     await test_node.run(_base_state(repo))
 
-    assert captured["response_format"] == test_node.FILE_OUTPUT_SCHEMA
+    assert captured["response_format"] is None
 
 
 async def test_test_node_includes_existing_file_content_in_prompt(
@@ -475,7 +477,7 @@ async def test_test_node_blocked_reason_appends_feedback(
 
     async def fake_run_ollama(**kwargs):
         return _fake_ollama_result(
-            _structured_output({}, blocked_reason="Impossible de tester sans les endpoints backend.")
+            _delimited_output({}, blocked_reason="Impossible de tester sans les endpoints backend.")
         )
 
     async def fake_append_feedback(card_path, agent_source, feedback):

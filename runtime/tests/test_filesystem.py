@@ -11,8 +11,8 @@ from studio.tools.filesystem import (
     append_feedback,
     inject_skills,
     parse_agent_file_blocks,
+    parse_agent_file_output,
     parse_pm_structured_output,
-    parse_structured_file_output,
     read_card,
     read_files,
     strip_feedback_section,
@@ -432,62 +432,73 @@ def test_parse_pm_structured_output_wrong_field_type_raises():
         parse_pm_structured_output(structured_output)
 
 
-def test_parse_structured_file_output_single_file():
-    content = (
-        '{"files": [{"path": "backend/a.py", "content": "x = 1"}], "blocked_reason": ""}'
-    )
+def test_parse_agent_file_output_single_file():
+    content = '<<<DEVAIMAZING_FILE path="backend/a.py">>>\nx = 1\n<<<DEVAIMAZING_END>>>'
 
-    files, blocked_reason = parse_structured_file_output(content)
+    files, blocked_reason = parse_agent_file_output(content)
 
     assert files == {"backend/a.py": "x = 1"}
     assert blocked_reason == ""
 
 
-def test_parse_structured_file_output_multiple_files():
+def test_parse_agent_file_output_multiple_files():
     content = (
-        '{"files": ['
-        '{"path": "backend/a.py", "content": "a"}, '
-        '{"path": "backend/b.py", "content": "b"}'
-        '], "blocked_reason": ""}'
+        '<<<DEVAIMAZING_FILE path="backend/a.py">>>\na\n<<<DEVAIMAZING_END>>>\n'
+        '<<<DEVAIMAZING_FILE path="backend/b.py">>>\nb\n<<<DEVAIMAZING_END>>>'
     )
 
-    files, blocked_reason = parse_structured_file_output(content)
+    files, blocked_reason = parse_agent_file_output(content)
 
     assert files == {"backend/a.py": "a", "backend/b.py": "b"}
     assert blocked_reason == ""
 
 
-def test_parse_structured_file_output_blocked():
-    content = '{"files": [], "blocked_reason": "Contradiction avec le brief."}'
+def test_parse_agent_file_output_blocked():
+    content = "<<<DEVAIMAZING_BLOCKED>>>\nContradiction avec le brief.\n<<<DEVAIMAZING_END>>>"
 
-    files, blocked_reason = parse_structured_file_output(content)
+    files, blocked_reason = parse_agent_file_output(content)
 
     assert files == {}
     assert blocked_reason == "Contradiction avec le brief."
 
 
-def test_parse_structured_file_output_invalid_json_raises():
-    with pytest.raises(ValueError):
-        parse_structured_file_output("pas du json")
+def test_parse_agent_file_output_blocked_takes_priority_over_file_blocks():
+    # Si l'agent a produit un bloc BLOCKED, on ignore tout bloc FILE présent
+    # par ailleurs plutôt que de mélanger les deux.
+    content = (
+        "<<<DEVAIMAZING_BLOCKED>>>\nRaison.\n<<<DEVAIMAZING_END>>>\n"
+        '<<<DEVAIMAZING_FILE path="backend/a.py">>>\nx = 1\n<<<DEVAIMAZING_END>>>'
+    )
+
+    files, blocked_reason = parse_agent_file_output(content)
+
+    assert files == {}
+    assert blocked_reason == "Raison."
 
 
-def test_parse_structured_file_output_invalid_json_emits_parse_output_error(tmp_path: Path):
+def test_parse_agent_file_output_no_blocks_falls_back_to_raw_text_as_blocked_reason():
+    files, blocked_reason = parse_agent_file_output("juste du texte, aucun format suivi")
+
+    assert files == {}
+    assert blocked_reason == "juste du texte, aucun format suivi"
+
+
+def test_parse_agent_file_output_no_blocks_emits_parse_output_no_blocks(tmp_path: Path):
     tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
 
-    with pytest.raises(ValueError):
-        parse_structured_file_output("pas du json", tracer=tracer)
+    parse_agent_file_output("du texte libre", tracer=tracer)
 
     events = _events(tracer._tracer.trace_path)
     assert events[0]["event"] == "parse_output"
-    assert events[0]["outcome"] == "error"
-    assert events[0]["raw_output_head"] == "pas du json"
+    assert events[0]["outcome"] == "no_blocks"
+    assert events[0]["raw_output_head"] == "du texte libre"
 
 
-def test_parse_structured_file_output_success_emits_parse_output_success(tmp_path: Path):
+def test_parse_agent_file_output_success_emits_parse_output_success(tmp_path: Path):
     tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
 
-    parse_structured_file_output(
-        '{"files": [{"path": "backend/a.py", "content": "x = 1"}], "blocked_reason": ""}',
+    parse_agent_file_output(
+        '<<<DEVAIMAZING_FILE path="backend/a.py">>>\nx = 1\n<<<DEVAIMAZING_END>>>',
         tracer=tracer,
     )
 
@@ -497,34 +508,21 @@ def test_parse_structured_file_output_success_emits_parse_output_success(tmp_pat
     assert events[0]["files"] == ["backend/a.py"]
 
 
-def test_parse_structured_file_output_missing_fields_raises():
-    with pytest.raises(ValueError):
-        parse_structured_file_output('{"files": []}')  # blocked_reason absent
-
-
-def test_parse_structured_file_output_incomplete_file_entry_raises():
-    with pytest.raises(ValueError):
-        parse_structured_file_output(
-            '{"files": [{"path": "backend/a.py"}], "blocked_reason": ""}'
-        )  # content absent
-
-
-def test_parse_structured_file_output_absolute_path_raises():
+def test_parse_agent_file_output_absolute_path_raises():
     # Régression (2026-07-14, run réel) : qwen2.5:1.5b-instruct a produit
-    # "path": "/backend/main.py" (imitation littérale de "/backend/" dans
+    # "/backend/main.py" (imitation littérale de "/backend/" dans
     # prompts/backend.md) — Path("/repo") / "/backend/main.py" ignore
     # silencieusement repo_path, écriture tentée hors du repo cible.
-    content = '{"files": [{"path": "/backend/main.py", "content": "x = 1"}], "blocked_reason": ""}'
+    content = '<<<DEVAIMAZING_FILE path="/backend/main.py">>>\nx = 1\n<<<DEVAIMAZING_END>>>'
 
     with pytest.raises(ValueError):
-        parse_structured_file_output(content)
+        parse_agent_file_output(content)
 
 
-def test_parse_structured_file_output_parent_traversal_raises():
+def test_parse_agent_file_output_parent_traversal_raises():
     content = (
-        '{"files": [{"path": "backend/../../etc/passwd", "content": "x"}], '
-        '"blocked_reason": ""}'
+        '<<<DEVAIMAZING_FILE path="backend/../../etc/passwd">>>\nx\n<<<DEVAIMAZING_END>>>'
     )
 
     with pytest.raises(ValueError):
-        parse_structured_file_output(content)
+        parse_agent_file_output(content)

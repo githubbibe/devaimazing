@@ -28,35 +28,6 @@ class ExternalServiceError(Exception):
     """Erreur d'un service externe (voir skills/error-handling.md)."""
 
 
-# Schéma de sortie structurée pour les agents producteurs de fichiers (Back,
-# Front, Test — voir prompts/backend.md, prompts/frontend.md, prompts/test.md).
-# Remplace le contrat par délimiteurs texte <<<DEVAIMAZING_FILE>>> (voir
-# docs/roadmap.md, chantier "sortie structurée", 2026-07-11) : passé à Ollama
-# via `format`, il contraint la génération par grammaire (grammar-constrained
-# decoding) — la sortie est syntaxiquement conforme par construction, plus de
-# délimiteur libre à respecter. `blocked_reason` est l'échappatoire structurée
-# pour le cas où l'agent détecte une impossibilité (remplace le comportement
-# "explique en texte libre au lieu de produire un bloc de fichier").
-FILE_OUTPUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "files": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "content": {"type": "string"},
-                },
-                "required": ["path", "content"],
-            },
-        },
-        "blocked_reason": {"type": "string"},
-    },
-    "required": ["files", "blocked_reason"],
-}
-
-
 # Schéma de sortie structurée pour l'agent Devaimazing (ADR 0013, tranche S4
 # — voir docs/roadmap.md, gate empirique du 2026-07-24 puis validation du
 # 2026-07-29). Gemma 3 ne supporte le function-calling natif Ollama
@@ -123,12 +94,18 @@ async def run_ollama(
             bug diagnostiqué le 2026-07-16 sur le run todo-list2 (voir
             docs/roadmap.md) : le feedback grossissait à chaque itération mais
             le modèle ne le voyait jamais en entier.
-        response_format: Schéma JSON optionnel (voir FILE_OUTPUT_SCHEMA) pour
-            contraindre la sortie par grammaire (grammar-constrained decoding,
-            Ollama ≥0.5). Si fourni, `content` dans le retour est du texte
-            JSON conforme au schéma, à parser (voir
-            tools.filesystem.parse_structured_file_output). Si `None` (défaut),
-            sortie texte libre inchangée.
+        response_format: Schéma JSON optionnel pour contraindre la sortie par
+            grammaire (grammar-constrained decoding, Ollama ≥0.5) — utilisé
+            par l'agent Devaimazing (voir devaimazing/agent.py). Les agents
+            producteurs de code (Back, Front, Test) n'en passent plus depuis
+            le 2026-08-06 : contraindre le contenu d'un fichier à être une
+            valeur de chaîne JSON dégradait mesurablement la fidélité de
+            génération (perte de syntaxe des commentaires, perte
+            d'indentation — voir docs/roadmap.md, expérience A/B du
+            2026-08-06) ; ils sont revenus au contrat texte par délimiteurs
+            <<<DEVAIMAZING_FILE>>> (tools.filesystem.parse_agent_file_output).
+            Si fourni, `content` dans le retour est du texte JSON conforme
+            au schéma. Si `None` (défaut), sortie texte libre inchangée.
         tracer: AgentTracer optionnel (voir tools.tracer) — émet
             llm_call_start/llm_call_end autour de l'appel, un événement
             retry à chaque tentative infructueuse avant nouvel essai
@@ -151,7 +128,6 @@ async def run_ollama(
         ...     system_prompt="Tu es l'agent Backend...",
         ...     user_prompt="Voici ta fiche : ...",
         ...     model="qwen2.5:7b-instruct",
-        ...     response_format=FILE_OUTPUT_SCHEMA,
         ... )
 
     Notes:
@@ -160,8 +136,8 @@ async def run_ollama(
         function-calling sur schémas complexes, voir issue
         ollama/ollama#7051, docs/roadmap.md). Un modèle ou une version
         d'Ollama qui l'ignore silencieusement retomberait sur du texte libre
-        — parse_structured_file_output lève ValueError dans ce cas plutôt
-        que de supposer un JSON valide.
+        — l'appelant (ex. devaimazing/agent.py) doit rester tolérant à ce cas
+        plutôt que de supposer un JSON valide.
     """
     messages = [
         {"role": "system", "content": system_prompt},

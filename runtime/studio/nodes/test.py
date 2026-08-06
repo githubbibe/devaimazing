@@ -22,14 +22,14 @@ from studio.state import AgentResult, Phase, RunStatus, StudioState
 from studio.tools.filesystem import (
     append_feedback,
     inject_skills,
-    parse_structured_file_output,
+    parse_agent_file_output,
     read_card,
     read_files,
     write_card,
 )
 from studio.tools.git import commit_as_agent
 from studio.tools.live_docs import extract_live_docs
-from studio.tools.ollama import FILE_OUTPUT_SCHEMA, run_ollama
+from studio.tools.ollama import run_ollama
 from studio.tools.pyenv import extract_traceback_files
 from studio.tools.tracer import RunTracer
 
@@ -113,8 +113,8 @@ async def run(state: StudioState) -> StudioState:
 
     Returns:
         État mis à jour :
-        - Si l'agent signale un blocage (champ "blocked_reason" non vide
-          dans sa sortie structurée — voir tools.ollama.FILE_OUTPUT_SCHEMA),
+        - Si l'agent signale un blocage (bloc <<<DEVAIMAZING_BLOCKED>>> dans
+          sa sortie — voir tools.filesystem.parse_agent_file_output),
           ou si "files" est vide : feedback ajouté à sa propre fiche,
           AgentResult.status="feedback_sent",
           state.status=RunStatus.WAITING_HUMAN.
@@ -147,10 +147,10 @@ async def run(state: StudioState) -> StudioState:
             commande de test, est introuvable.
 
     Side effects:
-        - Appelle tools.ollama.run_ollama (modèle models.agents_local), avec
-          response_format=tools.ollama.FILE_OUTPUT_SCHEMA (sortie contrainte
-          par grammaire — voir docs/roadmap.md, chantier "sortie structurée",
-          2026-07-11).
+        - Appelle tools.ollama.run_ollama (modèle models.agents_local), sortie
+          texte libre parsée via tools.filesystem.parse_agent_file_output
+          (contrat par délimiteurs <<<DEVAIMAZING_FILE>>> — voir
+          docs/roadmap.md, expérience A/B du 2026-08-06).
         - Crée des fichiers dans /tests/integration/ et /tests/e2e/ (les
           chemins exacts renvoyés par l'agent, sans validation de périmètre
           — rôle de l'Architecte en phase 9).
@@ -254,7 +254,6 @@ async def run(state: StudioState) -> StudioState:
         base_url=config.ollama_base_url,
         timeout_seconds=ollama_config.get("timeout_seconds", 120),
         num_ctx=ollama_config.get("num_ctx", 16384),
-        response_format=FILE_OUTPUT_SCHEMA,
         tracer=tracer,
     )
     tokens_used = result["tokens_prompt"] + result["tokens_completion"]
@@ -262,7 +261,7 @@ async def run(state: StudioState) -> StudioState:
     iteration = agent_iteration_count(state, role) + 1
 
     try:
-        files, blocked_reason = parse_structured_file_output(result["content"], tracer=tracer)
+        files, blocked_reason = parse_agent_file_output(result["content"], tracer=tracer)
     except ValueError:
         files, blocked_reason = {}, ""
 

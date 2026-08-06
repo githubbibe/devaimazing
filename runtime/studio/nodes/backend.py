@@ -34,7 +34,7 @@ from studio.state import AgentResult, Phase, RunStatus, StudioState
 from studio.tools.filesystem import (
     append_feedback,
     inject_skills,
-    parse_structured_file_output,
+    parse_agent_file_output,
     read_card,
     read_files,
     strip_feedback_section,
@@ -42,7 +42,7 @@ from studio.tools.filesystem import (
 )
 from studio.tools.git import commit_as_agent
 from studio.tools.live_docs import extract_live_docs
-from studio.tools.ollama import FILE_OUTPUT_SCHEMA, run_ollama
+from studio.tools.ollama import run_ollama
 from studio.tools.pyenv import verify_python_files
 from studio.tools.tracer import AgentTracer, RunTracer
 
@@ -170,11 +170,11 @@ async def run(state: StudioState) -> StudioState:
         passe à Phase.AUDIT_STUBS (fin de Phase.STUBS) ou Phase.TESTS (fin
         de Phase.IMPLEMENTATION) et l'index repart à 0.
 
-        Si l'agent signale un blocage (champ "blocked_reason" non vide dans
-        sa sortie structurée — voir tools.ollama.FILE_OUTPUT_SCHEMA, cas où
+        Si l'agent signale un blocage (bloc <<<DEVAIMAZING_BLOCKED>>> dans sa
+        sortie — voir tools.filesystem.parse_agent_file_output, cas où
         l'agent détecte une impossibilité plutôt que de coder), ou si
         "files" est vide : le blocked_reason (ou le texte brut si la sortie
-        est malformée malgré la contrainte de schéma) est ajouté à la
+        ne suit aucun format reconnu) est ajouté à la
         section Feedback de sa propre fiche, l'AgentResult a
         status="feedback_sent", et state.status=RunStatus.WAITING_HUMAN /
         state.awaiting_human_validation=True (un blocage auto-détecté
@@ -195,11 +195,12 @@ async def run(state: StudioState) -> StudioState:
         FileNotFoundError: Si la fiche de l'agent est introuvable.
 
     Side effects:
-        - Appelle tools.ollama.run_ollama (modèle models.agents_local), avec
-          response_format=tools.ollama.FILE_OUTPUT_SCHEMA (sortie contrainte
-          par grammaire — voir docs/roadmap.md, chantier "sortie structurée",
-          2026-07-11 ; remplace l'ancien contrat par délimiteurs texte
-          <<<DEVAIMAZING_FILE>>>).
+        - Appelle tools.ollama.run_ollama (modèle models.agents_local), sortie
+          texte libre parsée via tools.filesystem.parse_agent_file_output
+          (contrat par délimiteurs <<<DEVAIMAZING_FILE>>> — voir
+          docs/roadmap.md, expérience A/B du 2026-08-06 : contraindre le
+          contenu par schéma JSON dégradait la fidélité de génération du
+          code, revenu à ce contrat texte).
         - Avant l'appel, lit sur disque le contenu des fichiers listés dans
           state.agent_card_metadata[role]["existing_files_to_read"]
           (tools.filesystem.read_files, chemins structurés validés par le PM
@@ -325,7 +326,6 @@ async def run(state: StudioState) -> StudioState:
             base_url=config.ollama_base_url,
             timeout_seconds=ollama_config.get("timeout_seconds", 120),
             num_ctx=ollama_config.get("num_ctx", 16384),
-            response_format=FILE_OUTPUT_SCHEMA,
             tracer=tracer,
         )
         tokens_prompt_total += result["tokens_prompt"]
@@ -333,7 +333,7 @@ async def run(state: StudioState) -> StudioState:
         duration_total_ms += result["duration_ms"]
 
         try:
-            files, blocked_reason = parse_structured_file_output(result["content"], tracer=tracer)
+            files, blocked_reason = parse_agent_file_output(result["content"], tracer=tracer)
         except ValueError:
             files, blocked_reason = {}, ""
 
