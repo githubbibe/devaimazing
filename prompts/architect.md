@@ -21,6 +21,12 @@ Produis le brief architectural du run. Sois exhaustif et précis.
 
 1. **Carte des fichiers** : liste TOUS les fichiers qui seront créés ou modifiés.
    Pour chaque fichier : chemin exact, rôle, raison de sa création/modification.
+   Si le projet a un dossier backend séparé (ex. `backend/`, pas les fichiers
+   Python à la racine du repo), le fichier de dépendances Python
+   (`requirements.txt` ou équivalent) va SOUS ce dossier (`backend/requirements.txt`),
+   jamais à la racine du repo cible — la vérification d'imports du runtime
+   devaimazing installe les dépendances depuis ce chemin précis, un fichier à
+   la racine ne serait jamais lu.
 
 2. **Doublons potentiels** : compare avec `project-map.md`. Signale tout fichier
    qui ferait doublon avec l'existant (même rôle, noms différents).

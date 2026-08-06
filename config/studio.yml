@@ -20,11 +20,18 @@ models:
   # gpt-oss:20b en dernier recours. Chaîne au-delà de 3 modèles => agents.
   # max_iterations doit couvrir toute la cascade (voir plus bas), sinon les
   # derniers modèles ne sont jamais atteints.
+  # Ordre 2026-08-06 : le plus efficace en théorie en premier (Devstral est
+  # spécialisé code/agentique, gpt-oss:20b généraliste fort ensuite), les
+  # deux Qwen en filet de secours — cascade + reset-on-retry (voir
+  # routing.agent_iteration_count) repart toujours à l'index 0 à chaque
+  # nouvel essai, donc l'ordre détermine directement quel modèle est
+  # réellement essayé en premier à chaque retry, pas seulement en 1ère
+  # activation.
   agents_local:
-    - qwen2.5:7b-instruct
-    - qwen2.5:14b-instruct
     - devstral:24b
     - gpt-oss:20b
+    - qwen2.5:14b-instruct
+    - qwen2.5:7b-instruct
   devaimazing: gemma3:4b            # Agent Devaimazing (ADR 0013), validé 2026-07-29
 
 # Ollama
@@ -78,9 +85,9 @@ checkpoints:
 # Retry agents
 agents:
   # Aligné sur la longueur de la cascade models.agents_local (4 modèles,
-  # voir plus haut) — sinon le dernier maillon de la cascade (gpt-oss:20b)
-  # ne serait jamais atteint (routing.model_for_attempt indexe la cascade
-  # par le nombre d'activations déjà tentées).
+  # voir plus haut) — sinon le dernier maillon de la cascade
+  # (qwen2.5:7b-instruct) ne serait jamais atteint (routing.model_for_attempt
+  # indexe la cascade par le nombre d'activations déjà tentées).
   max_iterations: 4
   retry_delay_seconds: 5
   # Tentatives de correction ciblée DANS une même activation d'un agent

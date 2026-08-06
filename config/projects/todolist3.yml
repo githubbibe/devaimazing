@@ -43,8 +43,18 @@ reference_files:
 #   command: "pytest {target_dir} -q"
 
 # Overrides de checkpoints (optionnel)
-# checkpoints:
-#   phase_9_audit_aval: false
+# phase_5_audit_stubs désactivé le 2026-08-06 : chaque cycle "Architecte
+# détecte un écart -> agent producteur corrige" repassait par un checkpoint
+# humain (WAITING_HUMAN, bouton "Continuer") avant même que ce soit une
+# vraie décision à arbitrer côté humain — gap constaté en run réel
+# (todolist3, gestion-taches : dizaines de "Reprise du run..." manuels
+# enchaînés en quelques heures, un par cycle de correction back-tu). Le
+# vrai point d'arrêt qui doit rester manuel est RunStatus.FAILED
+# (max_iterations_exceeded, bouton "Réessayer"), pas chaque itération
+# intermédiaire d'un même run encore en cours.
+checkpoints:
+  phase_5_audit_stubs: false
+  # phase_9_audit_aval: false
 
 # Contraintes projet spécifiques (transmises à l'Architecte) — à compléter,
 # volontairement vide : pas de valeurs par défaut pertinentes pour un
