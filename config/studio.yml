@@ -61,7 +61,11 @@ devaimazing:
 
 # Claude Code CLI
 claude_code:
-  timeout_seconds: 300
+  # 600s (au lieu de 300s) depuis le 2026-08-06 : l'audit AUDIT_STUBS de
+  # l'Architecte (Sonnet) a timeout à 300s sur un run réel (todolist3,
+  # gestion-taches) avec un prompt de ~64k caractères (plusieurs fichiers
+  # stub audités en une fois) — un audit volumineux, pas un appel bloqué.
+  timeout_seconds: 600
   output_format: json
 
 # SAST (phase 8, avant agent Sécu)
