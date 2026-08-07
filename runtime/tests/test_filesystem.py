@@ -441,6 +441,19 @@ def test_parse_agent_file_output_single_file():
     assert blocked_reason == ""
 
 
+def test_parse_agent_file_output_tolerates_two_closing_chevrons():
+    # Régression (2026-08-07, run réel todolist3, agent front) : plusieurs
+    # modèles de la cascade ont écrit ">>" (2 chevrons) au lieu de ">>>" (3)
+    # après le path — sans tolérance, tout le texte retombait en
+    # blocked_reason alors que le contenu du fichier était bien là.
+    content = '<<<DEVAIMAZING_FILE path="backend/a.py">>\nx = 1\n<<<DEVAIMAZING_END>>'
+
+    files, blocked_reason = parse_agent_file_output(content)
+
+    assert files == {"backend/a.py": "x = 1"}
+    assert blocked_reason == ""
+
+
 def test_parse_agent_file_output_multiple_files():
     content = (
         '<<<DEVAIMAZING_FILE path="backend/a.py">>>\na\n<<<DEVAIMAZING_END>>>\n'
@@ -480,6 +493,15 @@ def test_parse_agent_file_output_recovers_missing_end_delimiter_at_end_of_text()
 
 def test_parse_agent_file_output_blocked():
     content = "<<<DEVAIMAZING_BLOCKED>>>\nContradiction avec le brief.\n<<<DEVAIMAZING_END>>>"
+
+    files, blocked_reason = parse_agent_file_output(content)
+
+    assert files == {}
+    assert blocked_reason == "Contradiction avec le brief."
+
+
+def test_parse_agent_file_output_blocked_tolerates_two_closing_chevrons():
+    content = "<<<DEVAIMAZING_BLOCKED>>\nContradiction avec le brief.\n<<<DEVAIMAZING_END>>"
 
     files, blocked_reason = parse_agent_file_output(content)
 

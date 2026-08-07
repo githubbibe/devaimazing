@@ -29,9 +29,16 @@ EMPTY_FEEDBACK_MARKER = "_Aucun feedback pour l'instant._"
 # constaté en run réel, todolist3, 2026-08-06 : qwen2.5:7b-instruct, dernier
 # palier de la cascade) faisait sinon absorber tout le fichier suivant —
 # délimiteur d'ouverture compris — comme contenu littéral du premier.
+#
+# ">{2,}" (pas juste ">>>" strict) : gap constaté le 2026-08-07 (todolist3,
+# agent front, plusieurs modèles de la cascade) — le marqueur de fermeture
+# du tag d'ouverture écrit avec 2 ">" au lieu de 3
+# (`<<<DEVAIMAZING_FILE path="...">>`), jamais reconnu par un motif strict
+# => tout le texte retombait en blocked_reason alors que le contenu du
+# fichier était là, juste mal balisé.
 _FILE_BLOCK_PATTERN = re.compile(
-    r'<<<DEVAIMAZING_FILE path="([^"]+)">>>\n(.*?)'
-    r'(?=\n<<<DEVAIMAZING_END>>>|\n<<<DEVAIMAZING_FILE path="|\Z)',
+    r'<<<DEVAIMAZING_FILE path="([^"]+)">{2,}\n(.*?)'
+    r'(?=\n<<<DEVAIMAZING_END>{2,}|\n<<<DEVAIMAZING_FILE path="|\Z)',
     re.DOTALL,
 )
 
@@ -39,7 +46,7 @@ _FILE_BLOCK_PATTERN = re.compile(
 # le cas où l'agent détecte une impossibilité — remplace le champ
 # blocked_reason du défunt contrat JSON (voir tools.ollama.run_ollama).
 _BLOCKED_BLOCK_PATTERN = re.compile(
-    r'<<<DEVAIMAZING_BLOCKED>>>\n(.*?)(?=\n<<<DEVAIMAZING_END>>>|\Z)',
+    r'<<<DEVAIMAZING_BLOCKED>{2,}\n(.*?)(?=\n<<<DEVAIMAZING_END>{2,}|\Z)',
     re.DOTALL,
 )
 
