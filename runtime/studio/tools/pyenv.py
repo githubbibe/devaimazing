@@ -269,6 +269,52 @@ def check_syntax(files: dict[str, str]) -> Optional[VerifyFailure]:
     return None
 
 
+_REQUIREMENTS_VERSION_SPECIFIER_PATTERN = re.compile(r'(==|>=|<=|~=|!=|>|<)')
+
+
+def check_requirements_versions(files: dict[str, str]) -> Optional[VerifyFailure]:
+    """
+    Vérifie qu'un fichier requirements.txt produit par un agent respecte la
+    consigne de l'Architecte (prompts/architect.md, ajoutée le 2026-08-07) :
+    une version précise par bibliothèque, jamais un nom seul. Jusqu'ici
+    cette consigne n'était qu'une instruction dans le brief, sans rien pour
+    vérifier qu'elle est effectivement suivie par les agents producteurs
+    locaux — peu fiables sur ce terrain (versions incohérentes entre
+    fichiers, ex. pydantic v2 déclaré mais code v1 généré). Un nom sans
+    version installe silencieusement la dernière release au moment du
+    `pip install` (voir ensure_venv) : aucune erreur immédiate, juste une
+    incohérence potentielle découverte plus tard.
+
+    Ignore les lignes vides, les commentaires (#...) et les directives
+    (-r, -e, --...). Une ligne avec extras (ex. `uvicorn[standard]>=0.30`)
+    est acceptée normalement — l'extras fait partie du nom, pas de la
+    version.
+
+    Returns:
+        VerifyFailure pointant sur le fichier requirements.txt (chemin +
+        numéro de ligne fautive), None si toutes les lignes de dépendance
+        ont un spécificateur de version (ou si `files` ne contient aucun
+        fichier se terminant par "requirements.txt").
+    """
+    for relative_path, content in sorted(files.items()):
+        if not relative_path.endswith("requirements.txt"):
+            continue
+        for line_number, raw_line in enumerate(content.splitlines(), start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#") or line.startswith("-"):
+                continue
+            if not _REQUIREMENTS_VERSION_SPECIFIER_PATTERN.search(line):
+                return VerifyFailure(
+                    file=relative_path,
+                    message=(
+                        f"{relative_path} ligne {line_number} : dépendance sans version "
+                        f'précise ("{line}") — une version (>=, ==, ~=...) est requise '
+                        "pour chaque bibliothèque, voir architect-brief.md."
+                    ),
+                )
+    return None
+
+
 def _ruff_executable() -> str:
     """
     Localise le binaire ruff (dépendance runtime de devaimazing lui-même —
@@ -444,8 +490,9 @@ async def verify_python_files(
     tracer: Optional[AgentTracer] = None,
 ) -> Optional[VerifyFailure]:
     """
-    Point d'entrée : syntaxe, puis lint statique (ruff, rapide, pas de
-    venv), puis import réel (le plus coûteux — nécessite un venv installé).
+    Point d'entrée : syntaxe, puis versions de requirements.txt (rapide,
+    aucun outil externe), puis lint statique (ruff, rapide, pas de venv),
+    puis import réel (le plus coûteux — nécessite un venv installé).
     Retourne le VerifyFailure de la première erreur rencontrée, None si tout
     est valide (y compris si `files` ne contient aucun fichier .py — no-op,
     ex. sortie de `front`).
@@ -453,6 +500,10 @@ async def verify_python_files(
     syntax_error = check_syntax(files)
     if syntax_error is not None:
         return syntax_error
+
+    requirements_error = check_requirements_versions(files)
+    if requirements_error is not None:
+        return requirements_error
 
     if not any(path.endswith(".py") for path in files):
         return None

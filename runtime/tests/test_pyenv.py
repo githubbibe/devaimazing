@@ -96,6 +96,40 @@ def test_check_syntax_ignores_non_python_files():
     assert pyenv.check_syntax(files) is None
 
 
+def test_check_requirements_versions_all_pinned_passes():
+    files = {
+        "backend/requirements.txt": (
+            "fastapi>=0.115\nuvicorn[standard]>=0.30\n# commentaire\n\npydantic==2.7.0\n"
+        )
+    }
+    assert pyenv.check_requirements_versions(files) is None
+
+
+def test_check_requirements_versions_bare_name_fails():
+    # Régression (2026-08-07) : l'Architecte mandate une version précise
+    # par bibliothèque (prompts/architect.md), mais rien ne vérifiait
+    # jusqu'ici que back/front la respectent — un nom seul installe
+    # silencieusement la dernière release au pip install.
+    files = {"backend/requirements.txt": "fastapi>=0.115\nsqlalchemy\n"}
+
+    error = pyenv.check_requirements_versions(files)
+
+    assert error is not None
+    assert error.file == "backend/requirements.txt"
+    assert "sqlalchemy" in error.message
+    assert "ligne 2" in error.message
+
+
+def test_check_requirements_versions_ignores_directives_and_comments():
+    files = {"backend/requirements.txt": "# commentaire\n-r base.txt\n\nfastapi>=0.115\n"}
+    assert pyenv.check_requirements_versions(files) is None
+
+
+def test_check_requirements_versions_ignores_non_requirements_files():
+    files = {"backend/main.py": "import fastapi\n"}
+    assert pyenv.check_requirements_versions(files) is None
+
+
 async def test_ensure_venv_creates_and_reuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(pyenv, "VENV_ROOT", tmp_path / "venvs")
 
@@ -452,7 +486,12 @@ async def test_verify_python_files_lint_error_short_circuits(
     assert called["ensure_venv"] is False
 
 
-async def test_verify_python_files_no_py_files_is_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+async def test_verify_python_files_requirements_version_error_short_circuits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Cas réel : un tour où seul requirements.txt est produit (pas de .py)
+    # doit quand même être validé, pas court-circuité par le no-op "aucun
+    # .py" qui suit dans verify_python_files.
     called = {"ensure_venv": False}
 
     async def fake_ensure_venv(*args, **kwargs):
@@ -462,6 +501,24 @@ async def test_verify_python_files_no_py_files_is_noop(tmp_path: Path, monkeypat
     monkeypatch.setattr(pyenv, "ensure_venv", fake_ensure_venv)
 
     files = {"backend/requirements.txt": "fastapi\n"}
+    error = await pyenv.verify_python_files(
+        repo_path=tmp_path, project_name="demo", files=files
+    )
+    assert error is not None
+    assert "fastapi" in error.message
+    assert called["ensure_venv"] is False
+
+
+async def test_verify_python_files_no_py_files_is_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    called = {"ensure_venv": False}
+
+    async def fake_ensure_venv(*args, **kwargs):
+        called["ensure_venv"] = True
+        return Path(sys.executable)
+
+    monkeypatch.setattr(pyenv, "ensure_venv", fake_ensure_venv)
+
+    files = {"backend/requirements.txt": "fastapi>=0.115\n"}
     error = await pyenv.verify_python_files(
         repo_path=tmp_path, project_name="demo", files=files
     )
