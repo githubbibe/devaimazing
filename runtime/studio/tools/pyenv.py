@@ -1,6 +1,6 @@
 """
-Vérification syntaxe + import réel des fichiers Python produits par un agent
-(Back, Front, Test), avant commit.
+Vérification syntaxe + lint statique (ruff) + import réel des fichiers
+Python produits par un agent (Back, Front, Test), avant commit.
 
 Gap trouvé en run réel le 2026-07-19/20 sur run-20260714-205712 (todo-list,
 voir docs/roadmap.md) : back/back-tu régénèrent l'intégralité de leur
@@ -20,6 +20,9 @@ import ast
 import asyncio
 import os
 import re
+import shutil
+import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -28,7 +31,13 @@ from studio.tools.tracer import AgentTracer
 
 VENV_ROOT = Path.home() / ".devaimazing" / "venvs"
 IMPORT_TIMEOUT_SECONDS = 10
+LINT_TIMEOUT_SECONDS = 10
 _MAX_ERROR_CHARS = 300
+# F821 (nom non défini) uniquement : une vraie erreur de correction, qui
+# crashera à l'exécution. F401 (import inutile) délibérément exclu — signal
+# cosmétique, pas une raison de brûler un tour de retry (budget limité,
+# coûteux en tokens API/local) pour un import mort qui ne casse rien.
+_RUFF_SELECT = "F821"
 
 
 @dataclass
@@ -260,6 +269,98 @@ def check_syntax(files: dict[str, str]) -> Optional[VerifyFailure]:
     return None
 
 
+def _ruff_executable() -> str:
+    """
+    Localise le binaire ruff (dépendance runtime de devaimazing lui-même —
+    voir pyproject.toml — pas du projet cible : F821 s'évalue par simple
+    analyse AST, sans avoir besoin des dépendances du projet cible
+    installées). Priorité au venv de devaimazing (fiable même si `ruff`
+    n'est pas sur le PATH du process courant), repli sur PATH sinon.
+    """
+    sibling = Path(sys.executable).parent / "ruff"
+    if sibling.is_file():
+        return str(sibling)
+    found = shutil.which("ruff")
+    if found:
+        return found
+    raise RuntimeError(
+        "ruff introuvable — vérifier l'installation (dépendance runtime, voir pyproject.toml)."
+    )
+
+
+_RUFF_OUTPUT_LINE_PATTERN = re.compile(r'^(?P<path>[^:]+):(?P<line>\d+):\d+: (?P<rest>.+)$')
+
+
+async def check_lint(
+    files: dict[str, str],
+    timeout_seconds: float = LINT_TIMEOUT_SECONDS,
+    tracer: Optional[AgentTracer] = None,
+) -> Optional[VerifyFailure]:
+    """
+    Analyse statique rapide (ruff, F821 nom non défini uniquement — voir
+    _RUFF_SELECT), sans venv ni exécution réelle. Placée avant check_imports
+    dans verify_python_files : plus rapide (pas de création/installation de
+    venv), et attrape une classe d'erreur que check_imports peut manquer —
+    un nom utilisé uniquement dans le corps d'une fonction jamais appelée au
+    chargement du module (ex. `main.py` référençant `JSONResponse` sans
+    l'importer, dans un handler jamais exécuté à l'import) échappe à
+    `import module` mais pas à une analyse AST statique. Gap réel constaté
+    sur todolist3 (2026-08-06/07), corrigé à la main faute d'outil au
+    moment des faits.
+
+    Opère sur le contenu en mémoire de `files` (comme check_syntax), pas sur
+    le disque : écrit chaque fichier .py dans un répertoire temporaire
+    isolé avant d'invoquer ruff, pour ne pas dépendre de l'ordre d'appel
+    par rapport à `write_card` côté appelant (qui écrit dans repo_path).
+
+    Returns:
+        VerifyFailure de la première violation signalée par ruff (fichier +
+        ligne + message natif), None si rien n'est signalé (ou si `files`
+        ne contient aucun .py).
+    """
+    py_files = sorted(path for path in files if path.endswith(".py"))
+    if not py_files:
+        return None
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_root = Path(tmp_dir)
+        for relative_path in py_files:
+            target = tmp_root / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(files[relative_path], encoding="utf-8")
+
+        # --color=never : même piège que PYTHON_COLORS dans check_imports —
+        # sans lui, la sortie ruff peut être colorisée selon l'environnement
+        # ambiant du process appelant, cassant _RUFF_OUTPUT_LINE_PATTERN
+        # (codes ANSI insérés au milieu de la ligne "chemin:ligne:col: ...").
+        returncode, stdout, stderr = await _run(
+            _ruff_executable(), "check", f"--select={_RUFF_SELECT}",
+            "--output-format=concise", "--no-cache", "--color=never", ".",
+            cwd=tmp_root, timeout=timeout_seconds,
+        )
+
+    if returncode == 0:
+        return None
+    if stderr == "timeout":
+        message = f"Timeout ({timeout_seconds}s) à l'analyse ruff."
+        if tracer is not None:
+            tracer.emit("lint_check_failed", path=py_files[0], message=message)
+        return VerifyFailure(file=py_files[0], message=message)
+
+    first_line = next((line for line in stdout.splitlines() if line.strip()), "")
+    match = _RUFF_OUTPUT_LINE_PATTERN.match(first_line)
+    if match:
+        relative_path = match.group("path")
+        message = f"ruff : {match.group('rest')} (ligne {match.group('line')})"
+    else:
+        relative_path = py_files[0]
+        message = first_line or stderr.strip() or "erreur ruff inconnue"
+
+    if tracer is not None:
+        tracer.emit("lint_check_failed", path=relative_path, message=message)
+    return VerifyFailure(file=relative_path, message=message)
+
+
 async def check_imports(
     repo_path: Path,
     python_path: Path,
@@ -343,9 +444,11 @@ async def verify_python_files(
     tracer: Optional[AgentTracer] = None,
 ) -> Optional[VerifyFailure]:
     """
-    Point d'entrée : syntaxe puis import réel. Retourne le VerifyFailure de
-    la première erreur rencontrée, None si tout est valide (y compris si
-    `files` ne contient aucun fichier .py — no-op, ex. sortie de `front`).
+    Point d'entrée : syntaxe, puis lint statique (ruff, rapide, pas de
+    venv), puis import réel (le plus coûteux — nécessite un venv installé).
+    Retourne le VerifyFailure de la première erreur rencontrée, None si tout
+    est valide (y compris si `files` ne contient aucun fichier .py — no-op,
+    ex. sortie de `front`).
     """
     syntax_error = check_syntax(files)
     if syntax_error is not None:
@@ -353,6 +456,10 @@ async def verify_python_files(
 
     if not any(path.endswith(".py") for path in files):
         return None
+
+    lint_error = await check_lint(files, tracer=tracer)
+    if lint_error is not None:
+        return lint_error
 
     requirements_path = (repo_path / requirements_relative) if requirements_relative else None
     try:

@@ -3,12 +3,17 @@ Tests de studio.tools.pyenv — vérification syntaxe + import réel des
 fichiers Python produits par un agent avant commit.
 """
 
+import json
 import sys
 from pathlib import Path
 
 import pytest
-
 from studio.tools import pyenv
+from studio.tools.tracer import RunTracer
+
+
+def _events(trace_path: Path) -> list[dict]:
+    return [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
 
 
 def test_module_name_simple_file():
@@ -217,6 +222,61 @@ async def test_ensure_venv_truncates_huge_pip_error_line(
     assert "tronqué" in str(exc_info.value)
 
 
+async def test_check_lint_clean_file_passes():
+    error = await pyenv.check_lint({"backend/ok.py": "import os\nVALUE = os.getcwd()\n"})
+    assert error is None
+
+
+async def test_check_lint_detects_undefined_name():
+    # Régression (2026-08-07, run réel todolist3, corrigé à la main faute
+    # d'outil) : main.py référençait JSONResponse dans un handler jamais
+    # exécuté à l'import — check_imports (import module) ne le voit pas,
+    # une analyse statique (ruff F821) le voit immédiatement.
+    error = await pyenv.check_lint(
+        {"backend/main.py": "def handler():\n    return JSONResponse(status_code=404)\n"}
+    )
+    assert error is not None
+    assert error.file == "backend/main.py"
+    assert "JSONResponse" in error.message
+
+
+async def test_check_lint_ignores_unused_imports():
+    # F401 délibérément exclu de _RUFF_SELECT — cosmétique, ne doit pas
+    # consommer un tour de retry.
+    error = await pyenv.check_lint({"backend/a.py": "import os\nVALUE = 1\n"})
+    assert error is None
+
+
+async def test_check_lint_ignores_non_python_files():
+    error = await pyenv.check_lint({"backend/requirements.txt": "fastapi\n"})
+    assert error is None
+
+
+async def test_check_lint_reports_correct_file_among_several():
+    error = await pyenv.check_lint(
+        {
+            "backend/ok.py": "import os\nVALUE = os.getcwd()\n",
+            "backend/broken.py": "def handler():\n    return UndefinedThing()\n",
+        }
+    )
+    assert error is not None
+    assert error.file == "backend/broken.py"
+    assert "UndefinedThing" in error.message
+
+
+async def test_check_lint_emits_lint_check_failed_event(tmp_path: Path):
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
+
+    await pyenv.check_lint(
+        {"backend/main.py": "def handler():\n    return JSONResponse(status_code=404)\n"},
+        tracer=tracer,
+    )
+
+    events = _events(tracer._tracer.trace_path)
+    assert events[0]["event"] == "lint_check_failed"
+    assert events[0]["path"] == "backend/main.py"
+
+
 async def test_check_imports_success(tmp_path: Path):
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "__init__.py").write_text("", encoding="utf-8")
@@ -369,6 +429,26 @@ async def test_verify_python_files_syntax_error_short_circuits(
         repo_path=tmp_path, project_name="demo", files=files
     )
     assert error is not None
+    assert called["ensure_venv"] is False
+
+
+async def test_verify_python_files_lint_error_short_circuits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    called = {"ensure_venv": False}
+
+    async def fake_ensure_venv(*args, **kwargs):
+        called["ensure_venv"] = True
+        return Path(sys.executable)
+
+    monkeypatch.setattr(pyenv, "ensure_venv", fake_ensure_venv)
+
+    files = {"backend/main.py": "def handler():\n    return JSONResponse(status_code=404)\n"}
+    error = await pyenv.verify_python_files(
+        repo_path=tmp_path, project_name="demo", files=files
+    )
+    assert error is not None
+    assert "JSONResponse" in error.message
     assert called["ensure_venv"] is False
 
 
