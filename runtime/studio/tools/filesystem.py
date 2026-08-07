@@ -54,6 +54,14 @@ _BLOCKED_BLOCK_PATTERN = re.compile(
 # code balisé ``` (markdown standard) au lieu du contrat <<<DEVAIMAZING_FILE.
 _FENCED_CODE_PATTERN = re.compile(r'```(?:\w+)?\n(.*?)\n```', re.DOTALL)
 
+# Repli de parse_agent_file_output (voir _parse_markdown_fenced_files) : titre
+# Markdown ATX (1 à 6 '#') dont le texte ressemble à un chemin de fichier
+# relatif (segments séparés par '/', extension), optionnellement entouré de
+# backticks — ex. "### backend/config.py" ou "#### `backend/tests/__init__.py`".
+_MARKDOWN_FILE_HEADING_PATTERN = re.compile(
+    r'(?m)^#{1,6}\s*`?([\w][\w./\-]*\.\w+)`?\s*$'
+)
+
 # Plafond du texte brut utilisé comme blocked_reason quand
 # parse_agent_file_output ne trouve aucun bloc reconnu — voir sa docstring
 # (repli "no_blocks"). Ce texte est écrit tel quel dans la fiche
@@ -540,6 +548,50 @@ def _parse_agent_file_blocks(text: str, fallback_path: Optional[str]) -> dict[st
     )
 
 
+def _parse_markdown_fenced_files(text: str) -> dict[str, str]:
+    """
+    Repli de dernier recours de parse_agent_file_output, essayé quand aucun
+    bloc <<<DEVAIMAZING_FILE>>> n'est trouvé : reconnaît le motif Markdown
+    "titre = chemin de fichier" suivi d'un bloc de code balisé ``` (ex.
+    "### backend/config.py" puis ```python\\n...\\n```), utilisé par des
+    modèles locaux qui ignorent le contrat de délimiteurs mais restent
+    structurés en Markdown standard — motif dominant parmi les échecs
+    "no_blocks" observés en run réel (todolist3, 2026-08-06/07 : 9 des 14
+    occurrences suivaient ce format).
+
+    Un titre non suivi d'un bloc balisé avant le titre suivant (ou la fin du
+    texte) est ignoré — rien à récupérer. Si un même chemin apparaît
+    plusieurs fois, la dernière occurrence l'emporte (cohérent avec le
+    contrat <<<DEVAIMAZING_FILE>>>). Un chemin invalide (absolu, traversée de
+    répertoire — voir _validate_relative_path) est ignoré plutôt que de faire
+    échouer tout le repli : c'est déjà un mode dégradé, mieux vaut récupérer
+    ce qui est sûr que de tout perdre pour une seule entrée suspecte.
+
+    Args:
+        text: Sortie brute de l'agent, déjà écartée du contrat
+            <<<DEVAIMAZING_FILE>>> par l'appelant.
+
+    Returns:
+        Mapping chemin relatif -> contenu de fichier. Vide si aucun titre
+        n'est suivi d'un bloc balisé.
+    """
+    headings = list(_MARKDOWN_FILE_HEADING_PATTERN.finditer(text))
+    files: dict[str, str] = {}
+    for index, match in enumerate(headings):
+        path = match.group(1)
+        chunk_start = match.end()
+        chunk_end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+        fence_match = _FENCED_CODE_PATTERN.search(text[chunk_start:chunk_end])
+        if fence_match is None:
+            continue
+        try:
+            _validate_relative_path(path)
+        except ValueError:
+            continue
+        files[path] = fence_match.group(1).strip()
+    return files
+
+
 def parse_agent_file_output(
     text: str, tracer: Optional[AgentTracer] = None
 ) -> tuple[dict[str, str], str]:
@@ -569,12 +621,16 @@ def parse_agent_file_output(
         prime sur tout bloc fichier (l'agent a explicitement signalé un
         blocage) : files vide, blocked_reason = contenu du bloc. Sinon, les
         blocs <<<DEVAIMAZING_FILE>>> sont extraits normalement (files non
-        vide, blocked_reason=""). Si aucun bloc d'aucune sorte n'est
-        trouvé, le texte brut (tronqué à _NO_BLOCKS_FEEDBACK_MAX_CHARS)
-        devient blocked_reason — repli mieux qu'un crash sur une sortie qui
-        n'a suivi aucun format (comportement du contrat pré-JSON), mais
-        borné : ce texte est écrit tel quel dans la section Feedback de la
-        fiche (tools.filesystem.append_feedback) et relu intégralement à
+        vide, blocked_reason=""). Si aucun bloc <<<DEVAIMAZING_FILE>>> n'est
+        trouvé, un repli Markdown est tenté (voir
+        _parse_markdown_fenced_files) : titres "### chemin/fichier.py"
+        suivis d'un bloc balisé ``` — si au moins un titre a un bloc balisé
+        associé, ces fichiers sont retournés normalement (blocked_reason="").
+        En tout dernier recours, si rien de tout cela n'est trouvé, le texte
+        brut (tronqué à _NO_BLOCKS_FEEDBACK_MAX_CHARS) devient blocked_reason
+        — repli mieux qu'un crash sur une sortie qui n'a suivi aucun format,
+        mais borné : ce texte est écrit tel quel dans la section Feedback de
+        la fiche (tools.filesystem.append_feedback) et relu intégralement à
         chaque activation suivante — sans plafond, un agent qui répond
         parfois en Markdown libre au lieu du contrat délimiteurs (gap
         constaté en run réel, todolist3, 2026-08-07) fait grossir la fiche
@@ -611,6 +667,15 @@ def parse_agent_file_output(
                 files=sorted(files), blocked=False,
             )
         return files, ""
+
+    markdown_files = _parse_markdown_fenced_files(text)
+    if markdown_files:
+        if tracer is not None:
+            tracer.emit(
+                "parse_output", parser="parse_agent_file_output", outcome="markdown_fallback",
+                files=sorted(markdown_files),
+            )
+        return markdown_files, ""
 
     if tracer is not None:
         tracer.emit(

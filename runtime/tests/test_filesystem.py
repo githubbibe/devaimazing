@@ -557,6 +557,81 @@ def test_parse_agent_file_output_no_blocks_truncates_long_raw_text():
     assert "tronqué" in blocked_reason
 
 
+def test_parse_agent_file_output_markdown_heading_fence_fallback():
+    # Régression (2026-08-07, run réel todolist3) : motif dominant parmi les
+    # échecs "no_blocks" — un modèle local répond en Markdown standard
+    # ("### chemin/fichier.py" suivi d'un bloc balisé ```) au lieu du
+    # contrat <<<DEVAIMAZING_FILE>>>, tout en restant par ailleurs bien
+    # structuré. À récupérer plutôt que de tout perdre en blocked_reason.
+    text = (
+        "### backend/config.py\n"
+        "```python\n"
+        "DATABASE_URL = 'sqlite+aiosqlite:///./todos.db'\n"
+        "```\n"
+        "\n"
+        "#### `backend/tests/__init__.py`\n"
+        "```python\n"
+        "# vide\n"
+        "```\n"
+    )
+
+    files, blocked_reason = parse_agent_file_output(text)
+
+    assert blocked_reason == ""
+    assert files == {
+        "backend/config.py": "DATABASE_URL = 'sqlite+aiosqlite:///./todos.db'",
+        "backend/tests/__init__.py": "# vide",
+    }
+
+
+def test_parse_agent_file_output_markdown_heading_without_fence_ignored():
+    # Un titre non suivi d'un bloc balisé (l'agent a juste commenté, pas
+    # produit de code) ne doit rien récupérer — repli sur le texte brut.
+    text = "### backend/config.py\n\nErreur à corriger : ceci n'est pas du code.\n"
+
+    files, blocked_reason = parse_agent_file_output(text)
+
+    assert files == {}
+    assert blocked_reason == text.strip()
+
+
+def test_parse_agent_file_output_markdown_fallback_last_path_wins():
+    text = (
+        "### backend/a.py\n```python\nx = 1\n```\n"
+        "### backend/a.py\n```python\nx = 2\n```\n"
+    )
+
+    files, _ = parse_agent_file_output(text)
+
+    assert files == {"backend/a.py": "x = 2"}
+
+
+def test_parse_agent_file_output_markdown_fallback_skips_invalid_path():
+    text = (
+        "### /etc/passwd\n```python\nx = 1\n```\n"
+        "### backend/a.py\n```python\nx = 2\n```\n"
+    )
+
+    files, _ = parse_agent_file_output(text)
+
+    assert files == {"backend/a.py": "x = 2"}
+
+
+def test_parse_agent_file_output_markdown_fallback_emits_parse_output_markdown_fallback(
+    tmp_path: Path,
+):
+    tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
+
+    parse_agent_file_output(
+        "### backend/config.py\n```python\nx = 1\n```\n", tracer=tracer
+    )
+
+    events = _events(tracer._tracer.trace_path)
+    assert events[0]["event"] == "parse_output"
+    assert events[0]["outcome"] == "markdown_fallback"
+    assert events[0]["files"] == ["backend/config.py"]
+
+
 def test_parse_agent_file_output_no_blocks_emits_parse_output_no_blocks(tmp_path: Path):
     tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
 
