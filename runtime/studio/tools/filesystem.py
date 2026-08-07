@@ -54,6 +54,15 @@ _BLOCKED_BLOCK_PATTERN = re.compile(
 # code balisé ``` (markdown standard) au lieu du contrat <<<DEVAIMAZING_FILE.
 _FENCED_CODE_PATTERN = re.compile(r'```(?:\w+)?\n(.*?)\n```', re.DOTALL)
 
+# Plafond du texte brut utilisé comme blocked_reason quand
+# parse_agent_file_output ne trouve aucun bloc reconnu — voir sa docstring
+# (repli "no_blocks"). Ce texte est écrit tel quel dans la fiche
+# (append_feedback) et relu intégralement à chaque activation suivante ;
+# sans plafond, une réponse de plusieurs milliers de tokens (agent qui
+# répond en Markdown libre au lieu du contrat délimiteurs) grossit la fiche
+# définitivement à chaque occurrence.
+_NO_BLOCKS_FEEDBACK_MAX_CHARS = 1500
+
 # Agents pouvant apparaître dans state.agent_sequence / structured_output du PM
 # (tous les agents de AGENT_TO_NODE sauf pm/architect, qui n'y figurent jamais —
 # voir studio.routing).
@@ -561,9 +570,16 @@ def parse_agent_file_output(
         blocage) : files vide, blocked_reason = contenu du bloc. Sinon, les
         blocs <<<DEVAIMAZING_FILE>>> sont extraits normalement (files non
         vide, blocked_reason=""). Si aucun bloc d'aucune sorte n'est
-        trouvé, tout le texte brut devient blocked_reason (repli — mieux
-        qu'un crash sur une sortie qui n'a suivi aucun format, comportement
-        du contrat pré-JSON).
+        trouvé, le texte brut (tronqué à _NO_BLOCKS_FEEDBACK_MAX_CHARS)
+        devient blocked_reason — repli mieux qu'un crash sur une sortie qui
+        n'a suivi aucun format (comportement du contrat pré-JSON), mais
+        borné : ce texte est écrit tel quel dans la section Feedback de la
+        fiche (tools.filesystem.append_feedback) et relu intégralement à
+        chaque activation suivante — sans plafond, un agent qui répond
+        parfois en Markdown libre au lieu du contrat délimiteurs (gap
+        constaté en run réel, todolist3, 2026-08-07) fait grossir la fiche
+        indéfiniment à chaque occurrence, jusqu'à des prompts de 20k+
+        tokens et des timeouts Ollama en cascade.
 
     Raises:
         ValueError: Si un "path" de bloc <<<DEVAIMAZING_FILE>>> est absolu
@@ -601,4 +617,11 @@ def parse_agent_file_output(
             "parse_output", parser="parse_agent_file_output", outcome="no_blocks",
             raw_output_head=text[:RAW_OUTPUT_HEAD_CHARS],
         )
-    return {}, text.strip()
+    stripped = text.strip()
+    if len(stripped) > _NO_BLOCKS_FEEDBACK_MAX_CHARS:
+        stripped = (
+            stripped[:_NO_BLOCKS_FEEDBACK_MAX_CHARS]
+            + f"\n[...tronqué, {len(stripped)} caractères au total — "
+            "aucun bloc <<<DEVAIMAZING_FILE>>> reconnu dans la réponse]"
+        )
+    return {}, stripped

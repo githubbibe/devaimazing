@@ -539,6 +539,24 @@ def test_parse_agent_file_output_no_blocks_falls_back_to_raw_text_as_blocked_rea
     assert blocked_reason == "juste du texte, aucun format suivi"
 
 
+def test_parse_agent_file_output_no_blocks_truncates_long_raw_text():
+    # Régression (2026-08-07, run réel todolist3) : sans plafond, une
+    # réponse de plusieurs milliers de caractères (agent qui répond en
+    # Markdown libre au lieu du contrat délimiteurs) grossissait la fiche
+    # définitivement à chaque occurrence — jusqu'à des fiches de 50+ Ko et
+    # des timeouts Ollama en cascade sur les activations suivantes.
+    from studio.tools.filesystem import _NO_BLOCKS_FEEDBACK_MAX_CHARS
+
+    long_text = "x" * (_NO_BLOCKS_FEEDBACK_MAX_CHARS + 500)
+
+    files, blocked_reason = parse_agent_file_output(long_text)
+
+    assert files == {}
+    assert len(blocked_reason) < len(long_text)
+    assert blocked_reason.startswith("x" * 100)
+    assert "tronqué" in blocked_reason
+
+
 def test_parse_agent_file_output_no_blocks_emits_parse_output_no_blocks(tmp_path: Path):
     tracer = RunTracer(tmp_path / "trace.jsonl", run_id="run-1").for_agent("back", "STUBS")
 
