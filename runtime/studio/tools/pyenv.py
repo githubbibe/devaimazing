@@ -315,6 +315,96 @@ def check_requirements_versions(files: dict[str, str]) -> Optional[VerifyFailure
     return None
 
 
+_ASYNC_ENGINE_CALL_PATTERN = re.compile(r'create_async_engine\s*\(')
+# Dialecte immédiatement suivi de "://" (pas de "+driver" intercalé) — une
+# URL async valide (ex. "sqlite+aiosqlite://") ne matche jamais ce motif,
+# seule la forme synchrone brute ("sqlite://") le fait.
+_SYNC_DB_URL_PATTERN = re.compile(r'\b(sqlite|postgresql|postgres|mysql)://')
+_ASYNC_DRIVER_SUGGESTION = {
+    "sqlite": "aiosqlite",
+    "postgresql": "asyncpg",
+    "postgres": "asyncpg",
+    "mysql": "aiomysql",
+}
+_DRIVER_SCAN_IGNORED_DIR_NAMES = {".git", "__pycache__", "node_modules", ".venv", "venv"}
+
+
+def _iter_driver_scan_files(repo_path: Path) -> list[Path]:
+    result = [
+        path
+        for path in repo_path.rglob("*")
+        if path.is_file()
+        and (path.suffix == ".py" or path.name.startswith(".env"))
+        and not any(
+            part in _DRIVER_SCAN_IGNORED_DIR_NAMES for part in path.relative_to(repo_path).parts
+        )
+    ]
+    result.sort()
+    return result
+
+
+def check_async_driver_consistency(repo_path: Path) -> Optional[VerifyFailure]:
+    """
+    Vérifie que, si le repo cible utilise `create_async_engine` (SQLAlchemy
+    async) quelque part, aucune URL de base de données au format
+    synchrone ("sqlite://...", "postgresql://...", "mysql://...", sans
+    "+driver") n'apparaît dans le projet (config.py, .env, .env.example,
+    fichiers de test qui posent `os.environ["DATABASE_URL"]`...).
+
+    Régression réelle constatée à répétition sur todolist3 (2026-08-06/07,
+    corrigée à la main faute d'outil au moment des faits) :
+    `create_async_engine("sqlite:///./todos.db")` lève
+    `InvalidRequestError: The asyncio extension requires an async driver`
+    — l'erreur ne se manifeste qu'à l'exécution (création de l'engine),
+    jamais à l'import ni en lint statique, donc invisible à check_imports
+    et check_lint.
+
+    Opère sur le disque (repo_path), pas sur le dict `files` de l'appelant :
+    la valeur de l'URL et l'appel à create_async_engine peuvent être dans
+    des fichiers différents, potentiellement écrits lors de tours
+    différents — un scan limité au tour courant manquerait la moitié des
+    cas. Suppose que `files` a déjà été persisté (write_card) avant cet
+    appel, comme pour check_imports.
+
+    Returns:
+        VerifyFailure sur la première URL synchrone trouvée (fichier +
+        ligne + suggestion de driver async), None si le projet n'utilise
+        pas create_async_engine, ou si aucune URL synchrone n'est trouvée.
+    """
+    contents: dict[Path, str] = {}
+    for path in _iter_driver_scan_files(repo_path):
+        try:
+            contents[path] = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+
+    uses_async_engine = any(
+        path.suffix == ".py" and _ASYNC_ENGINE_CALL_PATTERN.search(content)
+        for path, content in contents.items()
+    )
+    if not uses_async_engine:
+        return None
+
+    for path, content in contents.items():
+        for line_number, line in enumerate(content.splitlines(), start=1):
+            match = _SYNC_DB_URL_PATTERN.search(line)
+            if match is None:
+                continue
+            dialect = match.group(1)
+            suggestion = _ASYNC_DRIVER_SUGGESTION.get(dialect, "un driver async")
+            relative_path = str(path.relative_to(repo_path))
+            return VerifyFailure(
+                file=relative_path,
+                message=(
+                    f'{relative_path} ligne {line_number} : URL de base de données au '
+                    f'format synchrone ("{dialect}://...") alors que create_async_engine '
+                    f'est utilisé dans le projet — remplacer par '
+                    f'"{dialect}+{suggestion}://...".'
+                ),
+            )
+    return None
+
+
 def _ruff_executable() -> str:
     """
     Localise le binaire ruff (dépendance runtime de devaimazing lui-même —
@@ -492,10 +582,11 @@ async def verify_python_files(
     """
     Point d'entrée : syntaxe, puis versions de requirements.txt (rapide,
     aucun outil externe), puis lint statique (ruff, rapide, pas de venv),
-    puis import réel (le plus coûteux — nécessite un venv installé).
-    Retourne le VerifyFailure de la première erreur rencontrée, None si tout
-    est valide (y compris si `files` ne contient aucun fichier .py — no-op,
-    ex. sortie de `front`).
+    puis cohérence driver sync/async SQLAlchemy (scan disque, rapide), puis
+    import réel (le plus coûteux — nécessite un venv installé). Retourne le
+    VerifyFailure de la première erreur rencontrée, None si tout est valide
+    (y compris si `files` ne contient aucun fichier .py — no-op, ex. sortie
+    de `front`).
     """
     syntax_error = check_syntax(files)
     if syntax_error is not None:
@@ -511,6 +602,10 @@ async def verify_python_files(
     lint_error = await check_lint(files, tracer=tracer)
     if lint_error is not None:
         return lint_error
+
+    driver_error = check_async_driver_consistency(repo_path)
+    if driver_error is not None:
+        return driver_error
 
     requirements_path = (repo_path / requirements_relative) if requirements_relative else None
     try:

@@ -130,6 +130,70 @@ def test_check_requirements_versions_ignores_non_requirements_files():
     assert pyenv.check_requirements_versions(files) is None
 
 
+def test_check_async_driver_consistency_no_async_engine_is_noop(tmp_path: Path):
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "backend" / "database.py").write_text(
+        "from sqlalchemy import create_engine\nengine = create_engine('sqlite:///./todos.db')\n",
+        encoding="utf-8",
+    )
+    assert pyenv.check_async_driver_consistency(tmp_path) is None
+
+
+def test_check_async_driver_consistency_detects_sync_url(tmp_path: Path):
+    # Régression réelle (todolist3, 2026-08-06/07, corrigée à la main faute
+    # d'outil) : create_async_engine avec une URL sync lève
+    # InvalidRequestError à l'exécution — invisible à check_imports et
+    # check_lint (aucune des deux n'exécute réellement la création de
+    # l'engine).
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "backend" / "database.py").write_text(
+        "from sqlalchemy.ext.asyncio import create_async_engine\n"
+        "engine = create_async_engine(DATABASE_URL)\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "backend" / "config.py").write_text(
+        'DATABASE_URL = "sqlite:///./todos.db"\n', encoding="utf-8"
+    )
+
+    error = pyenv.check_async_driver_consistency(tmp_path)
+
+    assert error is not None
+    assert error.file == "backend/config.py"
+    assert "aiosqlite" in error.message
+
+
+def test_check_async_driver_consistency_detects_sync_url_in_env_file(tmp_path: Path):
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "backend" / "database.py").write_text(
+        "from sqlalchemy.ext.asyncio import create_async_engine\n"
+        "engine = create_async_engine(DATABASE_URL)\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env.example").write_text(
+        "DATABASE_URL=postgresql://user:pass@localhost/db\n", encoding="utf-8"
+    )
+
+    error = pyenv.check_async_driver_consistency(tmp_path)
+
+    assert error is not None
+    assert error.file == ".env.example"
+    assert "asyncpg" in error.message
+
+
+def test_check_async_driver_consistency_accepts_correct_async_url(tmp_path: Path):
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "backend" / "database.py").write_text(
+        "from sqlalchemy.ext.asyncio import create_async_engine\n"
+        "engine = create_async_engine(DATABASE_URL)\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "backend" / "config.py").write_text(
+        'DATABASE_URL = "sqlite+aiosqlite:///./todos.db"\n', encoding="utf-8"
+    )
+
+    assert pyenv.check_async_driver_consistency(tmp_path) is None
+
+
 async def test_ensure_venv_creates_and_reuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(pyenv, "VENV_ROOT", tmp_path / "venvs")
 
@@ -506,6 +570,33 @@ async def test_verify_python_files_requirements_version_error_short_circuits(
     )
     assert error is not None
     assert "fastapi" in error.message
+
+
+async def test_verify_python_files_async_driver_mismatch_short_circuits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    called = {"ensure_venv": False}
+
+    async def fake_ensure_venv(*args, **kwargs):
+        called["ensure_venv"] = True
+        return Path(sys.executable)
+
+    monkeypatch.setattr(pyenv, "ensure_venv", fake_ensure_venv)
+
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "backend" / "database.py").write_text(
+        "from sqlalchemy.ext.asyncio import create_async_engine\n"
+        'engine = create_async_engine("sqlite:///./todos.db")\n',
+        encoding="utf-8",
+    )
+
+    files = {"backend/database.py": ""}
+    error = await pyenv.verify_python_files(
+        repo_path=tmp_path, project_name="demo", files=files
+    )
+    assert error is not None
+    assert "aiosqlite" in error.message
+    assert called["ensure_venv"] is False
     assert called["ensure_venv"] is False
 
 
